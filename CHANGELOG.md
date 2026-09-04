@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 — 2026-09-04
+
+- Verify systemd service units on Linux CI and keep runtime startup read-only under the hardened filesystem sandbox.
+
 ## 0.1.0 — 2026-09-04
 
 - Extract the MANGA CHAN route from the mixed LP workspace without changing deployed Solidity source.
