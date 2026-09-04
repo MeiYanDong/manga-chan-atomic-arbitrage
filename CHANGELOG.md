@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — 2026-09-04
+
+- Add a continuously refreshed PAIR multi-pool opportunity census with fixed-block four-leg quotes.
+- Rank gross and gas-proxy net results without claiming generic execution or receipt evidence.
+- Add an auto-refreshing loopback dashboard and append-only material-change ledger.
+- Isolate the scanner under a signer-free Unix identity, read RPC, systemd unit and runtime directory.
+- Add exact tests for discovery gates, gas math, stale fail-closed behavior, events and atomic publication.
+
 ## 0.1.3 — 2026-09-04
 
 - Accept systemd's immutable `0440 root:root` credential files only inside the unit-specific credentials directory.

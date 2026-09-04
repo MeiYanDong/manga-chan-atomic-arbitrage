@@ -14,3 +14,12 @@ set +a
 export MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
 runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run runtime:verify
 systemctl --no-pager --full status manga-chan-watcher.service || true
+
+if [[ -f /etc/manga-opportunity-board/live.env ]]; then
+  runuser -u manga-board -- /usr/bin/env -i \
+    HOME=/var/lib/manga-opportunity-board \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board \
+    npm run board:status
+  curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8788/healthz
+fi

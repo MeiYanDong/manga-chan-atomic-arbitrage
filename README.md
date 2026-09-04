@@ -1,4 +1,4 @@
-# MANGA CHAN Atomic Arbitrage
+# MANGA CHAN Atomic Arbitrage + Opportunity Board
 
 A bounded, single-route atomic arbitrage executor for Robinhood Chain:
 
@@ -8,6 +8,10 @@ USDG -> MSFT (Uniswap V3) -> MANGA (Uniswap V4)
 ```
 
 The edge is stale relative pricing across the two MANGA quote pools and their USDG conversion pools. It does not depend on MSFT or NVDA being stock tokens; the same mechanism can exist when the quote assets are AI or meme tokens.
+
+This repository also contains a separate read-only opportunity board. It continuously discovers PAIR multi-pool tokens,
+quotes the best observed `USDG -> quote A -> token -> quote B -> USDG` loop at one fixed block, subtracts a gas proxy and
+adds material changes to an append-only event ledger. The board has no wallet, signer or broadcast path.
 
 ## Honest status
 
@@ -68,9 +72,36 @@ npm run watch              # targeted WSS watcher
 npm run watch:status
 npm run watch:disarm
 npm run withdraw
+npm run board:once         # one read-only catalog + quote batch
+npm run board              # continuous scanner and loopback dashboard
+npm run board:status       # persisted read-only snapshot
 ```
 
 No command automatically deploys and trades in one step.
+
+## Live opportunity board
+
+The board's evidence ladder is intentionally narrower than the executor's:
+
+```text
+PAIR metadata -> fixed-block four-leg Quoter screen -> gas proxy
+              -> no generic execution estimate -> no receipt
+```
+
+Rows can be `DISCOVERED_UNQUOTED`, `UNQUOTABLE`, `NO_EDGE`, `GROSS_POSITIVE_NET_NEGATIVE`,
+`SCREENED_NET_POSITIVE` or `STALE`. A screened-positive row is a research candidate, not a risk-free or executable
+trade. The first adapter covers PAIR's first-party multi-pool catalog; arbitrary external V4 pools are not claimed as a
+complete census.
+
+Use a dedicated protected configuration based on [`deploy/opportunity-board.env.example`](deploy/opportunity-board.env.example).
+The supported service binds to `127.0.0.1:8788`; open it privately with:
+
+```bash
+ssh -N -L 18788:127.0.0.1:8788 root@YOUR_SERVER
+```
+
+Then visit `http://127.0.0.1:18788/`. See [ADR 0004](docs/decisions/0004-isolated-read-only-opportunity-board.md)
+for the isolation boundary.
 
 ## Deployment
 

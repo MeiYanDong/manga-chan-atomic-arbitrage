@@ -84,3 +84,26 @@ Never roll code backward while retaining an incompatible runtime ledger or activ
 The supplied service exits non-zero on a halted state and invokes an `OnFailure` unit, producing an explicit journal event. A real paging destination is not configured in the public repository; operators must connect that unit to their private notification system and verify delivery before calling alerting complete.
 
 The release installer compiles and verifies the code before atomically moving the `current` symlink. The hardened runtime service only reads that release and writes under `/var/lib/manga-chan-arbitrage`; it does not attempt to compile inside the read-only `/opt` tree at service start.
+
+## Opportunity board deployment
+
+The opportunity board is not part of the signer lane. Provision `/etc/manga-opportunity-board/live.env` from
+`deploy/opportunity-board.env.example` with mode `0640 root:manga-board`. Its RPC endpoint must be read-only and distinct
+from the watcher's hot HTTP/WSS path. Never copy `MANGA_PRIVATE_KEY_FILE`, a key value or the signing strategy's complete
+environment into this file.
+
+After installing the release:
+
+```bash
+sudo systemctl enable --now manga-opportunity-board.service
+sudo systemctl show manga-opportunity-board.service --property=ActiveState,SubState,MainPID,MemoryCurrent,NRestarts
+curl --fail --silent --show-error http://127.0.0.1:8788/healthz
+sudo -u manga-board env MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board npm run board:status
+```
+
+The HTTP service deliberately listens only on loopback. View it through an SSH tunnel instead of opening a public
+firewall port. Runtime evidence is stored in `/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl` and
+`state.json`; none belongs in Git.
+
+Stopping or rolling back the board must not stop, restart, disarm or change `manga-chan-watcher.service`. Conversely,
+board health never proves the signing watcher is armed or trading.
