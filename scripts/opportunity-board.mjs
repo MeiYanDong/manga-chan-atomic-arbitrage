@@ -9,6 +9,7 @@ import {
   buildBoardSnapshot,
   catalogIsComplete,
   materialEvents,
+  nextCycleDelay,
   normalizePairCandidate,
   publicError,
   screenRoundTrip,
@@ -133,6 +134,7 @@ function loadConfig() {
     host,
     port: integer(process.env.MANGA_BOARD_PORT, 8_788),
     scanIntervalMs: integer(process.env.MANGA_BOARD_SCAN_INTERVAL_MS, 30_000, 5_000),
+    minimumCyclePauseMs: integer(process.env.MANGA_BOARD_MIN_CYCLE_PAUSE_MS, 30_000, 0),
     catalogIntervalMs: integer(process.env.MANGA_BOARD_CATALOG_INTERVAL_MS, 300_000, 30_000),
     staleMs: integer(process.env.MANGA_BOARD_STALE_MS, 180_000, 30_000),
     batchSize: integer(process.env.MANGA_BOARD_BATCH_SIZE, 8),
@@ -900,7 +902,11 @@ class OpportunityBoard {
           }),
         )
       }
-      const remaining = Math.max(0, this.config.scanIntervalMs - (Date.now() - started))
+      const remaining = nextCycleDelay({
+        scanIntervalMs: this.config.scanIntervalMs,
+        cycleDurationMs: Date.now() - started,
+        minimumPauseMs: this.config.minimumCyclePauseMs,
+      })
       if (remaining > 0) {
         await new Promise((resolve) => {
           this.sleepResolve = resolve

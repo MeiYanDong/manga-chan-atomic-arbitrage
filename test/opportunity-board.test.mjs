@@ -9,11 +9,21 @@ import {
   buildBoardSnapshot,
   catalogIsComplete,
   materialEvents,
+  nextCycleDelay,
   normalizePairCandidate,
   publicError,
   screenRoundTrip,
   writeJsonAtomic,
 } from '../src/opportunity-board.mjs'
+
+test('cycle pacing preserves start interval and enforces a post-cycle cooldown', () => {
+  assert.equal(nextCycleDelay({ scanIntervalMs: 120_000, cycleDurationMs: 45_000, minimumPauseMs: 60_000 }), 75_000)
+  assert.equal(nextCycleDelay({ scanIntervalMs: 120_000, cycleDurationMs: 150_000, minimumPauseMs: 60_000 }), 60_000)
+  assert.throws(
+    () => nextCycleDelay({ scanIntervalMs: 120_000, cycleDurationMs: -1, minimumPauseMs: 60_000 }),
+    /non-negative/,
+  )
+})
 
 const TOKEN = '0x7aad9faa5ee27bdeeb17d5a8c1870278824c4c59'
 const GOOGL = '0x2e0847e8910a9732eb3fb1bb4b70a580adad4fe3'
