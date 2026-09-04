@@ -9,6 +9,7 @@
     "strict": false,
     "noImplicitAny": false,
     "skipLibCheck": true,
+    "types": ["node"],
     "resolveJsonModule": true
   },
   "include": ["src/**/*.mjs", "test/*.test.mjs"]
