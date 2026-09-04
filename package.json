@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Bounded atomic arbitrage executor for the MANGA/MSFT/NVDA/USDG route on Robinhood Chain",
   "license": "MIT",
   "private": false,

@@ -44,9 +44,30 @@ export function persistSignedRaw(directory, hash, serializedTransaction) {
   return file
 }
 
+/**
+ * systemd exposes service credentials as immutable 0440 root:root files inside
+ * the unit-specific credentials directory. That group-readable bit is safe only
+ * inside the mount namespace managed by systemd, never for an ordinary file.
+ *
+ * @param {string} file
+ * @param {{mode: number, uid: number, gid: number}} stat
+ * @param {string | undefined} credentialDirectory
+ */
+export function isSecureSystemdCredential(file, stat, credentialDirectory) {
+  if (!credentialDirectory) return false
+  return (
+    path.dirname(path.resolve(file)) === path.resolve(credentialDirectory) &&
+    stat.uid === 0 &&
+    stat.gid === 0 &&
+    (stat.mode & 0o777) === 0o440
+  )
+}
+
 /** @param {string} file */
 export function assertPrivateFile(file) {
-  const stat = fs.statSync(file)
+  const stat = fs.lstatSync(file)
   if (!stat.isFile()) throw new Error(`签名凭据不是普通文件：${file}`)
-  if ((stat.mode & 0o077) !== 0) throw new Error(`签名凭据权限必须为 0600 或更严格：${file}`)
+  if ((stat.mode & 0o077) !== 0 && !isSecureSystemdCredential(file, stat, process.env.CREDENTIALS_DIRECTORY)) {
+    throw new Error(`签名凭据必须为普通私有文件，或受 systemd credentials 隔离的 0440 root:root 文件：${file}`)
+  }
 }

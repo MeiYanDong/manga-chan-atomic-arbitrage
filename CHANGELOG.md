@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 — 2026-09-04
+
+- Accept systemd's immutable `0440 root:root` credential files only inside the unit-specific credentials directory.
+- Keep ordinary signer files restricted to owner-only permissions and reject symlinks.
+
 ## 0.1.2 — 2026-09-04
 
 - Bind the Linux signer to an encrypted systemd credential and remove the plaintext credential source path.
