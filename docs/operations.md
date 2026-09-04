@@ -6,7 +6,14 @@
 2. Confirm the release source hash matches `deployments/robinhood-mainnet.json`.
 3. Provision a strategy-owned managed HTTP endpoint and WSS endpoint. Do not reuse another strategy's configuration file.
 4. Configure an independent HTTP reader when available. The two URLs must not alias one another.
-5. Install the signer as a systemd credential or a root-provisioned `0600` file. Never print it during transfer.
+5. Create the signer as a host-bound encrypted systemd credential. Stream the key over the encrypted administration channel into `systemd-creds`; never place it in argv, an environment variable or an intermediate plaintext file:
+
+   ```bash
+   sudo systemd-creds encrypt --name=manga-private-key - /etc/credstore.encrypted/manga-private-key
+   sudo chown root:root /etc/credstore.encrypted/manga-private-key
+   sudo chmod 0600 /etc/credstore.encrypted/manga-private-key
+   ```
+
 6. Transfer `state.json` and `audit.jsonl` through a private channel. They are runtime evidence, not release assets.
 
 ## Single-writer cutover

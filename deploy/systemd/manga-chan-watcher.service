@@ -3,6 +3,8 @@ Description=MANGA CHAN bounded atomic-arbitrage watcher
 Wants=network-online.target
 After=network-online.target
 OnFailure=manga-chan-alert@%n.service
+StartLimitIntervalSec=10min
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -12,23 +14,34 @@ WorkingDirectory=/opt/manga-chan-arbitrage/current
 EnvironmentFile=/etc/manga-chan-arbitrage/live.env
 EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
-LoadCredential=private-key:/etc/manga-chan-arbitrage/private-key
-Environment=MANGA_PRIVATE_KEY_FILE=%d/private-key
+LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
+Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
 UMask=0077
 ExecStart=/usr/bin/env npm run watch
-Restart=no
+Restart=on-abnormal
+RestartSec=5s
 TimeoutStopSec=20
 KillSignal=SIGTERM
+StateDirectory=manga-chan-arbitrage
+StateDirectoryMode=0700
+MemoryMax=512M
+TasksMax=64
+CPUWeight=200
+OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelLogs=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/manga-chan-arbitrage
 
