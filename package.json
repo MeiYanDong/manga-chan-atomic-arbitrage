@@ -67,7 +67,7 @@
     "fork-test": "node scripts/manga-chan-arb.mjs fork-test"
   },
   "dependencies": {
-    "solc": "0.8.26",
+    "solc": "0.8.36",
     "viem": "2.56.3"
   },
   "devDependencies": {
