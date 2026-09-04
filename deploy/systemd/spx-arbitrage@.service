@@ -1,0 +1,38 @@
+[Unit]
+Description=SPX fixed-route atomic-arbitrage one-shot (%i)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=manga-chan-arb
+Group=manga-chan-arb
+WorkingDirectory=/opt/spx-arbitrage/current
+EnvironmentFile=/etc/spx-arbitrage/live.env
+EnvironmentFile=-/etc/spx-arbitrage/release.env
+Environment=MANGA_RUN_DIR=/var/lib/spx-arbitrage
+LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
+Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
+UMask=0077
+ExecStart=/usr/bin/env node scripts/manga-chan-arb.mjs %i
+TimeoutStartSec=180
+StateDirectory=spx-arbitrage
+StateDirectoryMode=0700
+MemoryMax=512M
+TasksMax=64
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/spx-arbitrage

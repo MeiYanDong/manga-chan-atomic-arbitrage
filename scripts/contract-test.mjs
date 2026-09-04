@@ -10,23 +10,23 @@ const rpcPort = Number(process.env.MANGA_TEST_RPC_PORT || 18_547)
 const rpcUrl = `http://127.0.0.1:${rpcPort}`
 const chain = defineChain({
   id: 31_337,
-  name: 'MANGA deterministic test',
+  name: 'SPX fixed-route deterministic test',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: { default: { http: [rpcUrl] } },
 })
 
 const USDG = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
-const MANGA = getAddress('0xc28068cb109Dd0a0d5C6C6a925B048fEA00E31a6')
-const MSFT = getAddress('0xe93237C50D904957Cf27E7B1133b510C669c2e74')
-const NVDA = getAddress('0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC')
+const TARGET_TOKEN = getAddress('0x3363Cd5019Aa1F3E50C73086d5F5dCab3D90f558')
+const ENTRY_TOKEN = getAddress('0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9')
+const EXIT_TOKEN = getAddress('0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC')
 const POOL_MANAGER = getAddress('0x8366a39CC670B4001A1121B8F6A443A643e40951')
-const ENTRY_V3_POOL = getAddress('0xeb60bCD1D920ad6E102690CCFC6fB488899E1510')
+const ENTRY_V3_POOL = getAddress('0xAae0d815EE56e4092a5E5C2911E676Fea50B2d6D')
 const EXIT_V3_POOL = getAddress('0xd4EB21209C4D6093f80B5b84f5C45cc093EA14a3')
 
 function compile() {
   const sources = {
-    'MangaChanAtomicArb.sol': {
-      content: fs.readFileSync(path.join(root, 'contracts', 'MangaChanAtomicArb.sol'), 'utf8'),
+    'FixedRouteAtomicArb.sol': {
+      content: fs.readFileSync(path.join(root, 'contracts', 'FixedRouteAtomicArb.sol'), 'utf8'),
     },
     'TestRuntime.sol': { content: fs.readFileSync(path.join(root, 'test', 'contracts', 'TestRuntime.sol'), 'utf8') },
   }
@@ -95,7 +95,7 @@ async function main() {
   try {
     await waitForRpc(child)
     const contracts = compile()
-    const executorArtifact = contracts['MangaChanAtomicArb.sol'].MangaChanAtomicArb
+    const executorArtifact = contracts['FixedRouteAtomicArb.sol'].FixedRouteAtomicArb
     const tokenArtifact = contracts['TestRuntime.sol'].MockToken
     const managerArtifact = contracts['TestRuntime.sol'].MockPoolManager
     const poolArtifact = contracts['TestRuntime.sol'].MockV3Pool
@@ -105,7 +105,7 @@ async function main() {
     const other = getAddress(accounts[1])
     const walletClient = createWalletClient({ account: operator, chain, transport: http(rpcUrl) })
 
-    for (const token of [USDG, MANGA, MSFT, NVDA]) {
+    for (const token of [USDG, TARGET_TOKEN, ENTRY_TOKEN, EXIT_TOKEN]) {
       await publicClient.request({
         method: 'hardhat_setCode',
         params: [token, `0x${tokenArtifact.evm.deployedBytecode.object}`],
@@ -264,7 +264,12 @@ async function main() {
     })
     const executeReceipt = await publicClient.waitForTransactionReceipt({ hash: executeHash })
     const balances = {}
-    for (const [name, token] of Object.entries({ usdg: USDG, msft: MSFT, manga: MANGA, nvda: NVDA })) {
+    for (const [name, token] of Object.entries({
+      usdg: USDG,
+      entryToken: ENTRY_TOKEN,
+      targetToken: TARGET_TOKEN,
+      exitToken: EXIT_TOKEN,
+    })) {
       balances[name] = await publicClient.readContract({
         address: token,
         abi: tokenAbi,
@@ -275,7 +280,7 @@ async function main() {
     if (executeReceipt.status !== 'success' || balances.usdg !== 10_100_000n) {
       throw new Error('confirmed execution did not increase executor USDG by the exact simulated profit')
     }
-    if (balances.msft !== 0n || balances.manga !== 0n || balances.nvda !== 0n) {
+    if (balances.entryToken !== 0n || balances.targetToken !== 0n || balances.exitToken !== 0n) {
       throw new Error('confirmed execution left an intermediate asset balance')
     }
 
@@ -283,14 +288,18 @@ async function main() {
       JSON.stringify({
         status: 'DETERMINISTIC_CONTRACT_TEST_PASSED',
         executor,
-        sourceHash: keccak256(toHex(fs.readFileSync(path.join(root, 'contracts', 'MangaChanAtomicArb.sol'), 'utf8'))),
+        sourceHash: keccak256(toHex(fs.readFileSync(path.join(root, 'contracts', 'FixedRouteAtomicArb.sol'), 'utf8'))),
         simulation: { amountOut: simulation.result[0].toString(), grossProfit: simulation.result[1].toString() },
         confirmed: {
           hash: executeHash,
           gasUsed: executeReceipt.gasUsed.toString(),
           executorUsdg: balances.usdg.toString(),
         },
-        residuals: { msft: balances.msft.toString(), manga: balances.manga.toString(), nvda: balances.nvda.toString() },
+        residuals: {
+          entryToken: balances.entryToken.toString(),
+          targetToken: balances.targetToken.toString(),
+          exitToken: balances.exitToken.toString(),
+        },
         negativeChecks,
       }),
     )

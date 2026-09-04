@@ -44,7 +44,7 @@ contract MockPoolManager {
         uint160 sqrtPriceLimitX96;
     }
 
-    address internal constant MSFT = 0xe93237C50D904957Cf27E7B1133b510C669c2e74;
+    address internal constant ENTRY_TOKEN = 0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9;
     uint256 private settlement;
 
     function recordSettlement(uint256 amount) external {
@@ -66,7 +66,7 @@ contract MockPoolManager {
         uint256 input = uint256(-params.amountSpecified);
         require(input <= uint256(uint128(type(int128).max)), "INPUT");
         int128 signedInput = int128(int256(input));
-        if (key.currency1 == MSFT) return _pack(signedInput, -signedInput);
+        if (key.currency1 == ENTRY_TOKEN) return _pack(signedInput, -signedInput);
         return _pack(-signedInput, signedInput);
     }
 

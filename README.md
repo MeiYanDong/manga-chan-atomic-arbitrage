@@ -1,5 +1,10 @@
 # MANGA CHAN Atomic Arbitrage + Opportunity Board
 
+> The `live/spx-aapl-nvda-canary` branch is an isolated fixed-route canary for
+> `USDG -> AAPL -> SPX -> NVDA -> USDG`. It uses separate release, runtime and
+> systemd paths and does not replace the existing MANGA deployment. See
+> `docs/stories/spx-live-canary.md` for its risk envelope and acceptance criteria.
+
 A bounded, single-route atomic arbitrage executor for Robinhood Chain:
 
 ```text
