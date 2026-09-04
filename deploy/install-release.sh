@@ -23,12 +23,14 @@ prefix=/opt/manga-chan-arbitrage
 release_dir=${prefix}/releases/${release_sha}
 runtime_dir=/var/lib/manga-chan-arbitrage
 config_dir=/etc/manga-chan-arbitrage
+credential_dir=/etc/credstore.encrypted
 
 getent group "${service_group}" >/dev/null || groupadd --system "${service_group}"
 id "${service_user}" >/dev/null 2>&1 || useradd --system --gid "${service_group}" --home-dir "${runtime_dir}" --shell /usr/sbin/nologin "${service_user}"
 install -d -o root -g root -m 0755 "${prefix}/releases"
 install -d -o "${service_user}" -g "${service_group}" -m 0700 "${runtime_dir}"
 install -d -o root -g "${service_group}" -m 0750 "${config_dir}"
+install -d -o root -g root -m 0700 "${credential_dir}"
 
 if [[ -e ${release_dir} ]]; then
   echo "release already exists: ${release_dir}" >&2

@@ -50,7 +50,7 @@ The deterministic contract test asserts the exact business result, intermediate-
 Copy `.env.example` to a protected strategy-owned configuration outside this repository. Live commands refuse to sign through the public fallback RPC. The signer can be either:
 
 - macOS Keychain via `MANGA_KEYCHAIN_SERVICE`; or
-- a mode-`0600` file supplied through `MANGA_PRIVATE_KEY_FILE`, normally a systemd credential.
+- a host-bound encrypted systemd credential exposed through `MANGA_PRIVATE_KEY_FILE` on Linux.
 
 Never put the private key value in an environment file, shell argument, GitHub secret used by CI, or this repository.
 

@@ -12,5 +12,5 @@ source /etc/manga-chan-arbitrage/live.env
 source /etc/manga-chan-arbitrage/release.env
 set +a
 export MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
-runuser -u manga-chan-arb --preserve-environment -- /usr/bin/npm run runtime:verify
+runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run runtime:verify
 systemctl --no-pager --full status manga-chan-watcher.service || true
