@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-09-04
 
 - Verify systemd service units on Linux CI and keep runtime startup read-only under the hardened filesystem sandbox.
 
