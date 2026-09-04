@@ -25,6 +25,23 @@ export function catalogIsComplete(observedCount, expectedCount) {
   return Number.isSafeInteger(expectedCount) && expectedCount > 0 && observedCount >= expectedCount
 }
 
+/**
+ * Keep a public reader from immediately starting another scan when one cycle
+ * already consumed the configured interval. The delay is measured after the
+ * cycle, while scanIntervalMs still defines the minimum start-to-start period.
+ *
+ * @param {{scanIntervalMs: number, cycleDurationMs: number, minimumPauseMs: number}} input
+ */
+export function nextCycleDelay(input) {
+  if (![input.scanIntervalMs, input.cycleDurationMs, input.minimumPauseMs].every(Number.isSafeInteger)) {
+    throw new Error('cycle timing values must be safe integers')
+  }
+  if (input.scanIntervalMs < 0 || input.cycleDurationMs < 0 || input.minimumPauseMs < 0) {
+    throw new Error('cycle timing values must be non-negative')
+  }
+  return Math.max(input.minimumPauseMs, input.scanIntervalMs - input.cycleDurationMs)
+}
+
 /** @param {unknown} value */
 export function canonicalAddress(value) {
   if (typeof value !== 'string') return null
