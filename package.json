@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Bounded MANGA atomic-arbitrage executor and read-only multi-pool opportunity board on Robinhood Chain",
   "license": "MIT",
   "private": false,
@@ -40,10 +40,10 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "compile": "node scripts/manga-chan-arb.mjs compile",
+    "compile": "node scripts/manga-chan-arb.mjs compile && node scripts/generic-contract-compile.mjs",
     "self-test": "node scripts/manga-chan-arb.mjs self-test",
     "test": "node --test --test-reporter=spec test/*.test.mjs",
-    "test:contract": "node scripts/contract-test.mjs",
+    "test:contract": "node scripts/contract-test.mjs && node scripts/generic-contract-test.mjs",
     "lint": "npm run lint:js && npm run lint:sol && npm run lint:shell",
     "lint:js": "eslint .",
     "lint:sol": "solhint 'contracts/**/*.sol' 'test/contracts/**/*.sol'",
@@ -67,6 +67,15 @@
     "watch:status": "node scripts/manga-chan-arb.mjs watch-status",
     "watch:disarm": "node scripts/manga-chan-arb.mjs watch-disarm",
     "fork-test": "node scripts/manga-chan-arb.mjs fork-test",
+    "fork-test:generic": "node scripts/generic-fork-test.mjs",
+    "generic:plan": "node scripts/generic-arb.mjs plan",
+    "generic:status": "node scripts/generic-arb.mjs status",
+    "generic:deploy-preflight": "node scripts/generic-arb.mjs deploy-preflight",
+    "generic:deploy": "node scripts/generic-arb.mjs deploy",
+    "generic:preflight": "node scripts/generic-arb.mjs preflight",
+    "generic:execute": "node scripts/generic-arb.mjs execute",
+    "generic:reconcile": "node scripts/generic-arb.mjs reconcile",
+    "generic:withdraw": "node scripts/generic-arb.mjs withdraw-all",
     "board": "node scripts/opportunity-board.mjs watch",
     "board:once": "node scripts/opportunity-board.mjs once",
     "board:status": "node scripts/opportunity-board.mjs status"

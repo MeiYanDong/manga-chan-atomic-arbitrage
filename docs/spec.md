@@ -2,11 +2,22 @@
 
 ## 1. Mechanism
 
-For an input amount `x` of USDG, the executable route output is:
+The deployed fixed canary remains:
 
 ```text
 f(x, state) = V3_NVDA_USDG(V4_MANGA_NVDA(V4_MSFT_MANGA(V3_USDG_MSFT(x))))
 ```
+
+Generic-v2 evaluates a bounded family instead of one symbol tuple:
+
+```text
+f(target, A, B, x, state) = V3_B_USDG(V4_target_B(V4_A_target(V3_USDG_A(x))))
+```
+
+`A` and `B` are asset addresses, not categories. Stocks, AI tokens and memes have identical execution semantics. Each
+V3 anchor is either the USDG identity, one canonical direct pool, or exactly one WETH bridge. The board explores the
+bounded grid `5, 7.5, 10, 12.5, 15, 25, 50, 75, 100 USDG`, then refines around the best coarse point. `100 USDG` is a
+hard cap, never a forced order size.
 
 A shot is economically eligible only when:
 
@@ -30,6 +41,8 @@ External stock or AI price data may prewarm computation. It cannot authorize a t
 
 ## 3. Shot Policy
 
+### Fixed canary
+
 A shot requires all of the following at one readable block revision:
 
 1. chain ID, target bytecode, token metadata, V3 pool composition, local source hash and deployed runtime hash match;
@@ -41,6 +54,23 @@ A shot requires all of the following at one readable block revision:
 7. the arm is unexpired and below all four budgets: confirmed executions, signed attempts, failed gas and principal;
 8. a final pre-sign simulation succeeds with a short deadline.
 
+### Generic-v2
+
+A generic candidate advances through three distinct evidence levels:
+
+```text
+fixed-block board screen
+-> typed candidate and canonical quote-block identity
+-> current-block GenericAtomicArb eth_call + estimateGas
+-> immutable signed plan and canonical receipt/effect
+```
+
+The board exposes full route payloads for its profitable amount variants. The preflight evaluates at most six strongest
+variants, rejects any that exceed the executor principal or fail a route boundary, and chooses the greatest **absolute
+exact net USDG profit**. It does not optimize ROI and does not force 100 USDG. Before signing, the selected route and
+amount must still be in the board's positive set, nonce and residual/allowance boundaries must still be clean, and a
+fresh exact simulation must satisfy both the gross-retention floor and worst-case gas-adjusted net floor.
+
 The only valid no-action result is `NO_SHOT` with evidence. Quote failure is not the same as an unprofitable quote.
 
 ## 4. Durable mutation protocol
@@ -51,6 +81,7 @@ Opportunity -> Intent -> Plan -> Signed exact raw -> Broadcast observation
 ```
 
 - The plan commits chain, wallet, nonce, destination, calldata hash, gas, fee, amount and relevant before-balances.
+- Generic plans additionally commit candidate hash, stable route/amount execution key, route hash and quote-block identity.
 - Exact raw bytes are written with mode `0600` before the first broadcast.
 - Broadcast failure is `UNKNOWN`, because the provider may have accepted the transaction before the response failed.
 - `reconcile` checks receipt, transaction visibility and latest/pending nonce. Two independent readers are required before returning `NOT_OBSERVED`.
@@ -87,6 +118,8 @@ No process state, CI result or simulation is labeled as live profit.
 ## 7. Acceptance criteria
 
 - Exact positive contract result and zero MSFT/MANGA/NVDA residuals are asserted.
+- Generic tests assert both direct-pool and one-WETH-bridge paths, the exact 100 USDG cap, zero residuals/allowances and
+  rejection of non-WETH intermediaries or unreviewed V3 fee tiers.
 - Every negative boundary checks the intended custom error, not merely “some revert.”
 - `header not found` cannot terminate as an invariant on its first occurrence.
 - execute, deploy and withdraw persist the signed raw transaction before broadcast.
@@ -109,10 +142,12 @@ gas proxy = sum(Quoter gas estimates) + orchestration overhead
 screened net = quoted USDG out - USDG in - native gas proxy converted to USDG
 ```
 
-This deliberately stops below `READY_TO_EXECUTE`: no generic route contract is deployed, so executor calldata,
-`eth_call`, exact execution gas, allowance/callback boundaries, inclusion probability and receipt are all absent. Old
-observations become `STALE` instead of remaining actionable. Metadata failures, missing anchors and quote reverts are
-`UNQUOTABLE`, never silently converted to zero profit.
+The board itself deliberately stops below `READY_TO_EXECUTE`: it has no signer, wallet client or generic executor state.
+Generic-v2's separate signing-lane preflight can consume the typed candidate payload and add exact `eth_call`, execution
+gas, residual, allowance and nonce evidence. No generic mainnet deployment exists at this repository revision, so
+current mainnet executor simulation and receipt evidence remain absent. Old observations become `STALE` instead of
+remaining actionable. Metadata failures, missing anchors and quote reverts are `UNQUOTABLE`, never silently converted
+to zero profit.
 
 The catalog is refreshed in full and supplemented by a frequent newest-token page. Priority candidates and current
 positive rows are requoted first; the rest are covered with a persistent round-robin cursor. Coverage is reported in

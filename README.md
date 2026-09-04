@@ -1,15 +1,20 @@
-# MANGA CHAN Atomic Arbitrage + Opportunity Board
+# Bounded Generic PAIR Atomic Arbitrage + Opportunity Board
 
 > The `live/spx-aapl-nvda-canary` branch is an isolated fixed-route canary for
 > `USDG -> AAPL -> SPX -> NVDA -> USDG`. It uses separate release, runtime and
 > systemd paths and does not replace the existing MANGA deployment. See
 > `docs/stories/spx-live-canary.md` for its risk envelope and acceptance criteria.
 
-A bounded, single-route atomic arbitrage executor for Robinhood Chain:
+The repository now has two deliberately separate execution generations:
+
+- the deployed fixed-route canaries, including `USDG -> AAPL -> SPX -> NVDA -> USDG`; and
+- generic-v2, a typed bounded executor for any admitted PAIR token with two quote pools, whether the quote assets are stocks, AI tokens or memes.
+
+The generic economic unit is:
 
 ```text
-USDG -> MSFT (Uniswap V3) -> MANGA (Uniswap V4)
-     -> NVDA (Uniswap V4) -> USDG (Uniswap V3)
+USDG -> quote A (V3 direct or one WETH bridge) -> target (PAIR V4)
+     -> quote B (PAIR V4) -> USDG (V3 direct or one WETH bridge)
 ```
 
 The edge is stale relative pricing across the two MANGA quote pools and their USDG conversion pools. It does not depend on MSFT or NVDA being stock tokens; the same mechanism can exist when the quote assets are AI or meme tokens.
@@ -20,24 +25,30 @@ adds material changes to an append-only event ledger. The board has no wallet, s
 
 ## Honest status
 
-- The contract is deployed and funded with a small canary float. Public deployment evidence is in [`deployments/robinhood-mainnet.json`](deployments/robinhood-mainnet.json).
-- The current deployment has **zero confirmed arbitrage executions**. A successful test or running process is not presented as live profit.
+- Fixed-route contracts are deployed and funded with small canary floats. Their public evidence is under [`deployments`](deployments).
+- Generic-v2 is implemented and has deterministic plus historical mainnet-fork evidence, but it is **not deployed on mainnet**. It has no mainnet signature, broadcast, receipt or realized profit.
+- Historical fixed-route receipt evidence is documented separately. A test, screen, running process or fork transaction is never presented as a new mainnet profit.
 - The old macOS polling watcher is stopped. This repository's watcher uses targeted WSS swap events plus a recovery poll and must be explicitly armed.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 
-## Safety model
+## Generic-v2 safety model
 
-- Fixed route, targets and pool keys in bytecode.
+- Typed routes only: no operator-supplied call target or arbitrary calldata.
+- Canonical PoolManager, V3 factory/router, PAIR hook, V4 fee/tick spacing and V3 fee tiers are fixed in bytecode.
+- V3 anchors are identity USDG, one direct pool, or exactly one WETH bridge; no arbitrary intermediary.
 - Only the immutable operator can execute or withdraw.
-- Maximum principal per transaction: `15 USDG`.
+- Maximum principal per transaction: `100 USDG`. This is a ceiling, not a default order size.
+- Adaptive probes and a bounded amount grid choose the amount with the greatest absolute screened net profit; the signing preflight then re-ranks up to six typed candidates using exact executor simulation and gas.
 - On-chain gross-profit floor: `0.05 USDG`.
-- Off-chain net-profit floor after gas: `0.02 USDG`.
+- Default off-chain net-profit floor after exact gas: `0.10 USDG`, configurable upward.
 - No wallet token approvals, Universal Router, or Permit2.
 - Every mutation follows `intent -> immutable plan -> exact raw persisted -> broadcast -> receipt/effect`.
 - A receipt or nonce ambiguity becomes `UNKNOWN`; no new nonce is permitted until `reconcile` converges.
-- An arm separately limits time, confirmed executions, signed attempts, and failed-gas expenditure.
+- Direct one-hop V3 legs bypass the router to reduce gas; two-hop anchors retain the canonical router.
+
+The fixed executors retain their original 15 USDG policy. Generic-v2 does not silently change or replace a deployed contract.
 
 See [`docs/spec.md`](docs/spec.md) for the Race Thesis, Shot Policy, state model and acceptance boundaries.
 
@@ -80,9 +91,17 @@ npm run withdraw
 npm run board:once         # one read-only catalog + quote batch
 npm run board              # continuous scanner and loopback dashboard
 npm run board:status       # persisted read-only snapshot
+npm run generic:plan       # typed top candidate set; board evidence only
+npm run generic:status     # local generic state and current board candidate
+npm run generic:deploy-preflight  # read-only deployment economics
+npm run generic:preflight  # exact executor eth_call + estimateGas; read-only
+npm run generic:deploy     # one guarded deployment mutation
+npm run generic:execute    # one guarded, dynamically selected mutation
+npm run generic:reconcile  # converge an UNKNOWN generic mutation
+npm run generic:withdraw   # return all executor USDG to the operator
 ```
 
-No command automatically deploys and trades in one step.
+No command automatically deploys and trades in one step. There is no generic auto-watcher in this version: every generic signature still requires an explicit command invocation.
 
 ## Live opportunity board
 
@@ -90,13 +109,16 @@ The board's evidence ladder is intentionally narrower than the executor's:
 
 ```text
 PAIR metadata -> fixed-block four-leg Quoter screen -> gas proxy
-              -> no generic execution estimate -> no receipt
+              -> bounded typed candidate set
+              -> separate generic preflight: exact eth_call + estimateGas
+              -> explicit signing command -> canonical receipt/effect
 ```
 
 Rows can be `DISCOVERED_UNQUOTED`, `UNQUOTABLE`, `NO_EDGE`, `GROSS_POSITIVE_NET_NEGATIVE`,
-`SCREENED_NET_POSITIVE` or `STALE`. A screened-positive row is a research candidate, not a risk-free or executable
-trade. The first adapter covers PAIR's first-party multi-pool catalog; arbitrary external V4 pools are not claimed as a
-complete census.
+`SCREENED_NET_POSITIVE` or `STALE`. A screened-positive row is still a research candidate, not a risk-free or executable
+trade. Only `generic:preflight` can promote a bounded candidate to `GENERIC_READY_TO_EXECUTE`, and even that is not a
+receipt or guaranteed inclusion. The first adapter covers PAIR's first-party multi-pool catalog; arbitrary external V4
+pools are not claimed as a complete census.
 
 Use a dedicated protected configuration based on [`deploy/opportunity-board.env.example`](deploy/opportunity-board.env.example).
 The supported service binds to `127.0.0.1:8788`; open it privately with:

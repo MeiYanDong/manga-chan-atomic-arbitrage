@@ -16,6 +16,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'MANGA_WS_URL=wss://primary.invalid',
       'RH_RPC_URL=https://must-not-be-read.invalid',
       'MANGA_MAX_ATTEMPTS=3',
+      'MANGA_GENERIC_BOARD_URL=http://127.0.0.1:8788/api/snapshot',
+      'MANGA_GENERIC_MIN_NET_USDG=0.2',
+      'MANGA_GENERIC_PROFIT_RETENTION_BPS=9400',
     ].join('\n'),
     { mode: 0o600 },
   )
@@ -25,6 +28,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.rpcUrl, 'https://primary.invalid')
   assert.equal(config.wsUrl, 'wss://primary.invalid')
   assert.equal(config.maxAttempts, 3)
+  assert.equal(config.genericMinNetUsdg, '0.2')
+  assert.equal(config.genericProfitRetentionBps, 9_400)
+  assert.equal(config.genericPreflightCandidates, 6)
   assert.doesNotThrow(() => assertLiveTransport(config, { requireWss: true }))
 })
 
@@ -35,4 +41,8 @@ test('live watch refuses public fallback and silent polling-only mode', () => {
     () => assertLiveTransport({ ...missing, rpcUrl: 'https://primary.invalid' }, { requireWss: true }),
     /MANGA_WS_URL/,
   )
+})
+
+test('generic exact-preflight candidate count is bounded at configuration load', () => {
+  assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_PREFLIGHT_CANDIDATES: '33' }), /1\.\.32/)
 })

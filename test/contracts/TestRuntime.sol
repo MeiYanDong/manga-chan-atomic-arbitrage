@@ -16,6 +16,7 @@ interface ISettlementRecorder {
 
 contract MockToken {
     mapping(address account => uint256 amount) public balanceOf;
+    mapping(address owner => mapping(address spender => uint256 amount)) public allowance;
 
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
@@ -26,6 +27,77 @@ contract MockToken {
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
         return true;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        require(balanceOf[from] >= amount, "BALANCE");
+        require(allowance[from][msg.sender] >= amount, "ALLOWANCE");
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
+contract MockV3Factory {
+    mapping(bytes32 key => address pool) private pools;
+
+    function setPool(address tokenA, address tokenB, uint24 fee, address pool) external {
+        pools[_key(tokenA, tokenB, fee)] = pool;
+    }
+
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool) {
+        return pools[_key(tokenA, tokenB, fee)];
+    }
+
+    function _key(address tokenA, address tokenB, uint24 fee) private pure returns (bytes32) {
+        (address token0, address token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
+        return keccak256(abi.encode(token0, token1, fee));
+    }
+}
+
+contract MockV3Router {
+    address internal constant USDG = 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168;
+    address internal constant POOL_MANAGER = 0x8366a39CC670B4001A1121B8F6A443A643e40951;
+
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    uint256 public exitProfit;
+
+    function configure(uint256 exitProfit_) external {
+        exitProfit = exitProfit_;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "PATH");
+        address tokenIn = _pathAddress(params.path, 0);
+        address tokenOut = _pathAddress(params.path, params.path.length - 20);
+        if (msg.value != 0) {
+            require(msg.value == params.amountIn, "VALUE");
+            amountOut = params.amountIn;
+        } else {
+            require(MockToken(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "TRANSFER_FROM");
+            amountOut = tokenOut == USDG ? params.amountIn + exitProfit : params.amountIn;
+        }
+        require(amountOut >= params.amountOutMinimum, "MIN_OUT");
+        MockToken(tokenOut).mint(params.recipient, amountOut);
+        if (params.recipient == POOL_MANAGER) ISettlementRecorder(POOL_MANAGER).recordSettlement(amountOut);
+    }
+
+    function _pathAddress(bytes calldata path, uint256 offset) private pure returns (address token) {
+        assembly ("memory-safe") {
+            token := shr(96, calldataload(add(path.offset, offset)))
+        }
     }
 }
 
@@ -46,6 +118,11 @@ contract MockPoolManager {
 
     address internal constant ENTRY_TOKEN = 0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9;
     uint256 private settlement;
+    bool private mintOnTake;
+
+    function configureTakeMint(bool enabled) external {
+        mintOnTake = enabled;
+    }
 
     function recordSettlement(uint256 amount) external {
         settlement = amount;
@@ -70,7 +147,9 @@ contract MockPoolManager {
         return _pack(-signedInput, signedInput);
     }
 
-    function take(address, address, uint256) external pure {}
+    function take(address currency, address to, uint256 amount) external {
+        if (mintOnTake) MockToken(currency).mint(to, amount);
+    }
 
     function _pack(int128 amount0, int128 amount1) private pure returns (int256) {
         return (int256(amount0) << 128) | int256(uint256(uint128(amount1)));

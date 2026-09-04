@@ -108,3 +108,31 @@ firewall port. The supplied SSH drop-in permits only client-local forwarding to 
 
 Stopping or rolling back the board must not stop, restart, disarm or change `manga-chan-watcher.service`. Conversely,
 board health never proves the signing watcher is armed or trading.
+
+## Generic-v2 staged promotion
+
+Generic-v2 may share the same Linux host as the loopback opportunity board, but not the board's Unix identity, config,
+RPC role or runtime directory. The signing command reads `http://127.0.0.1:8788/api/snapshot`; `manga-board` still has
+no signer access. Generic-v2 must use the same `MANGA_RUN_DIR` as the fixed signer lane so both generations share
+`wallet.lock`, `audit.jsonl` and the unresolved-mutation barrier.
+
+Before any generic deployment or execution:
+
+1. stop and disarm every fixed-route watcher that can use the wallet;
+2. run the fixed and generic reconcile commands and require a clean shared ledger;
+3. prove `latest nonce == pending nonce`, confirm the exact operator address and run `npm run check` at the release SHA;
+4. run `npm run generic:plan`; treat its result as board evidence only;
+5. configure `MANGA_GENERIC_SEED_ETH` explicitly and run `npm run generic:deploy-preflight`;
+6. obtain a fresh human authorization for the executor, wallet, seed/value, maximum gas, liveness window and withdrawal
+   path before invoking `npm run generic:deploy`;
+7. read back the canonical deployment receipt, bytecode hash, operator, 100 USDG cap, 0.05 USDG contract floor and
+   executor USDG balance;
+8. run `npm run generic:preflight`; only its exact simulation and gas result can justify one `generic:execute` command.
+
+The default deployment seed is zero. Roughly `0.01 ETH` did not capitalize 100 USDG in the recorded fork, so the cap
+must not be confused with available principal. Increase seed only within the reviewed wallet budget, or transfer USDG
+through a separately reviewed mutation path; do not improvise an unjournaled top-up.
+
+Generic commands are manual in this release. No generic systemd signing service, recurring scheduler or auto-arm is
+provided or claimed. A future watcher must add a bounded authorization record and deployment-specific runtime
+verification before it can be enabled.

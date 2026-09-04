@@ -6,6 +6,7 @@ import {
   classifyReconciliation,
   classifyRpcError,
   evaluateArmBudget,
+  fixedSignerLaneConflict,
   latestUnresolvedMutation,
 } from '../src/policy.mjs'
 
@@ -91,6 +92,33 @@ test('arm budget stops on each independent boundary', () => {
   assert.equal(evaluateArmBudget(arm, { ...base, attempts: 5 }).reason, 'attempt-limit')
   assert.equal(evaluateArmBudget(arm, { ...base, failedGasWei: 1000n }).reason, 'failed-gas-limit')
   assert.equal(evaluateArmBudget(arm, { ...base, now: Date.parse('2030-01-01T00:00:00Z') }).reason, 'expired')
+})
+
+test('generic signer lane fails closed on active or malformed fixed-signer state', () => {
+  const nowMs = Date.parse('2026-09-05T00:00:00.000Z')
+  const base = { lockExists: false, nowMs, processIsAlive: () => false }
+  assert.match(
+    fixedSignerLaneConflict({
+      ...base,
+      arm: { status: 'ARMED', expiresAt: '2026-09-05T00:01:00.000Z' },
+    }),
+    /still active/,
+  )
+  assert.match(fixedSignerLaneConflict({ ...base, arm: { status: 'ARMED', expiresAt: 'invalid' } }), /invalid expiry/)
+  assert.match(fixedSignerLaneConflict({ ...base, lockExists: true, lockPid: null }), /lock is malformed/)
+  assert.match(
+    fixedSignerLaneConflict({ ...base, lockExists: true, lockPid: 42, processIsAlive: () => true }),
+    /PID 42/,
+  )
+  assert.equal(
+    fixedSignerLaneConflict({
+      ...base,
+      arm: { status: 'ARMED', expiresAt: '2026-09-04T23:59:59.000Z' },
+      lockExists: true,
+      lockPid: 42,
+    }),
+    null,
+  )
 })
 
 test('event queue deduplicates logs and collapses out-of-order revisions to the newest block', async () => {

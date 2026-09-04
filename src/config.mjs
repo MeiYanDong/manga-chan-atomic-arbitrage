@@ -14,6 +14,14 @@ const CONFIG_KEYS = new Set([
   'MANGA_MAX_ATTEMPTS',
   'MANGA_MAX_FAILED_GAS_WEI',
   'MANGA_PROVIDER_LABEL',
+  'MANGA_GENERIC_BOARD_URL',
+  'MANGA_GENERIC_BOARD_SNAPSHOT',
+  'MANGA_GENERIC_MAX_QUOTE_AGE_MS',
+  'MANGA_GENERIC_MIN_NET_USDG',
+  'MANGA_GENERIC_SEED_ETH',
+  'MANGA_GENERIC_MIN_ETH_RESERVE',
+  'MANGA_GENERIC_PROFIT_RETENTION_BPS',
+  'MANGA_GENERIC_PREFLIGHT_CANDIDATES',
 ])
 
 /** @param {string} file */
@@ -54,6 +62,14 @@ export function loadRuntimeConfig(environment = process.env) {
     maxAttempts: positiveInteger(value('MANGA_MAX_ATTEMPTS'), 5),
     maxFailedGasWei: nonNegativeBigInt(value('MANGA_MAX_FAILED_GAS_WEI'), 1_000_000_000_000_000n),
     providerLabel: value('MANGA_PROVIDER_LABEL') || 'managed-provider',
+    genericBoardUrl: value('MANGA_GENERIC_BOARD_URL') || 'http://127.0.0.1:8788/api/snapshot',
+    genericBoardSnapshot: value('MANGA_GENERIC_BOARD_SNAPSHOT'),
+    genericMaxQuoteAgeMs: positiveInteger(value('MANGA_GENERIC_MAX_QUOTE_AGE_MS'), 45_000),
+    genericMinNetUsdg: value('MANGA_GENERIC_MIN_NET_USDG') || '0.1',
+    genericSeedEth: value('MANGA_GENERIC_SEED_ETH') || '0',
+    genericMinEthReserve: value('MANGA_GENERIC_MIN_ETH_RESERVE') || '0.002',
+    genericProfitRetentionBps: boundedBps(value('MANGA_GENERIC_PROFIT_RETENTION_BPS'), 9_500),
+    genericPreflightCandidates: boundedPositiveInteger(value('MANGA_GENERIC_PREFLIGHT_CANDIDATES'), 6, 32),
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
 }
@@ -66,11 +82,25 @@ function positiveInteger(value, fallback) {
   return parsed
 }
 
+/** @param {string | null} value @param {number} fallback @param {number} maximum */
+function boundedPositiveInteger(value, fallback, maximum) {
+  const parsed = positiveInteger(value, fallback)
+  if (parsed > maximum) throw new Error(`配置值必须在 1..${maximum}：${value}`)
+  return parsed
+}
+
 /** @param {string | null} value @param {bigint} fallback */
 function nonNegativeBigInt(value, fallback) {
   if (value === null) return fallback
   if (!/^\d+$/.test(value)) throw new Error('MANGA_MAX_FAILED_GAS_WEI 必须是非负整数字符串')
   return BigInt(value)
+}
+
+/** @param {string | null} value @param {number} fallback */
+function boundedBps(value, fallback) {
+  const parsed = positiveInteger(value, fallback)
+  if (parsed > 10_000) throw new Error(`配置值必须在 1..10000 bps：${value}`)
+  return parsed
 }
 
 /**

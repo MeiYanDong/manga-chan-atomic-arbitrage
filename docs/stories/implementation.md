@@ -81,3 +81,31 @@ Acceptance:
 - the board uses a dedicated read RPC, runtime directory and bounded systemd resources;
 - HTTP binds to loopback and `/healthz` verifies runtime freshness;
 - deployment readback proves both the board and the unchanged signing watcher are healthy.
+
+## S10 — Bounded generic route and optimal amount
+
+Acceptance:
+
+- one executor accepts stock, AI, meme and other PAIR quote assets through the same typed route model;
+- PoolManager, V3 factory/router, PAIR hook, V4 shape, V3 fees, WETH intermediary, hop count and 100 USDG cap are enforced
+  on-chain;
+- adaptive probes, full-grid refresh and midpoint refinement choose maximum absolute screened net profit rather than ROI
+  or input size;
+- deterministic tests assert exact direct and bridged execution, zero intermediate residuals, zero router allowances and
+  every reviewed negative boundary;
+- a selected real route passes a historical mainnet-fork execution with exact USDG delta and no mainnet broadcast.
+
+Status: implemented and locally tested; mainnet deployment is not part of this story.
+
+## S11 — Generic signing-lane promotion
+
+Acceptance:
+
+- the board publishes complete typed payloads for profitable amount variants while remaining signer-free;
+- the signing lane exact-preflights a bounded candidate set and selects the greatest exact net USDG result;
+- intent, plan, raw transaction, receipt, balance effect and UNKNOWN recovery share the wallet-wide durable ledger;
+- deployment and withdrawal have the same raw-before-broadcast and canonical post-state checks;
+- one current mainnet deployment is read back by source/code/operator/economic constants before the first live execution;
+- a canonical receipt, event, balance delta and gas mark distinguish realized gross, marked net and UNKNOWN net.
+
+Status: code implemented; mainnet deployment, signer invocation, generic receipt and automated watcher remain open.
