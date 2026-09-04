@@ -9,12 +9,14 @@ export default [
       sourceType: 'module',
       globals: {
         Buffer: 'readonly',
+        AbortSignal: 'readonly',
         console: 'readonly',
         fetch: 'readonly',
         performance: 'readonly',
         process: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
+        URL: 'readonly',
       },
     },
     rules: {

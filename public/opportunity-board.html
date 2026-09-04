@@ -1,0 +1,878 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EDGE TAPE · Robinhood Chain 机会榜</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ink: #12130f;
+        --paper: #e9e6d9;
+        --paper-muted: #b9b6aa;
+        --line: #393a32;
+        --acid: #c9ff3d;
+        --ember: #ff5a36;
+        --sky: #79c8ff;
+        --dim: #777970;
+        --panel: #1a1b16;
+        --shadow: rgba(0, 0, 0, 0.34);
+        --mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+        --display: 'Arial Narrow', 'Avenir Next Condensed', 'DIN Condensed', sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--ink);
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        color: var(--paper);
+        background-color: var(--ink);
+        background-image:
+          linear-gradient(rgba(233, 230, 217, 0.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(233, 230, 217, 0.025) 1px, transparent 1px);
+        background-size: 22px 22px;
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1680px, 100%);
+        margin: 0 auto;
+        padding: 18px;
+      }
+
+      .masthead {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 28px;
+        align-items: end;
+        padding: 20px 22px 24px;
+        border: 1px solid var(--line);
+        border-bottom: 5px solid var(--acid);
+        background: rgba(18, 19, 15, 0.94);
+        box-shadow: 14px 14px 0 var(--shadow);
+      }
+
+      .kicker,
+      .eyebrow {
+        color: var(--acid);
+        font-weight: 800;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 900px;
+        margin: 10px 0 0;
+        font-family: var(--display);
+        font-size: clamp(44px, 7vw, 105px);
+        font-stretch: condensed;
+        font-weight: 900;
+        letter-spacing: -0.055em;
+        line-height: 0.8;
+        text-transform: uppercase;
+      }
+
+      h1 span {
+        color: var(--acid);
+      }
+
+      .live-block {
+        min-width: 230px;
+        padding: 15px 17px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .live-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .live-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--acid);
+        box-shadow: 0 0 0 5px rgba(201, 255, 61, 0.1);
+        animation: breathe 1.8s ease-in-out infinite;
+      }
+
+      .live-dot.bad {
+        background: var(--ember);
+        box-shadow: 0 0 0 5px rgba(255, 90, 54, 0.12);
+      }
+
+      .tiny {
+        color: var(--paper-muted);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        line-height: 1.5;
+        text-transform: uppercase;
+      }
+
+      .stamp {
+        margin-top: 8px;
+        color: var(--paper);
+        font-size: 12px;
+      }
+
+      .warning {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 18px;
+        align-items: center;
+        margin-top: 20px;
+        padding: 13px 15px;
+        border: 1px solid #66512e;
+        background: #251f15;
+        color: #f1d19c;
+      }
+
+      .warning strong {
+        color: #ffd28c;
+      }
+
+      .mode-tag {
+        padding: 5px 8px;
+        border: 1px solid currentColor;
+        color: var(--acid);
+        white-space: nowrap;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        margin-top: 20px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .stat {
+        min-height: 118px;
+        padding: 16px;
+        border-right: 1px solid var(--line);
+      }
+
+      .stat:last-child {
+        border-right: 0;
+      }
+
+      .stat-value {
+        margin-top: 13px;
+        font-family: var(--display);
+        font-size: clamp(33px, 4vw, 58px);
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        line-height: 0.9;
+      }
+
+      .stat-value.acid {
+        color: var(--acid);
+      }
+
+      .stat-value.ember {
+        color: var(--ember);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 318px;
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .board,
+      .rail {
+        border: 1px solid var(--line);
+        background: rgba(26, 27, 22, 0.97);
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(180px, 1fr) 230px auto;
+        gap: 9px;
+        padding: 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      input,
+      select,
+      button {
+        min-height: 38px;
+        border: 1px solid #4b4c43;
+        border-radius: 0;
+        outline: none;
+        background: #12130f;
+        color: var(--paper);
+      }
+
+      input,
+      select {
+        width: 100%;
+        padding: 8px 11px;
+      }
+
+      input:focus,
+      select:focus,
+      button:focus-visible {
+        border-color: var(--acid);
+        box-shadow: 0 0 0 2px rgba(201, 255, 61, 0.15);
+      }
+
+      button {
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--acid);
+        color: var(--acid);
+      }
+
+      .table-wrap {
+        max-height: 66vh;
+        overflow: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        white-space: nowrap;
+      }
+
+      th {
+        position: sticky;
+        z-index: 2;
+        top: 0;
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--paper-muted);
+        background: var(--paper);
+        color: var(--ink);
+        font-size: 10px;
+        letter-spacing: 0.09em;
+        text-align: right;
+        text-transform: uppercase;
+      }
+
+      th:nth-child(1),
+      th:nth-child(2),
+      th:nth-child(3),
+      td:nth-child(1),
+      td:nth-child(2),
+      td:nth-child(3) {
+        text-align: left;
+      }
+
+      td {
+        padding: 12px;
+        border-bottom: 1px solid #2d2e28;
+        color: #d8d5c9;
+        text-align: right;
+        vertical-align: middle;
+      }
+
+      tbody tr {
+        transition: background 140ms ease;
+      }
+
+      tbody tr:hover {
+        background: #22241c;
+      }
+
+      tbody tr.positive {
+        background: rgba(201, 255, 61, 0.035);
+      }
+
+      tbody tr.positive td:first-child {
+        box-shadow: inset 4px 0 0 var(--acid);
+      }
+
+      .rank {
+        color: var(--dim);
+      }
+
+      .token {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .token-mark {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid #515349;
+        color: var(--acid);
+        font-weight: 900;
+      }
+
+      .symbol {
+        color: var(--paper);
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .address {
+        display: block;
+        margin-top: 2px;
+        color: var(--dim);
+        font-size: 9px;
+        text-decoration: none;
+      }
+
+      .address:hover {
+        color: var(--sky);
+      }
+
+      .route {
+        color: var(--sky);
+      }
+
+      .positive-number {
+        color: var(--acid);
+        font-weight: 900;
+      }
+
+      .negative-number {
+        color: #ff9076;
+      }
+
+      .pill {
+        display: inline-block;
+        padding: 4px 7px;
+        border: 1px solid #55574e;
+        color: var(--paper-muted);
+        font-size: 9px;
+        letter-spacing: 0.04em;
+      }
+
+      .pill.positive {
+        border-color: var(--acid);
+        color: var(--acid);
+      }
+
+      .pill.gross {
+        border-color: #e4b563;
+        color: #e4b563;
+      }
+
+      .pill.error {
+        border-color: var(--ember);
+        color: var(--ember);
+      }
+
+      .rail-header {
+        padding: 15px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .rail h2 {
+        margin: 5px 0 0;
+        font-family: var(--display);
+        font-size: 30px;
+        letter-spacing: -0.03em;
+        text-transform: uppercase;
+      }
+
+      .events {
+        max-height: 55vh;
+        overflow: auto;
+      }
+
+      .event {
+        position: relative;
+        padding: 15px 15px 15px 29px;
+        border-bottom: 1px solid #2d2e28;
+      }
+
+      .event::before {
+        position: absolute;
+        top: 20px;
+        left: 14px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--sky);
+        content: '';
+      }
+
+      .event.positive::before {
+        background: var(--acid);
+      }
+
+      .event.left::before {
+        background: var(--ember);
+      }
+
+      .event-title {
+        font-weight: 800;
+        line-height: 1.4;
+      }
+
+      .event-detail {
+        margin-top: 5px;
+        color: var(--paper-muted);
+        font-size: 10px;
+        line-height: 1.55;
+      }
+
+      .method {
+        padding: 15px;
+        border-top: 1px solid var(--line);
+        color: var(--paper-muted);
+        font-size: 10px;
+        line-height: 1.7;
+      }
+
+      .empty {
+        padding: 50px 20px;
+        color: var(--paper-muted);
+        text-align: center;
+      }
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 14px 2px 0;
+        color: var(--dim);
+        font-size: 9px;
+        line-height: 1.6;
+        text-transform: uppercase;
+      }
+
+      @keyframes breathe {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.55;
+          transform: scale(0.76);
+        }
+      }
+
+      @media (max-width: 1050px) {
+        .stats {
+          grid-template-columns: repeat(3, 1fr);
+        }
+
+        .stat:nth-child(3) {
+          border-right: 0;
+        }
+
+        .stat:nth-child(n + 4) {
+          border-top: 1px solid var(--line);
+        }
+
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .events {
+          max-height: 280px;
+        }
+      }
+
+      @media (max-width: 680px) {
+        .shell {
+          padding: 8px;
+        }
+
+        .masthead {
+          grid-template-columns: 1fr;
+          padding: 16px;
+          box-shadow: none;
+        }
+
+        .live-block {
+          min-width: 0;
+        }
+
+        .warning {
+          grid-template-columns: 1fr;
+        }
+
+        .stats {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .stat:nth-child(2n) {
+          border-right: 0;
+        }
+
+        .stat:nth-child(3) {
+          border-right: 1px solid var(--line);
+        }
+
+        .stat:nth-child(n + 3) {
+          border-top: 1px solid var(--line);
+        }
+
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        .footer {
+          display: block;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div>
+          <div class="kicker">Robinhood Chain / fixed-block signal desk</div>
+          <h1>Edge <span>Tape</span></h1>
+        </div>
+        <section class="live-block" aria-label="服务状态">
+          <div class="live-row">
+            <span class="eyebrow">Scanner state</span>
+            <span id="live-dot" class="live-dot bad" aria-hidden="true"></span>
+          </div>
+          <div id="service-status" class="stamp">CONNECTING</div>
+          <div id="updated-at" class="tiny">等待第一份快照</div>
+        </section>
+      </header>
+
+      <section class="warning">
+        <span class="mode-tag">READ ONLY</span>
+        <div>
+          <strong>榜单是筛选证据，不是成交承诺。</strong>
+          “净正”只代表固定区块 Quoter 输出减去 gas
+          代理成本仍为正；通用执行器模拟、抢跑竞争、签名、广播与链上回执均未发生。
+        </div>
+        <span id="block-policy" class="tiny">PINNED BLOCK</span>
+      </section>
+
+      <section class="stats" aria-label="扫描概览">
+        <article class="stat">
+          <div class="tiny">发现代币</div>
+          <div id="discovered" class="stat-value">—</div>
+        </article>
+        <article class="stat">
+          <div class="tiny">多池候选</div>
+          <div id="candidates" class="stat-value">—</div>
+        </article>
+        <article class="stat">
+          <div class="tiny">新鲜报价</div>
+          <div id="fresh-quotes" class="stat-value">—</div>
+        </article>
+        <article class="stat">
+          <div class="tiny">筛选净正</div>
+          <div id="positive-count" class="stat-value acid">—</div>
+        </article>
+        <article class="stat">
+          <div class="tiny">报价覆盖</div>
+          <div id="coverage" class="stat-value">—</div>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="board">
+          <div class="toolbar">
+            <label>
+              <span class="tiny">搜索代币 / 地址 / 路径</span>
+              <input id="search" type="search" placeholder="例如 SIGMA、MANGA、GOOGL → …" autocomplete="off" />
+            </label>
+            <label>
+              <span class="tiny">证据状态</span>
+              <select id="status-filter">
+                <option value="ALL">全部状态</option>
+                <option value="SCREENED_NET_POSITIVE">只看筛选净正</option>
+                <option value="GROSS_POSITIVE_NET_NEGATIVE">毛利正、扣 gas 负</option>
+                <option value="NO_EDGE">无边际</option>
+                <option value="UNQUOTABLE">不可报价</option>
+                <option value="STALE">已过期</option>
+                <option value="DISCOVERED_UNQUOTED">待报价</option>
+              </select>
+            </label>
+            <button id="pause" type="button">暂停刷新</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>代币</th>
+                  <th>最优闭环路径</th>
+                  <th>输入</th>
+                  <th>毛利</th>
+                  <th>Gas 代理</th>
+                  <th>筛选净值</th>
+                  <th>最浅深度</th>
+                  <th>区块 / 年龄</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+            <div id="empty" class="empty" hidden>当前筛选条件下没有项目。</div>
+          </div>
+        </div>
+
+        <aside class="rail">
+          <header class="rail-header">
+            <div class="eyebrow">Change ledger</div>
+            <h2>变化记录</h2>
+          </header>
+          <div id="events" class="events">
+            <div class="empty">等待变化事件…</div>
+          </div>
+          <div class="method">
+            <strong>筛选闭环</strong><br />
+            USDG → 配对资产 A → meme → 配对资产 B → USDG<br /><br />
+            每条观察的四段报价与 ETH/USDG 标价使用同一固定区块。榜单持续轮询优先候选，并分片覆盖剩余多池代币。
+          </div>
+        </aside>
+      </section>
+
+      <footer class="footer">
+        <span id="source-note">PAIR first-party discovery · Robinhood canonical asset map</span>
+        <span>Loopback-only dashboard · no wallet · no signer · no broadcast</span>
+      </footer>
+    </main>
+
+    <script>
+      const state = { snapshot: null, events: [], paused: false, timer: null }
+      const byId = (id) => document.getElementById(id)
+      const labels = {
+        SCREENED_NET_POSITIVE: '筛选净正',
+        GROSS_POSITIVE_NET_NEGATIVE: '毛利正 / 净负',
+        NO_EDGE: '无边际',
+        UNQUOTABLE: '不可报价',
+        STALE: '已过期',
+        DISCOVERED_UNQUOTED: '待报价',
+      }
+
+      function shortAddress(value) {
+        return value ? `${value.slice(0, 6)}…${value.slice(-4)}` : '—'
+      }
+
+      function number(value, digits = 4) {
+        if (value === null || value === undefined || value === '') return '—'
+        const parsed = Number(value)
+        return Number.isFinite(parsed)
+          ? parsed.toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: digits })
+          : '—'
+      }
+
+      function money(value, digits = 4) {
+        if (value === null || value === undefined || value === '') return '—'
+        const parsed = Number(value)
+        if (!Number.isFinite(parsed)) return '—'
+        const sign = parsed > 0 ? '+' : ''
+        return `${sign}${parsed.toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: digits })}`
+      }
+
+      function age(value) {
+        if (value === null || value === undefined) return '—'
+        if (value < 1_000) return `${value}ms`
+        if (value < 60_000) return `${Math.round(value / 1_000)}s`
+        return `${Math.round(value / 60_000)}m`
+      }
+
+      function cell(row, value, className = '') {
+        const node = document.createElement('td')
+        if (className) node.className = className
+        if (value instanceof Node) node.append(value)
+        else node.textContent = value
+        row.append(node)
+        return node
+      }
+
+      function tokenNode(item) {
+        const wrap = document.createElement('div')
+        wrap.className = 'token'
+        const mark = document.createElement('span')
+        mark.className = 'token-mark'
+        mark.textContent = String(item.symbol || '?')
+          .slice(0, 1)
+          .toUpperCase()
+        const details = document.createElement('div')
+        const symbol = document.createElement('div')
+        symbol.className = 'symbol'
+        symbol.textContent = item.symbol || 'UNKNOWN'
+        const address = document.createElement('a')
+        address.className = 'address'
+        address.href = `https://robinhoodchain.blockscout.com/token/${encodeURIComponent(item.tokenAddress)}`
+        address.target = '_blank'
+        address.rel = 'noreferrer'
+        address.textContent = `${shortAddress(item.tokenAddress)} · ${item.pools.length} pools`
+        details.append(symbol, address)
+        wrap.append(mark, details)
+        return wrap
+      }
+
+      function statusNode(status) {
+        const pill = document.createElement('span')
+        pill.className = 'pill'
+        if (status === 'SCREENED_NET_POSITIVE') pill.classList.add('positive')
+        else if (status === 'GROSS_POSITIVE_NET_NEGATIVE') pill.classList.add('gross')
+        else if (status === 'UNQUOTABLE') pill.classList.add('error')
+        pill.textContent = labels[status] || status
+        return pill
+      }
+
+      function renderRows() {
+        const rows = byId('rows')
+        rows.replaceChildren()
+        if (!state.snapshot) return
+        const query = byId('search').value.trim().toLowerCase()
+        const filter = byId('status-filter').value
+        const items = state.snapshot.items.filter((item) => {
+          const text = `${item.symbol} ${item.name} ${item.tokenAddress} ${item.route || ''}`.toLowerCase()
+          return (filter === 'ALL' || item.status === filter) && (!query || text.includes(query))
+        })
+        byId('empty').hidden = items.length > 0
+        for (const item of items) {
+          const row = document.createElement('tr')
+          if (item.status === 'SCREENED_NET_POSITIVE') row.className = 'positive'
+          cell(row, String(item.rank), 'rank')
+          cell(row, tokenNode(item))
+          cell(row, item.route || '等待固定区块报价', item.route ? 'route' : '')
+          cell(row, item.amountInUsdg ? `${number(item.amountInUsdg, 2)} U` : '—')
+          const grossCell = cell(row, money(item.grossProfitUsdg))
+          if (Number(item.grossProfitUsdg) > 0) grossCell.className = 'positive-number'
+          else if (Number(item.grossProfitUsdg) < 0) grossCell.className = 'negative-number'
+          cell(row, item.gasCostProxyUsdg ? `${number(item.gasCostProxyUsdg)} U` : '—')
+          const netCell = cell(row, money(item.screenedNetUsdg))
+          if (Number(item.screenedNetUsdg) > 0) netCell.className = 'positive-number'
+          else if (Number(item.screenedNetUsdg) < 0) netCell.className = 'negative-number'
+          cell(row, item.minimumRouteDepthUsd ? `$${number(item.minimumRouteDepthUsd, 0)}` : '—')
+          cell(row, item.blockNumber ? `${item.blockNumber} / ${age(item.ageMs)}` : '—')
+          cell(row, statusNode(item.status))
+          rows.append(row)
+        }
+      }
+
+      function renderSnapshot(snapshot) {
+        state.snapshot = snapshot
+        const healthy = ['RUNNING', 'SCANNING'].includes(snapshot.health.status)
+        byId('live-dot').classList.toggle('bad', !healthy)
+        byId('service-status').textContent = snapshot.health.status
+        byId('updated-at').textContent =
+          `更新 ${new Date(snapshot.generatedAt).toLocaleString('zh-CN')} · cycle ${snapshot.health.cycleNumber}`
+        byId('discovered').textContent = number(snapshot.source.discoveredTokens, 0)
+        byId('candidates').textContent = number(snapshot.coverage.candidateTokens, 0)
+        byId('fresh-quotes').textContent = number(snapshot.coverage.freshQuotedTokens, 0)
+        byId('positive-count').textContent = number(snapshot.coverage.counts.SCREENED_NET_POSITIVE || 0, 0)
+        byId('coverage').textContent = `${number(snapshot.coverage.quoteCoveragePct, 1)}%`
+        byId('block-policy').textContent = snapshot.methodology.blockPolicy
+        byId('source-note').textContent =
+          `${snapshot.source.discovery} · ${snapshot.source.quoteRpc} · catalog ${snapshot.source.catalogComplete ? 'complete' : 'partial'}`
+        renderRows()
+      }
+
+      function eventText(event) {
+        if (event.type === 'SCREENED_POSITIVE_ENTERED')
+          return [
+            `${event.symbol} 进入净正区`,
+            `${event.route || '未知路径'} · +${event.screenedNetUsdg} U · block ${event.blockNumber}`,
+          ]
+        if (event.type === 'SCREENED_POSITIVE_LEFT')
+          return [`${event.symbol} 离开净正区`, `${event.currentStatus} · previous ${event.previousNetUsdg} U`]
+        if (event.type === 'MATERIAL_NET_CHANGE')
+          return [
+            `${event.symbol} 净值显著变化`,
+            `${event.previousNetUsdg} → ${event.screenedNetUsdg} U · ${event.route || ''}`,
+          ]
+        if (event.type === 'CANDIDATE_ADDED') return [`新增多池候选 ${event.symbol}`, shortAddress(event.id)]
+        if (event.type === 'BOARD_BASELINE_CREATED')
+          return ['榜单基线建立', `${event.candidateTokens} 个候选 · ${event.screenedPositive} 个净正`]
+        return [event.type, '']
+      }
+
+      function renderEvents(events) {
+        state.events = events
+        const wrap = byId('events')
+        wrap.replaceChildren()
+        if (!events.length) {
+          const empty = document.createElement('div')
+          empty.className = 'empty'
+          empty.textContent = '暂无实质变化。'
+          wrap.append(empty)
+          return
+        }
+        for (const event of events.slice(0, 100)) {
+          const article = document.createElement('article')
+          article.className = 'event'
+          if (event.type === 'SCREENED_POSITIVE_ENTERED') article.classList.add('positive')
+          if (event.type === 'SCREENED_POSITIVE_LEFT') article.classList.add('left')
+          const [titleText, detailText] = eventText(event)
+          const title = document.createElement('div')
+          title.className = 'event-title'
+          title.textContent = titleText
+          const detail = document.createElement('div')
+          detail.className = 'event-detail'
+          detail.textContent = `${detailText}${event.at ? ` · ${new Date(event.at).toLocaleString('zh-CN')}` : ''}`
+          article.append(title, detail)
+          wrap.append(article)
+        }
+      }
+
+      async function refresh() {
+        if (state.paused) return
+        try {
+          const [snapshotResponse, eventsResponse] = await Promise.all([
+            fetch('/api/snapshot', { cache: 'no-store' }),
+            fetch('/api/events', { cache: 'no-store' }),
+          ])
+          if (!snapshotResponse.ok) throw new Error(`snapshot ${snapshotResponse.status}`)
+          renderSnapshot(await snapshotResponse.json())
+          if (eventsResponse.ok) renderEvents(await eventsResponse.json())
+        } catch (error) {
+          byId('live-dot').classList.add('bad')
+          byId('service-status').textContent = 'CONNECTION LOST'
+          byId('updated-at').textContent = String(error.message || error)
+        }
+      }
+
+      byId('search').addEventListener('input', renderRows)
+      byId('status-filter').addEventListener('change', renderRows)
+      byId('pause').addEventListener('click', () => {
+        state.paused = !state.paused
+        byId('pause').textContent = state.paused ? '继续刷新' : '暂停刷新'
+        if (!state.paused) refresh()
+      })
+      document.addEventListener('keydown', (event) => {
+        if (event.key === '/' && document.activeElement !== byId('search')) {
+          event.preventDefault()
+          byId('search').focus()
+        }
+      })
+      refresh()
+      state.timer = window.setInterval(refresh, 5_000)
+    </script>
+  </body>
+</html>

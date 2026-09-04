@@ -93,3 +93,27 @@ No process state, CI result or simulation is labeled as live profit.
 - withdraw, deploy, execute and arm all reject an unresolved mutation.
 - UNKNOWN recovery never creates a second raw transaction for the nonce.
 - The public repository secret scan finds no signer, provider credential, signed raw, runtime log or personal absolute path.
+
+## 8. Read-only opportunity census
+
+The generalized board evaluates one economic unit:
+
+```text
+USDG -> quote asset A -> candidate token -> quote asset B -> USDG
+```
+
+For each observation, the four swap legs and the ETH/USDG native mark share one fixed block. The current gas screen is:
+
+```text
+gas proxy = sum(Quoter gas estimates) + orchestration overhead
+screened net = quoted USDG out - USDG in - native gas proxy converted to USDG
+```
+
+This deliberately stops below `READY_TO_EXECUTE`: no generic route contract is deployed, so executor calldata,
+`eth_call`, exact execution gas, allowance/callback boundaries, inclusion probability and receipt are all absent. Old
+observations become `STALE` instead of remaining actionable. Metadata failures, missing anchors and quote reverts are
+`UNQUOTABLE`, never silently converted to zero profit.
+
+The catalog is refreshed in full and supplemented by a frequent newest-token page. Priority candidates and current
+positive rows are requoted first; the rest are covered with a persistent round-robin cursor. Coverage is reported in
+the snapshot rather than implied by process liveness.

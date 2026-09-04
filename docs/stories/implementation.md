@@ -45,3 +45,39 @@ Acceptance:
 - selected host/provider latency and quota are measured;
 - old local lane is stopped before a fresh cloud arm;
 - post-deploy readback includes release SHA, code hashes, nonce, balance, WSS/HTTP head and authorization.
+
+## S6 — Read-only discovery
+
+Acceptance:
+
+- the full PAIR catalog and newest page refresh independently of the signing watcher;
+- hidden, flagged, non-canonical, inactive and shallow pools cannot enter the quote set;
+- stock, AI and meme quote assets use the same route model;
+- catalog completeness and quote coverage are explicit fields.
+
+## S7 — Fixed-block quote screen
+
+Acceptance:
+
+- all four route legs and the native mark use the same fixed block;
+- V3 anchor fees are discovered on-chain rather than inferred from symbols;
+- quote failure remains `UNQUOTABLE` and stale evidence becomes `STALE`;
+- gas is labeled as a proxy and no row is called executable without an executor estimate.
+
+## S8 — Durable live board
+
+Acceptance:
+
+- snapshot publication is atomic and event history is append-only;
+- the interface refreshes without external JavaScript or font dependencies;
+- search and evidence-status filtering work on desktop and mobile;
+- initial census produces one baseline event; only additions and material economic changes produce later events.
+
+## S9 — Isolated deployment
+
+Acceptance:
+
+- `manga-board` cannot read the signing strategy's config or credential;
+- the board uses a dedicated read RPC, runtime directory and bounded systemd resources;
+- HTTP binds to loopback and `/healthz` verifies runtime freshness;
+- deployment readback proves both the board and the unchanged signing watcher are healthy.
