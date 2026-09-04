@@ -85,7 +85,7 @@ const AMOUNT_GRID = [5_000_000n, 7_500_000n, 10_000_000n, 12_500_000n, 15_000_00
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CONTRACT_PATH = path.join(ROOT, 'contracts', 'FixedRouteAtomicArb.sol')
-const DEPLOYMENT_MANIFEST_PATH = path.join(ROOT, 'deployments', 'robinhood-mainnet.json')
+const DEPLOYMENT_MANIFEST_PATH = path.join(ROOT, 'deployments', 'spx-aapl-nvda-mainnet.json')
 const RUN_DIR = RUNTIME_CONFIG.runDir ? path.resolve(RUNTIME_CONFIG.runDir) : path.join(ROOT, 'runs')
 const STATE_PATH = path.join(RUN_DIR, 'state.json')
 const AUDIT_PATH = path.join(RUN_DIR, 'audit.jsonl')
@@ -2559,26 +2559,30 @@ async function runtimeVerify() {
   ) {
     throw new Error('部署 manifest、运行账本、本地源码或链上执行器不一致')
   }
-  const [snapshot, wsChainId, wsHead, executorUsdg] = await Promise.all([
+  const eventClient = watchClient || secondaryPublicClient || publicClient
+  const eventTransport = watchClient ? 'WSS' : secondaryPublicClient ? 'SECONDARY_HTTP_POLLING' : 'PRIMARY_HTTP_POLLING'
+  const [snapshot, eventChainId, eventHead, executorUsdg] = await Promise.all([
     walletSnapshot(),
-    watchClient.getChainId(),
-    watchClient.getBlockNumber(),
+    eventClient.getChainId(),
+    eventClient.getBlockNumber(),
     publicClient.readContract({ address: USDG, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
   ])
-  if (wsChainId !== CHAIN_ID) throw new Error(`WSS chainId=${wsChainId}，预期 ${CHAIN_ID}`)
-  const headDistance = snapshot.blockNumber > wsHead ? snapshot.blockNumber - wsHead : wsHead - snapshot.blockNumber
-  if (headDistance > 100n) throw new Error(`HTTP/WSS head 相差 ${headDistance} 个区块，拒绝进入 ready 状态`)
+  if (eventChainId !== CHAIN_ID) throw new Error(`event transport chainId=${eventChainId}，预期 ${CHAIN_ID}`)
+  const headDistance =
+    snapshot.blockNumber > eventHead ? snapshot.blockNumber - eventHead : eventHead - snapshot.blockNumber
+  if (headDistance > 100n) throw new Error(`HTTP/event head 相差 ${headDistance} 个区块，拒绝进入 ready 状态`)
   if (snapshot.nonceLatest !== snapshot.noncePending) throw new Error('latest/pending nonce 未收敛')
   const unresolved = latestUnresolvedExecution()
   if (unresolved) throw new Error(`存在未收敛 ${unresolved.kind || 'mutation'} ${unresolved.hash}`)
   const arm = readWatchArm()
   const result = {
-    status: 'RUNTIME_VERIFIED_READY_FOR_ARM',
+    status: watchClient ? 'RUNTIME_VERIFIED_READY_FOR_ARM' : 'RUNTIME_VERIFIED_POLLING_ONLY',
     releaseSha: process.env.MANGA_RELEASE_SHA || 'UNKNOWN',
     chainId: CHAIN_ID,
     rpcSource: RPC_SOURCE,
     httpHead: snapshot.blockNumber,
-    wsHead,
+    eventTransport,
+    eventHead,
     headDistance,
     wallet: WALLET,
     executor,
