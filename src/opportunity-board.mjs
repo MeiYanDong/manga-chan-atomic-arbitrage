@@ -20,6 +20,11 @@ export function finiteNumber(value) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+/** @param {number} observedCount @param {number} expectedCount */
+export function catalogIsComplete(observedCount, expectedCount) {
+  return Number.isSafeInteger(expectedCount) && expectedCount > 0 && observedCount >= expectedCount
+}
+
 /** @param {unknown} value */
 export function canonicalAddress(value) {
   if (typeof value !== 'string') return null
