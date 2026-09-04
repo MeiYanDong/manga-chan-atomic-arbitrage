@@ -13,6 +13,8 @@ canary. The existing MANGA executor and its runtime state were not changed.
 - deployment transaction: `0xb187570120b4d19d1baa9fbeb203adf29e808e50d033a1795d077b448eede0f0`;
 - deployment block: `54358113`;
 - deployment gas: `0.000432354300196 ETH`;
+- deployment-block ETH mark: `2442.053610 USDG/ETH`;
+- deployment gas at that mark: `1.055832 USDG`;
 - seeded principal: `5.128343 USDG`;
 - runtime bytecode: `4231 bytes`;
 - runtime code hash: `0x27d996f187b176942b3181a93bbb061ddf96e99406752ea1290a663d40627577`.
@@ -42,6 +44,10 @@ An independent public-RPC read observed a successful receipt and decoded the
 `Executed(5000000, 5502873, 502873)` event. This proves the execution effect. It
 does not make the strategy risk-free: a reverted attempt still spends gas, and
 the one-time deployment gas is not included in the per-execution net figure.
+Including that one-time deployment gas, the first deployment-plus-execution
+lifecycle is approximately `-0.916877 USDG`, before separately valuing the
+negligible seed-conversion price impact. Later executions reuse the contract and
+do not pay this deployment cost again.
 
 ## Verification and known issue
 
@@ -51,6 +57,9 @@ tests, deterministic contract tests and secret scan. GitHub Actions run
 `33887198606` also completed successfully.
 
 The first post-deployment `runtime-verify` correctly rejected the old MANGA
-deployment manifest. The follow-up release adds the SPX-specific manifest and a
-polling-only verification result for the explicit public-RPC canary. This change
-does not alter the deployed Solidity source or bytecode.
+deployment manifest. Follow-up release
+`b57993a73b48f5bc3873eabe05209554506c9596` added the SPX-specific manifest and
+polling-only verification. Server readback then returned
+`RUNTIME_VERIFIED_POLLING_ONLY`, matching the chain, operator, source hash,
+runtime code hash, `5.631216 USDG` balance and clean nonce. This change did not
+alter the deployed Solidity source or bytecode.
