@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bounded MANGA atomic-arbitrage executor and read-only multi-pool opportunity board on Robinhood Chain",
   "license": "MIT",
   "private": false,

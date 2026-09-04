@@ -29,6 +29,8 @@ or realized profit.
 
 - The fixed MANGA watcher remains the only signing process and retains its existing route and authorization.
 - The board can be stopped, restarted or rolled back without changing wallet state.
+- SSH permits only a client-local forward to `127.0.0.1:8788`; remote forwarding, arbitrary destinations,
+  GatewayPorts and SSH tunnels remain disabled.
 - Newly discovered PAIR multi-pool tokens are added automatically; other launchpads or arbitrary PoolManager history
   require another explicit discovery adapter before their coverage can be called complete.
 - Before promoting any row to live execution, a route-specific contract, exact execution estimate and the existing

@@ -35,3 +35,12 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(example, /^MANGA_BOARD_HOST=127\.0\.0\.1$/m)
   assert.doesNotMatch(example, /MANGA_PRIVATE_KEY|MANGA_RPC_URL=|MANGA_WS_URL=/)
 })
+
+test('SSH access permits only a client-local forward to the loopback board', () => {
+  const sshd = fs.readFileSync(path.join(root, 'deploy', 'sshd', '60-manga-chan-arbitrage-hardening.conf'), 'utf8')
+  assert.match(sshd, /^AllowTcpForwarding local$/m)
+  assert.match(sshd, /^PermitOpen 127\.0\.0\.1:8788$/m)
+  assert.match(sshd, /^GatewayPorts no$/m)
+  assert.match(sshd, /^PermitTunnel no$/m)
+  assert.match(sshd, /^PasswordAuthentication no$/m)
+})

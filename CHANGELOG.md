@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-09-04
+
+- Permit only a client-local SSH forward to the loopback opportunity board while keeping arbitrary forwarding,
+  GatewayPorts, tunnels and password authentication disabled.
+
 ## 0.2.0 — 2026-09-04
 
 - Add a continuously refreshed PAIR multi-pool opportunity census with fixed-block four-leg quotes.

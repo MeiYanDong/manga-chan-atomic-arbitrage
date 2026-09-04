@@ -102,8 +102,9 @@ sudo -u manga-board env MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board npm
 ```
 
 The HTTP service deliberately listens only on loopback. View it through an SSH tunnel instead of opening a public
-firewall port. Runtime evidence is stored in `/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl` and
-`state.json`; none belongs in Git.
+firewall port. The supplied SSH drop-in permits only client-local forwarding to `127.0.0.1:8788`; validate it with
+`sshd -t`, reload SSH, and prove a fresh key-only session before relying on the tunnel. Runtime evidence is stored in
+`/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl` and `state.json`; none belongs in Git.
 
 Stopping or rolling back the board must not stop, restart, disarm or change `manga-chan-watcher.service`. Conversely,
 board health never proves the signing watcher is armed or trading.
