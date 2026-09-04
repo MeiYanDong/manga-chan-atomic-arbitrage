@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-09-05
+
+- Add a typed generic PAIR executor for stock, AI, meme and other quote assets without arbitrary call targets.
+- Enforce the 100 USDG cap, canonical PAIR pool shape, V3 fee allowlist and direct-or-one-WETH-bridge anchors on-chain.
+- Add adaptive amount search through 100 USDG, bounded midpoint refinement and maximum absolute net-profit selection.
+- Pace full-grid refreshes for persistent candidates and ship a conservative official-public-RPC board profile.
+- Publish complete typed route payloads for positive amount variants and exact-preflight the strongest candidates.
+- Add generic deploy, one-shot execute, UNKNOWN reconcile and withdrawal commands with raw-before-broadcast persistence.
+- Add deterministic direct/bridged contract coverage, historical mainnet-fork verification and a validated sniper spec.
+
 ## 0.2.2 — 2026-09-04
 
 - Reconcile the newest-token page before deciding whether a moving PAIR pagination pass covered its advertised total.

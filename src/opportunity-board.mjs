@@ -225,9 +225,10 @@ export function buildBoardSnapshot(input) {
   for (const item of items) counts[item.status] = (counts[item.status] || 0) + 1
   const quoted = items.filter((item) => item.quotedAt !== null).length
   const freshQuoted = items.filter((item) => item.quotedAt !== null && item.fresh).length
+  const selected = items.find((item) => item.status === BoardStatus.SCREENED_POSITIVE && item.fresh) || null
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     service: 'manga-opportunity-board',
     mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
     generatedAt: input.generatedAt,
@@ -242,10 +243,23 @@ export function buildBoardSnapshot(input) {
     },
     methodology: {
       opportunityUnit: 'USDG -> quote A -> token -> quote B -> USDG',
-      blockPolicy: 'all four swap quotes and the native mark share one fixed block per observation',
+      anchorPolicy: 'quote assets may use a direct V3 anchor or one WETH bridge; identity USDG anchors use zero hops',
+      amountPolicy: 'bounded adaptive grid up to 100 USDG plus midpoint refinement around the best coarse amount',
+      selectionPolicy: 'maximize absolute screened net USDG, then gross profit, then prefer less principal',
+      blockPolicy: 'all anchor and V4 quotes plus the native mark share one fixed block per observation',
       gasPolicy: 'sum of quoter gas estimates plus fixed orchestration overhead; screening proxy only',
       positiveMeaning: 'screened positive quote, not executable simulation, transaction, receipt, or guaranteed profit',
       staleAfterMs: input.staleMs,
+    },
+    selection: {
+      status: selected ? 'SCREENED_CANDIDATE_SELECTED' : 'NO_SCREENED_NET_POSITIVE',
+      id: selected?.id || null,
+      symbol: selected?.symbol || null,
+      route: selected?.route || null,
+      amountInUsdg: selected?.amountInUsdg || null,
+      screenedNetUsdg: selected?.screenedNetUsdg || null,
+      evidenceLevel: selected?.evidenceLevel || null,
+      executionAuthorized: false,
     },
     items,
   }

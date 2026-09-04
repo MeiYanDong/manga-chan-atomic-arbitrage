@@ -157,6 +157,25 @@ export function evaluateArmBudget(arm, usage) {
   return { allowed: true, reason: null }
 }
 
+/**
+ * Enforce one nonce-writing lane per wallet. Corrupt active-arm or lock state
+ * is a conflict, not an invitation to guess that the other signer is idle.
+ *
+ * @param {{arm?: Record<string, any> | null, lockExists: boolean, lockPid?: number | null, nowMs?: number, processIsAlive: (pid: number) => boolean}} input
+ */
+export function fixedSignerLaneConflict(input) {
+  const nowMs = input.nowMs ?? Date.now()
+  if (input.arm?.status === 'ARMED') {
+    const expiresAt = Date.parse(input.arm.expiresAt)
+    if (!Number.isFinite(expiresAt)) return 'the fixed-route signing arm has an invalid expiry'
+    if (nowMs < expiresAt) return 'the fixed-route signing arm is still active'
+  }
+  if (!input.lockExists) return null
+  if (!Number.isSafeInteger(input.lockPid) || input.lockPid <= 0) return 'the fixed-route watcher lock is malformed'
+  if (input.processIsAlive(input.lockPid)) return `the fixed-route watcher is still running as PID ${input.lockPid}`
+  return null
+}
+
 export class EventRevisionQueue {
   constructor(maxRemembered = 10_000) {
     this.maxRemembered = maxRemembered

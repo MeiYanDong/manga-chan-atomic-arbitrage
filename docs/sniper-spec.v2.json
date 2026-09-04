@@ -1,0 +1,377 @@
+{
+  "spec_version": "1.4",
+  "objective": {
+    "statement": "Capture temporary PAIR multi-pool relative-price discrepancies with one atomic USDG round trip while maximizing absolute net USDG profit inside explicit capital and gas bounds.",
+    "risk_budget": {
+      "max_input_usdg": 100,
+      "max_gas_native": 0.0005,
+      "max_concurrent_positions": 1
+    }
+  },
+  "race_thesis": {
+    "reward_source": "a temporary executable relative-price discrepancy between two PAIR V4 quote pools after both USDG anchor routes, AMM fees, price impact and gas",
+    "allocation": "EXCLUSIVE_STATE_CLAIM",
+    "sequencing_rule": {
+      "type": "UNKNOWN",
+      "evidence_state": "UNKNOWN",
+      "reason": "Robinhood Chain public documentation and the current repository do not provide canonical sequencer-arrival evidence for competing arbitrage transactions"
+    },
+    "earliest_public_signal": "a fixed-block executable quote change or Swap touching an admitted V3 or PAIR V4 leg",
+    "earliest_inferable_signal": "external quote-asset movement may predict stale PAIR holders, but it cannot prove executable on-chain state",
+    "earliest_safe_action": "precompute bounded typed routes; sign only after current-block executor simulation, exact gas estimation, nonce, balance and deadline checks",
+    "controllable_edges": ["INFORMATION", "DECISION", "PREPARATION", "TRANSPORT", "ECONOMIC"],
+    "invalidating_evidence": [
+      "PAIR pool updates are synchronized closely enough that four-leg net-positive states do not persist",
+      "the actual sequencer rule makes public-RPC reaction consistently too late",
+      "exact executor gas removes the positive screens across a representative opportunity census"
+    ]
+  },
+  "signal_strategy": {
+    "ladder": [
+      {
+        "id": "pair-fixed-block-screen",
+        "tier": "STATE",
+        "source": "isolated PAIR opportunity board",
+        "causal_claim": "all four quote legs and the native mark at one canonical block identify a candidate relative-price discrepancy",
+        "known_fields": ["chain_id", "target", "entry_pool", "exit_pool", "route_paths", "amount", "quote_block_hash"],
+        "late_binding_fields": ["executor_simulation", "execution_gas", "nonce", "fee_quote", "deadline"]
+      },
+      {
+        "id": "current-executor-simulation",
+        "tier": "ACTIVATION",
+        "source": "GenericAtomicArb eth_call and eth_estimateGas",
+        "causal_claim": "the exact typed payload is currently executable and meets the configured net floor",
+        "known_fields": ["route_hash", "amount_in", "amount_out", "gross_profit", "estimated_gas"],
+        "late_binding_fields": ["nonce", "max_fee_per_gas", "deadline"]
+      }
+    ],
+    "chosen_primary": "current-executor-simulation",
+    "fallbacks": ["NO_SHOT when the board is stale, no candidate simulates, or exact gas removes the edge"],
+    "late_binding_fields": ["nonce", "max_fee_per_gas", "deadline", "current_board_membership"],
+    "false_positive_policy": "reject before signing; a board proxy can never independently authorize execution",
+    "false_negative_audit": "compare all fresh typed screened candidates with exact-preflight outcomes and retain rejected reasons"
+  },
+  "competition": {
+    "type": "EXCLUSIVE_STATE_CLAIM",
+    "competitor_model": "UNKNOWN: an included arbitrage changes the shared pools and can consume some or all of the edge, but no canonical competitor cohort is measured yet",
+    "win_probability_dimensions": [
+      "candidate_age",
+      "exact_net_profit_band",
+      "screen_to_sign_latency",
+      "provider_to_sequencer_path",
+      "competitor_presence"
+    ],
+    "ordering_evidence": ["UNKNOWN: provider acceptance and gas price do not prove sequencer arrival order"],
+    "sample_policy": {
+      "minimum_total": 20,
+      "insufficient_behavior": "remain manual and report intervals without claiming opportunity frequency or win probability"
+    }
+  },
+  "shot_policy": {
+    "profiles": [
+      {
+        "id": "typed-exact-positive",
+        "profile": "REACTIVE_GUARDED",
+        "race_mode": "SHADOW"
+      },
+      {
+        "id": "no-shot-on-unknown-or-negative-net",
+        "profile": "NO_SHOT",
+        "race_mode": "SHADOW"
+      }
+    ],
+    "race_experiment": {
+      "enabled": false
+    }
+  },
+  "race_timeline": {
+    "required_boundaries": [
+      "source_received",
+      "candidate_matched",
+      "decision_complete",
+      "sign_complete",
+      "send_call_invoked",
+      "included",
+      "canonical_effect"
+    ],
+    "wire_measurement_level": "CALL_INVOKED",
+    "inclusion_position_required": true
+  },
+  "opportunity_census": {
+    "source": "complete PAIR first-party catalog plus newest-token reconciliation and persistent round-robin quote coverage",
+    "completeness_watermark": "catalog completeness and fresh quote coverage are separate snapshot fields; full exact-preflight coverage is not yet claimed",
+    "required_outcomes": [
+      "NOT_OBSERVED",
+      "OBSERVED_AFTER_EXPIRY",
+      "NO_SHOT_NEGATIVE_EV",
+      "NO_SHOT_POLICY",
+      "BLOCKED_CORRECTNESS",
+      "BLOCKED_RESOURCE",
+      "ATTEMPTED",
+      "WON",
+      "CONFIRMED_LOST_RACE",
+      "UNKNOWN"
+    ],
+    "counterfactual_policy": "AT_TIME_INFORMATION_ONLY"
+  },
+  "learning": {
+    "race_denominator": ["WON", "CONFIRMED_LOST_RACE"],
+    "excluded_from_race": ["LOW_VALUE_GUARD_EXIT", "UNKNOWN"],
+    "model_versioning": "APPEND_ONLY by candidateHash, executionKey, planHash and signed transaction hash"
+  },
+  "opportunity": {
+    "source": "manga-opportunity-board schema v2",
+    "event_name": "fresh_typed_screened_positive",
+    "identity_fields": ["chain_id", "target", "entry_pool", "exit_pool", "amount", "quote_block_hash"],
+    "dedupe_key": "candidate_hash"
+  },
+  "timing": {
+    "opportunity_ttl_ms": 45000,
+    "end_to_end_budget_ms": 45000,
+    "clock": "monotonic plus canonical block identity",
+    "boundary": {
+      "constraints": [
+        {
+          "id": "board_quote_age",
+          "basis": "TIME",
+          "origin": "quoted_at",
+          "absolute_value": "quoted_at + 45000ms"
+        },
+        {
+          "id": "contract_deadline",
+          "basis": "STATE",
+          "origin": "current pre-sign block timestamp",
+          "absolute_value": "persisted execute deadline"
+        }
+      ],
+      "termination_rule": "ANY",
+      "refresh_policy": "never_extend_same_opportunity"
+    },
+    "deadline_behavior": "do not sign after the candidate or contract boundary; rerun discovery as a new opportunity revision",
+    "deadline_checkpoints": ["before_wallet_lease", "before_sign", "before_broadcast"],
+    "timeline_fields": [
+      "source_occurred_at",
+      "received_at",
+      "normalized_at",
+      "decision_started_at",
+      "decided_at",
+      "prepared_at",
+      "signed_at",
+      "broadcast_started_at",
+      "first_accepted_at",
+      "included_at",
+      "confirmed_at"
+    ]
+  },
+  "profile": {
+    "chain_id": 4663,
+    "protocol": "PAIR V4 multi-pool plus canonical V3 anchors",
+    "execution_adapter": "GenericAtomicArb typed atomic cycle",
+    "wallet_scope": "single",
+    "operation_mode": "shadow"
+  },
+  "decision": {
+    "correctness_invariants": [
+      {
+        "id": "canonical_typed_route",
+        "condition": "chain, executor build, PAIR hook, pool fee and spacing, V3 factory pools, fee allowlist, WETH bridge and route endpoints all match",
+        "risk_reduced": "wrong-chain, arbitrary-call, forged-callback and wrong-pool execution",
+        "false_block_cost": "one potentially valid route is rejected",
+        "latency_budget_ms": 5000,
+        "latency_estimate": {
+          "state": "UNKNOWN",
+          "reason": "provider-specific p95 for the combined identity readback is not yet recorded"
+        },
+        "voi_estimate": {
+          "state": "KNOWN",
+          "expected_loss_reduction": "up to the bounded 100 USDG principal plus gas",
+          "basis": "contract and plan correctness invariant"
+        },
+        "blocking_mode": "block",
+        "isolation_scope": "intent",
+        "fallback": "reject_candidate"
+      },
+      {
+        "id": "single_clean_wallet_lane",
+        "condition": "shared wallet lock is held, no unresolved mutation exists, latest nonce equals pending nonce and principal and ETH reserve are sufficient",
+        "risk_reduced": "duplicate nonce, ambiguous replacement and capital oversubscription",
+        "false_block_cost": "the opportunity may expire while the wallet lane is unavailable",
+        "latency_budget_ms": 3000,
+        "latency_estimate": {
+          "state": "UNKNOWN",
+          "reason": "live generic wallet-lane timing has not been measured"
+        },
+        "voi_estimate": {
+          "state": "KNOWN",
+          "expected_loss_reduction": "prevents a second signed intent while canonical effect is UNKNOWN",
+          "basis": "durable mutation invariant"
+        },
+        "blocking_mode": "block",
+        "isolation_scope": "wallet_lane",
+        "fallback": "reconcile_before_new_intent"
+      },
+      {
+        "id": "exact_atomic_profit_boundary",
+        "condition": "current-block GenericAtomicArb simulation succeeds and exact gas supports both the on-chain gross floor and configured net floor",
+        "risk_reduced": "stale screen, intermediate inventory and predictable negative-net execution",
+        "false_block_cost": "a profitable transaction may be missed when RPC state is delayed",
+        "latency_budget_ms": 15000,
+        "latency_estimate": {
+          "state": "UNKNOWN",
+          "reason": "only one historical fork route has exact gas evidence"
+        },
+        "voi_estimate": {
+          "state": "KNOWN",
+          "expected_loss_reduction": "rejects any route that cannot atomically return protected USDG profit",
+          "basis": "GenericAtomicArb final USDG balance-delta check"
+        },
+        "blocking_mode": "block",
+        "isolation_scope": "opportunity",
+        "fallback": "NO_SHOT_NEGATIVE_EV"
+      }
+    ],
+    "adaptive_gates": [
+      {
+        "id": "bounded_candidate_set",
+        "condition": "screen the adaptive amount grid broadly, then exact-preflight at most six strongest typed candidates",
+        "risk_reduced": "RPC exhaustion and opportunity expiry from an unbounded exact sweep",
+        "false_block_cost": "a lower-ranked proxy candidate may have the best exact net profit",
+        "latency_budget_ms": 20000,
+        "latency_estimate": {
+          "state": "UNKNOWN",
+          "reason": "exact-preflight latency distribution has not been sampled on the signing host"
+        },
+        "voi_estimate": {
+          "state": "UNKNOWN",
+          "reason": "ranking regret between proxy and exact gas lacks a representative sample"
+        },
+        "blocking_mode": "degrade",
+        "isolation_scope": "opportunity",
+        "fallback": "evaluate candidates in proxy-net order and stop at the configured bound"
+      }
+    ],
+    "soft_checks": [
+      {
+        "id": "external_quote_asset_movement",
+        "condition": "external stock, AI or meme movement is available without delaying current-chain validation",
+        "risk_reduced": "weakens discovery latency for stale-holder behavior",
+        "false_block_cost": "unacceptable because external category data is optional",
+        "latency_budget_ms": 0,
+        "latency_estimate": {
+          "state": "UNKNOWN",
+          "reason": "no external predictor is wired into this version"
+        },
+        "voi_estimate": {
+          "state": "UNKNOWN",
+          "reason": "no causal predictor replay exists"
+        },
+        "blocking_mode": "observe",
+        "isolation_scope": "capability",
+        "fallback": "continue_with_on_chain_state_only"
+      }
+    ]
+  },
+  "execution": {
+    "mode": "guarded_exact_net",
+    "min_out": {
+      "mode": "final_usdg_balance_delta",
+      "rationale": "intermediate leg bounds are replaced by one atomic final USDG gross-profit floor; any insufficient cycle reverts"
+    },
+    "authorization": {
+      "mode": "MANUAL_ARM",
+      "scope_binding": "candidate executionKey, wallet, executor, nonce, routeHash, amount and economic envelope in planHash",
+      "expiry_policy": "the persisted contract deadline ends the one-shot authorization",
+      "evidence_record": "append-only mutation intent, plan, exact raw hash, receipt and effect record"
+    },
+    "nonce_policy": "one shared wallet lane; persist exact raw before first broadcast",
+    "signing_policy": "sign once per immutable plan",
+    "broadcast_policy": "same raw transaction only after two-reader NOT_OBSERVED reconciliation",
+    "deadline_ms": 45000
+  },
+  "recovery": {
+    "pending_timeout_ms": 30000,
+    "receipt_timeout_ms": 120000,
+    "same_raw_rebroadcast_limit": 1,
+    "restart_policy": "reconcile the shared wallet lane before any discovery candidate can become a new signed intent",
+    "unresolved_transaction_fallback": "pause every signer sharing the wallet"
+  },
+  "exit": {
+    "policy": "successful execution is atomically flat in intermediate assets; explicit operator-only USDG withdrawal exits the executor float",
+    "max_holding_ms": 0,
+    "monitor_interval_ms": 0,
+    "manual_override": true,
+    "sell_failure_fallback": "a failed atomic route reverts intermediate state; a failed withdrawal remains in the executor and requires reconciliation"
+  },
+  "evidence": {
+    "decision_receipt": true,
+    "intent_journal": true,
+    "signed_intent_fingerprint": true,
+    "broadcast_attempts": true,
+    "receipt_store": true,
+    "realized_exit_record": true,
+    "replay_key_fields": ["chain_id", "wallet", "nonce", "plan_hash", "signed_transaction_hash"]
+  },
+  "capabilities": {
+    "transport": {
+      "level": "IMPLEMENTED",
+      "access": "READ",
+      "limitations": ["generic-v2 signing-host latency and sequencer arrival remain unmeasured"]
+    },
+    "discovery": {
+      "level": "TESTED",
+      "access": "READ",
+      "limitations": [
+        "PAIR first-party multi-pool catalog only; fresh exact coverage remains rolling rather than simultaneous"
+      ]
+    },
+    "identity": {
+      "level": "TESTED",
+      "access": "READ",
+      "limitations": [
+        "current generic mainnet deployment identity cannot be verified because no generic executor is deployed"
+      ]
+    },
+    "quote": {
+      "level": "TESTED",
+      "access": "READ",
+      "limitations": ["board gas is a proxy until exact executor preflight"]
+    },
+    "simulation": {
+      "level": "TESTED",
+      "access": "READ",
+      "limitations": [
+        "one selected real route was validated on a local historical mainnet fork; no current deployed generic executor exists"
+      ]
+    },
+    "calldata": {
+      "level": "TESTED",
+      "access": "PREPARE",
+      "limitations": ["typed PAIR route only; no arbitrary target or calldata adapter"]
+    },
+    "sign": {
+      "level": "IMPLEMENTED",
+      "access": "WRITE",
+      "limitations": ["generic-v2 mainnet signing has not been invoked or receipt-verified"]
+    },
+    "broadcast": {
+      "level": "IMPLEMENTED",
+      "access": "WRITE",
+      "limitations": ["generic-v2 mainnet broadcast has not been invoked or receipt-verified"]
+    },
+    "reconcile": {
+      "level": "IMPLEMENTED",
+      "access": "RECOVER",
+      "limitations": ["generic-v2 UNKNOWN recovery has not been exercised against a mainnet transaction"]
+    },
+    "exit": {
+      "level": "IMPLEMENTED",
+      "access": "RECOVER",
+      "limitations": ["generic-v2 mainnet withdrawal has not been invoked"]
+    },
+    "replay": {
+      "level": "TESTED",
+      "access": "READ",
+      "limitations": ["deterministic mocks and one historical mainnet-fork candidate; no opportunity-frequency sample"]
+    }
+  }
+}

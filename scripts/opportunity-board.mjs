@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import httpServer from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPublicClient, defineChain, encodePacked, getAddress, http, parseAbi, parseEther, parseUnits } from 'viem'
+import { createPublicClient, defineChain, encodePacked, getAddress, http, parseAbi, parseEther } from 'viem'
 import {
   BoardStatus,
   appendEvents,
@@ -15,6 +15,15 @@ import {
   usdg,
   writeJsonAtomic,
 } from '../src/opportunity-board.mjs'
+import {
+  DEFAULT_AMOUNT_GRID_USDG,
+  DEFAULT_PROBE_AMOUNTS_USDG,
+  chooseBestAmountQuote,
+  formatAmountGrid,
+  parseUsdgAmountGrid,
+  refinementAmounts,
+  shouldExpandAmountGrid,
+} from '../src/route-optimizer.mjs'
 
 const CHAIN_ID = 4663
 const PAIR_TOKENS_API = 'https://pair.fund/api/tokens'
@@ -111,6 +120,12 @@ function loadConfig() {
   const runDir = path.resolve(process.env.MANGA_BOARD_RUN_DIR || path.join(ROOT, 'runs', 'opportunity-board'))
   const host = process.env.MANGA_BOARD_HOST || '127.0.0.1'
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('opportunity board must bind to loopback')
+  const amountGrid = parseUsdgAmountGrid(process.env.MANGA_BOARD_AMOUNT_GRID_USDG, DEFAULT_AMOUNT_GRID_USDG)
+  const legacyProbe = process.env.MANGA_BOARD_AMOUNT_USDG
+  const probeAmounts = parseUsdgAmountGrid(
+    process.env.MANGA_BOARD_PROBE_AMOUNTS_USDG || legacyProbe,
+    DEFAULT_PROBE_AMOUNTS_USDG,
+  )
   return {
     rpcUrl: process.env.MANGA_BOARD_RPC_URL || null,
     providerLabel: process.env.MANGA_BOARD_PROVIDER_LABEL || 'read-only-provider',
@@ -124,10 +139,14 @@ function loadConfig() {
     topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 32),
     quoteConcurrency: integer(process.env.MANGA_BOARD_QUOTE_CONCURRENCY, 2),
     catalogConcurrency: integer(process.env.MANGA_BOARD_CATALOG_CONCURRENCY, 6),
+    amountQuoteConcurrency: integer(process.env.MANGA_BOARD_AMOUNT_QUOTE_CONCURRENCY, 1),
+    fullGridEveryCycles: integer(process.env.MANGA_BOARD_FULL_GRID_EVERY_CYCLES, 20),
+    fullGridRefreshMs: integer(process.env.MANGA_BOARD_FULL_GRID_REFRESH_MS, 300_000),
     blockLag: BigInt(integer(process.env.MANGA_BOARD_BLOCK_LAG, 1, 0)),
     minDepthUsd: numberValue(process.env.MANGA_BOARD_MIN_DEPTH_USD, 100),
-    amountIn: parseUnits(process.env.MANGA_BOARD_AMOUNT_USDG || '10', 6),
-    overheadGas: BigInt(integer(process.env.MANGA_BOARD_OVERHEAD_GAS, 50_000, 0)),
+    amountGrid,
+    probeAmounts,
+    overheadGas: BigInt(integer(process.env.MANGA_BOARD_OVERHEAD_GAS, 100_000, 0)),
     requestTimeoutMs: integer(process.env.MANGA_BOARD_REQUEST_TIMEOUT_MS, 15_000, 1_000),
   }
 }
@@ -172,8 +191,15 @@ function addressBefore(left, right) {
 }
 
 /** @param {string} tokenIn @param {number} fee @param {string} tokenOut */
-function v3Path(tokenIn, fee, tokenOut) {
-  return encodePacked(['address', 'uint24', 'address'], [tokenIn, fee, tokenOut])
+function v3Path(tokens, fees) {
+  if (tokens.length !== fees.length + 1 || fees.length === 0) throw new Error('invalid V3 path shape')
+  const types = ['address']
+  const values = [tokens[0]]
+  for (let index = 0; index < fees.length; index += 1) {
+    types.push('uint24', 'address')
+    values.push(fees[index], tokens[index + 1])
+  }
+  return encodePacked(types, values)
 }
 
 /** @param {string} file */
@@ -206,6 +232,16 @@ function observationFromItem(item) {
     'quoterGasUnits',
     'minimumRouteDepthUsd',
     'legs',
+    'amountQuotes',
+    'amountGridUsdg',
+    'optimizationMode',
+    'fullGridAt',
+    'entryV3Path',
+    'exitV3Path',
+    'entryV3Tokens',
+    'exitV3Tokens',
+    'entryV3Fees',
+    'exitV3Fees',
     'failures',
     'evidenceLevel',
     'executionEstimate',
@@ -341,10 +377,10 @@ class OpportunityBoard {
     this.lastCatalogAt = new Date().toISOString()
   }
 
-  /** @param {string} token @param {bigint} blockNumber */
-  async availableV3Fees(token, blockNumber) {
-    if (token.toLowerCase() === USDG.toLowerCase()) return [0]
-    const key = token.toLowerCase()
+  /** @param {string} tokenA @param {string} tokenB @param {bigint} blockNumber */
+  async availableV3Fees(tokenA, tokenB, blockNumber) {
+    if (tokenA.toLowerCase() === tokenB.toLowerCase()) return []
+    const key = [tokenA.toLowerCase(), tokenB.toLowerCase()].sort().join(':')
     const cached = this.feeCache.get(key)
     if (cached && (cached.fees.length > 0 || Date.now() - cached.at < this.config.catalogIntervalMs)) {
       return cached.fees
@@ -356,7 +392,7 @@ class OpportunityBoard {
             address: V3_FACTORY,
             abi: FACTORY_ABI,
             functionName: 'getPool',
-            args: [USDG, token, fee],
+            args: [tokenA, tokenB, fee],
             blockNumber,
           })
           return pool !== ZERO_ADDRESS ? fee : null
@@ -373,29 +409,44 @@ class OpportunityBoard {
   /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
   async quoteBestV3(tokenIn, tokenOut, amountIn, blockNumber) {
     if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
-      return { amountOut: amountIn, gasEstimate: 0n, fee: 0 }
+      return { amountOut: amountIn, gasEstimate: 0n, fees: [], tokens: [tokenIn], path: '0x' }
     }
-    const nonUsdg = tokenIn.toLowerCase() === USDG.toLowerCase() ? tokenOut : tokenIn
-    const fees = await this.availableV3Fees(nonUsdg, blockNumber)
+    const candidates = []
+    const directFees = await this.availableV3Fees(tokenIn, tokenOut, blockNumber)
+    for (const fee of directFees) candidates.push({ tokens: [tokenIn, tokenOut], fees: [fee] })
+
+    if (tokenIn.toLowerCase() !== WETH.toLowerCase() && tokenOut.toLowerCase() !== WETH.toLowerCase()) {
+      const [entryFees, exitFees] = await Promise.all([
+        this.availableV3Fees(tokenIn, WETH, blockNumber),
+        this.availableV3Fees(WETH, tokenOut, blockNumber),
+      ])
+      for (const entryFee of entryFees) {
+        for (const exitFee of exitFees) {
+          candidates.push({ tokens: [tokenIn, WETH, tokenOut], fees: [entryFee, exitFee] })
+        }
+      }
+    }
+
     const quotes = await Promise.all(
-      fees.map(async (fee) => {
+      candidates.map(async (candidate) => {
         try {
+          const path = v3Path(candidate.tokens, candidate.fees)
           const { result } = await this.client.simulateContract({
             account: ZERO_ADDRESS,
             address: V3_QUOTER,
             abi: V3_QUOTER_ABI,
             functionName: 'quoteExactInput',
-            args: [v3Path(tokenIn, fee, tokenOut), amountIn],
+            args: [path, amountIn],
             blockNumber,
           })
-          return { amountOut: result[0], gasEstimate: result[3], fee }
+          return { amountOut: result[0], gasEstimate: result[3], ...candidate, path }
         } catch {
           return null
         }
       }),
     )
     const successful = quotes.filter(Boolean).sort((left, right) => (left.amountOut > right.amountOut ? -1 : 1))
-    if (successful.length === 0) throw new Error('no quotable USDG V3 anchor pool')
+    if (successful.length === 0) throw new Error('no quotable direct-or-WETH V3 anchor route')
     return successful[0]
   }
 
@@ -430,13 +481,13 @@ class OpportunityBoard {
     return { amountOut: result[0], gasEstimate: result[1] }
   }
 
-  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed */
-  async quoteCandidate(candidate, fixed) {
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn */
+  async quoteCandidateAmount(candidate, fixed, amountIn) {
     const failures = []
     const entries = (
       await mapLimit(Math.min(3, this.config.quoteConcurrency), candidate.pools, async (pool) => {
         try {
-          const anchor = await this.quoteBestV3(USDG, pool.quoteAddress, this.config.amountIn, fixed.blockNumber)
+          const anchor = await this.quoteBestV3(USDG, pool.quoteAddress, amountIn, fixed.blockNumber)
           const tokenQuote = await this.quoteV4(pool, pool.quoteAddress, anchor.amountOut, fixed.blockNumber)
           return { pool, anchor, tokenQuote }
         } catch (error) {
@@ -461,7 +512,7 @@ class OpportunityBoard {
           )
           const anchor = await this.quoteBestV3(pool.quoteAddress, USDG, quoteAsset.amountOut, fixed.blockNumber)
           const screening = screenRoundTrip({
-            amountIn: this.config.amountIn,
+            amountIn,
             amountOut: anchor.amountOut,
             quoterGas: [
               entry.anchor.gasEstimate,
@@ -485,25 +536,125 @@ class OpportunityBoard {
 
     if (routes.length === 0) {
       return {
+        amountIn,
+        error: 'UNQUOTABLE',
+        failures: failures.slice(0, 12),
+      }
+    }
+
+    routes.sort((left, right) => (left.screening.screenedNetUsdg > right.screening.screenedNetUsdg ? -1 : 1))
+    const best = routes[0]
+    return {
+      ...best,
+      amountIn,
+      grossProfitUsdg: best.screening.grossProfitUsdg,
+      screenedNetUsdg: best.screening.screenedNetUsdg,
+      failures: failures.slice(0, 12),
+    }
+  }
+
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed */
+  async quoteCandidate(candidate, fixed) {
+    const evaluate = (amounts) =>
+      mapLimit(this.config.amountQuoteConcurrency, amounts, (amount) =>
+        this.quoteCandidateAmount(candidate, fixed, amount),
+      )
+    const probeAmounts = [...new Set(this.config.probeAmounts.map((amount) => amount.toString()))].map((amount) =>
+      BigInt(amount),
+    )
+    const evaluated = await evaluate(probeAmounts)
+    const previousObservation = this.observations.get(candidate.id) || null
+    const previousStatus = previousObservation?.status || null
+    const expandGrid = shouldExpandAmountGrid({
+      probeQuotes: evaluated,
+      previousStatus,
+      previousFullGridAt: previousObservation?.fullGridAt || null,
+      priority: INITIAL_PRIORITY.includes(candidate.id),
+      cycleNumber: this.cycleNumber,
+      fullGridEveryCycles: this.config.fullGridEveryCycles,
+      fullGridRefreshMs: this.config.fullGridRefreshMs,
+    })
+    if (expandGrid) {
+      const evaluatedAmounts = new Set(evaluated.map((quote) => quote.amountIn.toString()))
+      const remaining = this.config.amountGrid.filter((amount) => !evaluatedAmounts.has(amount.toString()))
+      evaluated.push(...(await evaluate(remaining)))
+    }
+
+    let best = chooseBestAmountQuote(evaluated)
+    let refinements = []
+    if (expandGrid && best) {
+      const evaluatedAmounts = new Set(evaluated.map((quote) => quote.amountIn.toString()))
+      refinements = refinementAmounts(this.config.amountGrid, best.amountIn).filter(
+        (amount) => !evaluatedAmounts.has(amount.toString()),
+      )
+      evaluated.push(...(await evaluate(refinements)))
+      best = chooseBestAmountQuote(evaluated)
+    }
+
+    evaluated.sort((left, right) => (left.amountIn < right.amountIn ? -1 : 1))
+    const amountQuotes = evaluated.map((quote) =>
+      quote.error
+        ? {
+            amountInUsdg: usdg(quote.amountIn),
+            status: BoardStatus.UNQUOTABLE,
+            grossProfitUsdg: null,
+            screenedNetUsdg: null,
+          }
+        : {
+            amountInUsdg: usdg(quote.amountIn),
+            status: quote.screening.status,
+            route: `${quote.entry.pool.quoteSymbol} → ${candidate.symbol} → ${quote.exitPool.quoteSymbol}`,
+            routeKey: `${quote.entry.pool.poolId}:${quote.exitPool.poolId}`,
+            amountOutUsdg: usdg(quote.exitAnchor.amountOut),
+            grossProfitUsdg: usdg(quote.screening.grossProfitUsdg),
+            gasCostProxyUsdg: usdg(quote.screening.gasCostUsdg),
+            screenedNetUsdg: usdg(quote.screening.screenedNetUsdg),
+            gasUnitsProxy: quote.screening.gasUnitsProxy.toString(),
+            quoterGasUnits: quote.screening.routeGas.toString(),
+            entryV3Path: quote.entry.anchor.path,
+            exitV3Path: quote.exitAnchor.path,
+            entryV3Tokens: quote.entry.anchor.tokens,
+            exitV3Tokens: quote.exitAnchor.tokens,
+            legs: {
+              entryPoolId: quote.entry.pool.poolId,
+              entryV3Fees: quote.entry.anchor.fees,
+              entryV3Hops: quote.entry.anchor.fees.length,
+              exitPoolId: quote.exitPool.poolId,
+              exitV3Fees: quote.exitAnchor.fees,
+              exitV3Hops: quote.exitAnchor.fees.length,
+            },
+          },
+    )
+    const failures = evaluated.flatMap((quote) => quote.failures || []).slice(0, 12)
+    const optimizationMode = expandGrid
+      ? refinements.length > 0
+        ? 'ADAPTIVE_GRID_REFINED'
+        : 'ADAPTIVE_GRID'
+      : 'PROBE_ONLY'
+    const fullGridAt = expandGrid ? new Date().toISOString() : previousObservation?.fullGridAt || null
+    if (!best) {
+      return {
         status: BoardStatus.UNQUOTABLE,
         quotedAt: new Date().toISOString(),
         blockNumber: fixed.blockNumber.toString(),
         blockHash: fixed.block.hash,
         route: null,
-        amountInUsdg: usdg(this.config.amountIn),
+        amountInUsdg: null,
         amountOutUsdg: null,
         grossProfitUsdg: null,
         gasCostProxyUsdg: null,
         screenedNetUsdg: null,
-        failures: failures.slice(0, 12),
+        amountQuotes,
+        amountGridUsdg: formatAmountGrid(this.config.amountGrid),
+        optimizationMode,
+        fullGridAt,
+        failures,
         evidenceLevel: 'FIXED_BLOCK_QUOTE_FAILED',
         executionEstimate: 'NOT_RUN',
         receiptEvidence: 'NONE',
       }
     }
 
-    routes.sort((left, right) => (left.screening.screenedNetUsdg > right.screening.screenedNetUsdg ? -1 : 1))
-    const best = routes[0]
     return {
       status: best.screening.status,
       quotedAt: new Date().toISOString(),
@@ -511,7 +662,7 @@ class OpportunityBoard {
       blockHash: fixed.block.hash,
       route: `${best.entry.pool.quoteSymbol} → ${candidate.symbol} → ${best.exitPool.quoteSymbol}`,
       routeKey: `${best.entry.pool.poolId}:${best.exitPool.poolId}`,
-      amountInUsdg: usdg(this.config.amountIn),
+      amountInUsdg: usdg(best.amountIn),
       amountOutUsdg: usdg(best.exitAnchor.amountOut),
       grossProfitUsdg: usdg(best.screening.grossProfitUsdg),
       gasCostProxyUsdg: usdg(best.screening.gasCostUsdg),
@@ -520,15 +671,29 @@ class OpportunityBoard {
       gasUnitsProxy: best.screening.gasUnitsProxy.toString(),
       quoterGasUnits: best.screening.routeGas.toString(),
       minimumRouteDepthUsd: Math.min(best.entry.pool.depthUsd, best.exitPool.depthUsd),
+      amountQuotes,
+      amountGridUsdg: formatAmountGrid(this.config.amountGrid),
+      optimizationMode,
+      fullGridAt,
+      entryV3Path: best.entry.anchor.path,
+      exitV3Path: best.exitAnchor.path,
+      entryV3Tokens: best.entry.anchor.tokens,
+      exitV3Tokens: best.exitAnchor.tokens,
+      entryV3Fees: best.entry.anchor.fees,
+      exitV3Fees: best.exitAnchor.fees,
       legs: {
-        entryV3Fee: best.entry.anchor.fee,
+        entryV3Fee: best.entry.anchor.fees.length === 1 ? best.entry.anchor.fees[0] : null,
+        entryV3Fees: best.entry.anchor.fees,
+        entryV3Hops: best.entry.anchor.fees.length,
         entryPoolId: best.entry.pool.poolId,
         entryV4Fee: best.entry.pool.fee,
         exitPoolId: best.exitPool.poolId,
         exitV4Fee: best.exitPool.fee,
-        exitV3Fee: best.exitAnchor.fee,
+        exitV3Fee: best.exitAnchor.fees.length === 1 ? best.exitAnchor.fees[0] : null,
+        exitV3Fees: best.exitAnchor.fees,
+        exitV3Hops: best.exitAnchor.fees.length,
       },
-      failures: failures.slice(0, 12),
+      failures,
       evidenceLevel: 'FIXED_BLOCK_QUOTER_SCREEN',
       executionEstimate: 'NOT_RUN_GENERIC_EXECUTOR_NOT_DEPLOYED',
       receiptEvidence: 'NONE',
@@ -547,7 +712,9 @@ class OpportunityBoard {
 
     for (const id of INITIAL_PRIORITY) add(byId.get(id))
     const currentPositive = [...this.observations.entries()]
-      .filter(([, observation]) => observation.status === BoardStatus.SCREENED_POSITIVE)
+      .filter(([, observation]) =>
+        [BoardStatus.SCREENED_POSITIVE, BoardStatus.GROSS_POSITIVE].includes(observation.status),
+      )
       .sort((left, right) => Number(right[1].screenedNetUsdg) - Number(left[1].screenedNetUsdg))
       .slice(0, this.config.topRefreshSize)
     for (const [id] of currentPositive) add(byId.get(id))

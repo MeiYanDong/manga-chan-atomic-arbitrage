@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 2,
+  "service": "manga-opportunity-board",
+  "mode": "READ_ONLY_NO_SIGNING_NO_BROADCAST",
+  "generatedAt": "2026-09-04T16:28:07.611Z",
+  "selection": {
+    "status": "SCREENED_CANDIDATE_SELECTED",
+    "id": "0x7aad9faa5ee27bdeeb17d5a8c1870278824c4c59",
+    "symbol": "SIGMA",
+    "route": "GOOGL → SIGMA → SNDK",
+    "amountInUsdg": "15",
+    "screenedNetUsdg": "0.367773",
+    "evidenceLevel": "FIXED_BLOCK_QUOTER_SCREEN",
+    "executionAuthorized": false
+  },
+  "items": [
+    {
+      "id": "0x7aad9faa5ee27bdeeb17d5a8c1870278824c4c59",
+      "tokenAddress": "0x7aAd9Faa5Ee27bDEeb17D5A8c1870278824C4C59",
+      "symbol": "SIGMA",
+      "status": "SCREENED_NET_POSITIVE",
+      "fresh": true,
+      "quotedAt": "2026-09-04T16:27:54.066Z",
+      "blockNumber": "54406832",
+      "blockHash": "0x6879759723a8b46331a9123c3da48cc42e8151406db5b1dbc9da649c45413820",
+      "route": "GOOGL → SIGMA → SNDK",
+      "routeKey": "0xd0d322a01f4c6f3c882c215f0fee8125d860a384a1a66b8730c0314e7cf13c42:0x1dc1d47447f10709c2fcb784a9f318c5746bbff231f01c3ec738d56a67b9b95a",
+      "amountInUsdg": "15",
+      "amountOutUsdg": "15.856635",
+      "grossProfitUsdg": "0.856635",
+      "gasCostProxyUsdg": "0.488862",
+      "screenedNetUsdg": "0.367773",
+      "entryV3Path": "0x5fc5360d0400a0fd4f2af552add042d716f1d1680001f40bd7d308f8e1639fab988df18a8011f41eacad730000642e0847e8910a9732eb3fb1bb4b70a580adad4fe3",
+      "exitV3Path": "0xb90a19ff0af67f7779aff50a882a9cff42446400000bb80bd7d308f8e1639fab988df18a8011f41eacad730000645fc5360d0400a0fd4f2af552add042d716f1d168",
+      "legs": {
+        "entryPoolId": "0xd0d322a01f4c6f3c882c215f0fee8125d860a384a1a66b8730c0314e7cf13c42",
+        "entryV3Fees": [500, 100],
+        "entryV3Hops": 2,
+        "exitPoolId": "0x1dc1d47447f10709c2fcb784a9f318c5746bbff231f01c3ec738d56a67b9b95a",
+        "exitV3Fees": [3000, 100],
+        "exitV3Hops": 2
+      },
+      "pools": [
+        {
+          "poolId": "0xd0d322a01f4c6f3c882c215f0fee8125d860a384a1a66b8730c0314e7cf13c42",
+          "quoteAddress": "0x2e0847E8910a9732eB3fb1bb4b70a580ADAD4FE3",
+          "fee": 10000,
+          "tickSpacing": 200,
+          "hookAddress": "0x16D1560630Ce74af4478d9b8AD46548A092A2000"
+        },
+        {
+          "poolId": "0x1dc1d47447f10709c2fcb784a9f318c5746bbff231f01c3ec738d56a67b9b95a",
+          "quoteAddress": "0xB90A19fF0Af67f7779afF50A882A9CfF42446400",
+          "fee": 10000,
+          "tickSpacing": 200,
+          "hookAddress": "0x16D1560630Ce74af4478d9b8AD46548A092A2000"
+        }
+      ]
+    }
+  ]
+}
