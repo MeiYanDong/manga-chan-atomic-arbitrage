@@ -15,6 +15,7 @@
    ```
 
 6. Transfer `state.json` and `audit.jsonl` through a private channel. They are runtime evidence, not release assets.
+7. Install `deploy/sshd/60-manga-chan-arbitrage-hardening.conf` as an SSH server drop-in, validate with `sshd -t`, reload SSH, and prove a second key-only session before closing the recovery session.
 
 ## Single-writer cutover
 

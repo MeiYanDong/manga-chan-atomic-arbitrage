@@ -5,6 +5,7 @@
 - Bind the Linux signer to an encrypted systemd credential and remove the plaintext credential source path.
 - Add bounded runtime resource controls and restart only after abnormal process termination.
 - Resolve npm through the controlled service path during deployment verification.
+- Add a key-only SSH hardening drop-in for the dedicated signing host.
 
 ## 0.1.1 — 2026-09-04
 
