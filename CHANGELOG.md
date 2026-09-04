@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 — 2026-09-04
+
+- Reconcile the newest-token page before deciding whether a moving PAIR pagination pass covered its advertised total.
+- Keep up to 32 currently positive screens on the priority refresh path by default.
+
 ## 0.2.1 — 2026-09-04
 
 - Permit only a client-local SSH forward to the loopback opportunity board while keeping arbitrary forwarding,

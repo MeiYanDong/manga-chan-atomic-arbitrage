@@ -7,6 +7,7 @@ import {
   BoardStatus,
   applyFreshness,
   buildBoardSnapshot,
+  catalogIsComplete,
   materialEvents,
   normalizePairCandidate,
   publicError,
@@ -83,6 +84,12 @@ test('PAIR discovery admits only canonical active V4 pools above the depth floor
     ),
     null,
   )
+})
+
+test('catalog completeness is evaluated after newest-page reconciliation', () => {
+  assert.equal(catalogIsComplete(1_729, 1_728), true)
+  assert.equal(catalogIsComplete(1_727, 1_728), false)
+  assert.equal(catalogIsComplete(0, 0), false)
 })
 
 test('gas proxy uses the exact route gas, overhead and fixed-block native mark', () => {

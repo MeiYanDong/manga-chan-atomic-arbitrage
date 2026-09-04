@@ -7,6 +7,7 @@ import {
   BoardStatus,
   appendEvents,
   buildBoardSnapshot,
+  catalogIsComplete,
   materialEvents,
   normalizePairCandidate,
   publicError,
@@ -120,7 +121,7 @@ function loadConfig() {
     catalogIntervalMs: integer(process.env.MANGA_BOARD_CATALOG_INTERVAL_MS, 300_000, 30_000),
     staleMs: integer(process.env.MANGA_BOARD_STALE_MS, 180_000, 30_000),
     batchSize: integer(process.env.MANGA_BOARD_BATCH_SIZE, 8),
-    topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 8),
+    topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 32),
     quoteConcurrency: integer(process.env.MANGA_BOARD_QUOTE_CONCURRENCY, 2),
     catalogConcurrency: integer(process.env.MANGA_BOARD_CATALOG_CONCURRENCY, 6),
     blockLag: BigInt(integer(process.env.MANGA_BOARD_BLOCK_LAG, 1, 0)),
@@ -323,7 +324,6 @@ class OpportunityBoard {
         }
       }
       this.catalogExpectedTokens = Number(first.total || this.rawTokens.size)
-      this.catalogComplete = this.rawTokens.size >= this.catalogExpectedTokens
       this.lastFullCatalogAt = new Date().toISOString()
     }
 
@@ -331,6 +331,7 @@ class OpportunityBoard {
     for (const token of newest.items || []) {
       if (token?.address) this.rawTokens.set(token.address.toLowerCase(), token)
     }
+    if (full) this.catalogComplete = catalogIsComplete(this.rawTokens.size, this.catalogExpectedTokens)
 
     this.catalog = [...this.rawTokens.values()]
       .map((token) =>
