@@ -1,0 +1,36 @@
+name: Release artifact
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - name: Build commit-addressed package
+        run: git archive --format=tar.gz --prefix=manga-chan-atomic-arbitrage/ -o "manga-chan-atomic-arbitrage-${GITHUB_SHA}.tar.gz" HEAD
+      - name: Write checksums and release identity
+        run: |
+          sha256sum manga-chan-atomic-arbitrage-*.tar.gz > SHA256SUMS
+          git rev-parse HEAD > RELEASE_COMMIT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manga-chan-atomic-arbitrage-${{ github.sha }}
+          path: |
+            manga-chan-atomic-arbitrage-*.tar.gz
+            SHA256SUMS
+            RELEASE_COMMIT
+          if-no-files-found: error
+          retention-days: 30

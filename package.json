@@ -1,0 +1,81 @@
+{
+  "name": "manga-chan-atomic-arbitrage",
+  "version": "0.1.0",
+  "description": "Bounded atomic arbitrage executor for the MANGA/MSFT/NVDA/USDG route on Robinhood Chain",
+  "license": "MIT",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MeiYanDong/manga-chan-atomic-arbitrage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/issues"
+  },
+  "homepage": "https://github.com/MeiYanDong/manga-chan-atomic-arbitrage#readme",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    ".env.example",
+    ".prettierignore",
+    ".solhint.json",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "contracts",
+    "deploy",
+    "deployments",
+    "docs",
+    "eslint.config.js",
+    "hardhat.config.js",
+    "prettier.config.mjs",
+    "reports",
+    "scripts",
+    "src",
+    "test",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "compile": "node scripts/manga-chan-arb.mjs compile",
+    "self-test": "node scripts/manga-chan-arb.mjs self-test",
+    "test": "node --test --test-reporter=spec test/*.test.mjs",
+    "test:contract": "node scripts/contract-test.mjs",
+    "lint": "npm run lint:js && npm run lint:sol && npm run lint:shell",
+    "lint:js": "eslint .",
+    "lint:sol": "solhint 'contracts/**/*.sol' 'test/contracts/**/*.sol'",
+    "lint:shell": "bash -n deploy/*.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "secret:scan": "node scripts/secret-scan.mjs",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run compile && npm test && npm run test:contract && npm run secret:scan",
+    "status": "node scripts/manga-chan-arb.mjs status",
+    "runtime:verify": "node scripts/manga-chan-arb.mjs runtime-verify",
+    "rpc:benchmark": "node scripts/benchmark-rpc.mjs",
+    "deployment:recover": "node scripts/manga-chan-arb.mjs recover-deployment",
+    "preflight": "node scripts/manga-chan-arb.mjs preflight",
+    "execute": "node scripts/manga-chan-arb.mjs execute",
+    "reconcile": "node scripts/manga-chan-arb.mjs reconcile",
+    "withdraw": "node scripts/manga-chan-arb.mjs withdraw-all",
+    "watch:arm": "node scripts/manga-chan-arb.mjs watch-arm",
+    "watch": "node scripts/manga-chan-arb.mjs watch",
+    "watch:status": "node scripts/manga-chan-arb.mjs watch-status",
+    "watch:disarm": "node scripts/manga-chan-arb.mjs watch-disarm",
+    "fork-test": "node scripts/manga-chan-arb.mjs fork-test"
+  },
+  "dependencies": {
+    "solc": "0.8.26",
+    "viem": "2.56.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "eslint": "10.0.3",
+    "hardhat": "3.2.0",
+    "prettier": "3.9.0",
+    "solhint": "6.2.4",
+    "typescript": "5.9.3"
+  }
+}

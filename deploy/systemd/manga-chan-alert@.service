@@ -1,0 +1,6 @@
+[Unit]
+Description=Record failure of %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-cat --identifier=manga-chan-alert /bin/echo "MANGA CHAN service failed: %i"

@@ -1,0 +1,29 @@
+{
+  "status": "BENCHMARK_COMPLETE",
+  "providerLabel": "existing-managed",
+  "vantage": "mac-local",
+  "measuredAt": "2026-09-04T06:53:25.213Z",
+  "samplesPerTransport": 40,
+  "headDistance": 0,
+  "transports": [
+    {
+      "label": "HTTP_eth_blockNumber",
+      "success": 40,
+      "failures": 0,
+      "p50Ms": 90.37,
+      "p95Ms": 518.0,
+      "p99Ms": 676.37,
+      "maxMs": 676.37
+    },
+    {
+      "label": "WSS_eth_blockNumber",
+      "success": 40,
+      "failures": 0,
+      "p50Ms": 87.36,
+      "p95Ms": 375.53,
+      "p99Ms": 1268.16,
+      "maxMs": 1268.16
+    }
+  ],
+  "scope": "Transport latency from one local vantage only; this does not establish provider SLA, quota, opportunity-to-shot latency or cloud-region superiority."
+}
