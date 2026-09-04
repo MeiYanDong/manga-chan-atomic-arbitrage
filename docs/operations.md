@@ -2,7 +2,7 @@
 
 ## Pre-deployment gate
 
-1. Check out the exact release commit and run `npm ci --no-audit --no-fund` followed by `npm run check`.
+1. Check out the exact release commit and run `npm ci --no-audit --no-fund` followed by `npm run check`. CI must execute `systemd-analyze verify` on the supplied service units; local macOS checks explicitly report that this Linux-only gate was skipped.
 2. Confirm the release source hash matches `deployments/robinhood-mainnet.json`.
 3. Provision a strategy-owned managed HTTP endpoint and WSS endpoint. Do not reuse another strategy's configuration file.
 4. Configure an independent HTTP reader when available. The two URLs must not alias one another.
@@ -74,3 +74,5 @@ Never roll code backward while retaining an incompatible runtime ledger or activ
 ## Alerts
 
 The supplied service exits non-zero on a halted state and invokes an `OnFailure` unit, producing an explicit journal event. A real paging destination is not configured in the public repository; operators must connect that unit to their private notification system and verify delivery before calling alerting complete.
+
+The release installer compiles and verifies the code before atomically moving the `current` symlink. The hardened runtime service only reads that release and writes under `/var/lib/manga-chan-arbitrage`; it does not attempt to compile inside the read-only `/opt` tree at service start.

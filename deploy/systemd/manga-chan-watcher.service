@@ -15,7 +15,6 @@ Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
 LoadCredential=private-key:/etc/manga-chan-arbitrage/private-key
 Environment=MANGA_PRIVATE_KEY_FILE=%d/private-key
 UMask=0077
-ExecStartPre=/usr/bin/npm run compile
 ExecStart=/usr/bin/npm run watch
 Restart=no
 TimeoutStopSec=20
