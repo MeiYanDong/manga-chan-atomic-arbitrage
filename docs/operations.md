@@ -116,7 +116,11 @@ RPC role or runtime directory. The signing command reads `http://127.0.0.1:8788/
 no signer access. Generic-v2 must use the same `MANGA_RUN_DIR` as the fixed signer lane so both generations share
 `wallet.lock`, `audit.jsonl` and the unresolved-mutation barrier.
 
-Before any generic deployment or execution:
+The board may use the official public RPC. `/etc/manga-chan-arbitrage/live.env` must instead contain a strategy-owned
+execution HTTP RPC; live commands reject the official public endpoint. The generic watcher has no idle WSS or HTTP chain
+poll. It touches the execution RPC only after a new local-board candidate clears the arm's pre-RPC gate.
+
+Before any generic deployment:
 
 1. stop and disarm every fixed-route watcher that can use the wallet;
 2. run the fixed and generic reconcile commands and require a clean shared ledger;
@@ -127,12 +131,56 @@ Before any generic deployment or execution:
    path before invoking `npm run generic:deploy`;
 7. read back the canonical deployment receipt, bytecode hash, operator, 100 USDG cap, 0.05 USDG contract floor and
    executor USDG balance;
-8. run `npm run generic:preflight`; only its exact simulation and gas result can justify one `generic:execute` command.
+8. run `npm run generic:runtime-verify`; require canonical code/operator/constants, a clean nonce and a signer-free
+   loopback board.
 
 The default deployment seed is zero. Roughly `0.01 ETH` did not capitalize 100 USDG in the recorded fork, so the cap
 must not be confused with available principal. Increase seed only within the reviewed wallet budget, or transfer USDG
 through a separately reviewed mutation path; do not improvise an unjournaled top-up.
 
-Generic commands are manual in this release. No generic systemd signing service, recurring scheduler or auto-arm is
-provided or claimed. A future watcher must add a bounded authorization record and deployment-specific runtime
-verification before it can be enabled.
+Deployment and arming are always separate explicit operations. On the signing host, the hardened one-shot units make
+the encrypted systemd credential available without copying it into an environment variable or plaintext file:
+
+```bash
+sudo systemctl start manga-generic-deploy.service
+sudo systemctl --no-pager --full status manga-generic-deploy.service
+
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run generic:runtime-verify
+
+sudo systemctl start manga-generic-arm.service
+sudo systemctl enable --now manga-generic-watcher.service
+sudo systemctl show manga-generic-watcher.service \
+  --property=ActiveState,SubState,MainPID,NRestarts
+```
+
+An arm binds the exact executor and build, current principal cap, screened and exact net floors, Gas reserve, expiry,
+maximum exact preflights, signed attempts, confirmed executions and failed Gas. Starting the service without a valid arm
+stops cleanly and never signs. Read local state without a chain call using:
+
+```bash
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run generic:watch:status
+```
+
+To stop authority, disarm first, then stop and disable the service. Disarm changes the authorization before signalling
+the process, and the final signing boundary checks both the arm and stop state:
+
+```bash
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run generic:watch:disarm
+sudo systemctl disable --now manga-generic-watcher.service
+```
+
+`STOPPED_POLICY` is a clean expiry or budget stop. `HALTED_RPC`, `HALTED_UNKNOWN`, `HALTED_NONCE_CONFLICT`,
+`HALTED_INVARIANT` and `HALTED_STARTUP` require investigation. Never restart a halted signer merely because the board
+still shows a positive screen; reconcile and re-run deployment-specific verification first.

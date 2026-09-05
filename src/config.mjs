@@ -22,6 +22,12 @@ const CONFIG_KEYS = new Set([
   'MANGA_GENERIC_MIN_ETH_RESERVE',
   'MANGA_GENERIC_PROFIT_RETENTION_BPS',
   'MANGA_GENERIC_PREFLIGHT_CANDIDATES',
+  'MANGA_GENERIC_WATCH_POLL_MS',
+  'MANGA_GENERIC_WATCH_ARM_HOURS',
+  'MANGA_GENERIC_WATCH_MAX_EXECUTIONS',
+  'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS',
+  'MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG',
+  'MANGA_GENERIC_WATCH_MAX_CONSECUTIVE_ERRORS',
 ])
 
 /** @param {string} file */
@@ -70,8 +76,27 @@ export function loadRuntimeConfig(environment = process.env) {
     genericMinEthReserve: value('MANGA_GENERIC_MIN_ETH_RESERVE') || '0.002',
     genericProfitRetentionBps: boundedBps(value('MANGA_GENERIC_PROFIT_RETENTION_BPS'), 9_500),
     genericPreflightCandidates: boundedPositiveInteger(value('MANGA_GENERIC_PREFLIGHT_CANDIDATES'), 6, 32),
+    genericWatchPollMs: boundedInteger(value('MANGA_GENERIC_WATCH_POLL_MS'), 1_000, 250, 60_000),
+    genericWatchArmHours: boundedPositiveInteger(value('MANGA_GENERIC_WATCH_ARM_HOURS'), 24, 168),
+    genericWatchMaxExecutions: boundedPositiveInteger(value('MANGA_GENERIC_WATCH_MAX_EXECUTIONS'), 5, 20),
+    genericWatchMaxPreflights: boundedPositiveInteger(value('MANGA_GENERIC_WATCH_MAX_PREFLIGHTS'), 24, 1_000),
+    genericWatchMinScreenedNetUsdg: value('MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG'),
+    genericWatchMaxConsecutiveErrors: boundedPositiveInteger(
+      value('MANGA_GENERIC_WATCH_MAX_CONSECUTIVE_ERRORS'),
+      10,
+      100,
+    ),
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
+}
+
+/** @param {string | null} value @param {number} fallback @param {number} minimum @param {number} maximum */
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = value === null ? fallback : Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`配置值必须在 ${minimum}..${maximum}：${value}`)
+  }
+  return parsed
 }
 
 /** @param {string | null} value @param {number} fallback */
@@ -110,6 +135,15 @@ function boundedBps(value, fallback) {
  */
 export function assertLiveTransport(config, { requireWss = false } = {}) {
   if (!config.rpcUrl) throw new Error('实盘命令必须配置策略专用 MANGA_RPC_URL')
+  let rpc
+  try {
+    rpc = new URL(config.rpcUrl)
+  } catch {
+    throw new Error('MANGA_RPC_URL 不是有效 URL')
+  }
+  if (rpc.hostname === 'rpc.mainnet.chain.robinhood.com') {
+    throw new Error('官方公共 RPC 仅允许只读观察板使用；实盘精确模拟与广播必须使用策略专用 RPC')
+  }
   if (requireWss && !config.wsUrl && !config.allowPollingOnly) {
     throw new Error('watch 模式必须配置 MANGA_WS_URL；仅恢复演练可显式设置 MANGA_ALLOW_POLLING_ONLY=1')
   }

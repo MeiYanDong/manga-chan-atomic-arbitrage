@@ -6,8 +6,12 @@ import {
   classifyReconciliation,
   classifyRpcError,
   evaluateArmBudget,
+  evaluateGenericArmBudget,
   fixedSignerLaneConflict,
+  genericSignerLaneConflict,
+  isGenericOpportunityMiss,
   latestUnresolvedMutation,
+  selectGenericWatchCandidate,
 } from '../src/policy.mjs'
 
 test('classifies a nested header-not-found failure as transient state readiness', () => {
@@ -94,6 +98,59 @@ test('arm budget stops on each independent boundary', () => {
   assert.equal(evaluateArmBudget(arm, { ...base, now: Date.parse('2030-01-01T00:00:00Z') }).reason, 'expired')
 })
 
+test('generic arm independently bounds paid exact preflights', () => {
+  const arm = {
+    expiresAt: '2030-01-01T00:00:00.000Z',
+    maxConfirmedExecutions: 5,
+    maxAttempts: 5,
+    maxFailedGasWei: '1000',
+    maxExactPreflights: 2,
+  }
+  const usage = {
+    confirmedExecutions: 0,
+    attempts: 0,
+    failedGasWei: 0n,
+    exactPreflights: 1,
+    now: Date.parse('2029-01-01T00:00:00Z'),
+  }
+  assert.equal(evaluateGenericArmBudget(arm, usage).allowed, true)
+  assert.equal(evaluateGenericArmBudget(arm, { ...usage, exactPreflights: 2 }).reason, 'exact-preflight-limit')
+  assert.equal(
+    evaluateGenericArmBudget({ ...arm, maxExactPreflights: 0 }, usage).reason,
+    'invalid-exact-preflight-limit',
+  )
+})
+
+test('generic watch selection enforces dedupe, principal and screened-net boundaries before RPC escalation', () => {
+  const candidates = [
+    { opportunityId: 'too-large', amountIn: 30_000_000n, screenedNetProfit: 500_000n },
+    { opportunityId: 'attempted', amountIn: 10_000_000n, screenedNetProfit: 400_000n },
+    { opportunityId: 'below-floor', amountIn: 10_000_000n, screenedNetProfit: 99_999n },
+    { opportunityId: 'eligible', amountIn: 10_000_000n, screenedNetProfit: 100_000n },
+  ]
+  assert.equal(
+    selectGenericWatchCandidate(candidates, {
+      maxPrincipal: 15_000_000n,
+      minimumScreenedNetProfit: 100_000n,
+      attemptedOpportunityIds: ['attempted'],
+    }).opportunityId,
+    'eligible',
+  )
+  assert.equal(
+    selectGenericWatchCandidate(candidates, {
+      maxPrincipal: 5_000_000n,
+      minimumScreenedNetProfit: 100_000n,
+    }),
+    null,
+  )
+})
+
+test('generic watcher distinguishes economic misses from safety invariants', () => {
+  assert.equal(isGenericOpportunityMiss(new Error('exact simulation does not meet the net floor')), true)
+  assert.equal(isGenericOpportunityMiss(new Error('triggered candidate left the fresh board set')), true)
+  assert.equal(isGenericOpportunityMiss(new Error('generic executor operator mismatch')), false)
+})
+
 test('generic signer lane fails closed on active or malformed fixed-signer state', () => {
   const nowMs = Date.parse('2026-09-05T00:00:00.000Z')
   const base = { lockExists: false, nowMs, processIsAlive: () => false }
@@ -119,6 +176,16 @@ test('generic signer lane fails closed on active or malformed fixed-signer state
     }),
     null,
   )
+})
+
+test('fixed signer lane fails closed on an active generic-v2 signer', () => {
+  const conflict = genericSignerLaneConflict({
+    arm: { status: 'ARMED', expiresAt: '2030-01-01T00:00:00.000Z' },
+    lockExists: false,
+    nowMs: Date.parse('2029-01-01T00:00:00.000Z'),
+    processIsAlive: () => false,
+  })
+  assert.match(conflict, /generic-v2 signing arm is still active/)
 })
 
 test('event queue deduplicates logs and collapses out-of-order revisions to the newest block', async () => {

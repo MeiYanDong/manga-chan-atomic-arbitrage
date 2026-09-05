@@ -33,6 +33,7 @@ import {
   classifyRpcError,
   errorText,
   evaluateArmBudget,
+  genericSignerLaneConflict,
   isTransientRpcError,
   latestUnresolvedMutation,
   quoteFailure,
@@ -93,6 +94,8 @@ const LOCK_PATH = path.join(RUN_DIR, 'wallet.lock')
 const WATCH_ARM_PATH = path.join(RUN_DIR, 'watch-arm.json')
 const WATCH_STATE_PATH = path.join(RUN_DIR, 'watch-state.json')
 const WATCH_LOCK_PATH = path.join(RUN_DIR, 'watch.lock')
+const GENERIC_WATCH_ARM_PATH = path.join(RUN_DIR, 'generic-watch-arm.json')
+const GENERIC_WATCH_LOCK_PATH = path.join(RUN_DIR, 'generic-watch.lock')
 const SIGNED_TX_DIR = path.join(RUN_DIR, 'signed')
 const WATCH_POLL_MS = 5_000
 const WATCH_RECOVERY_POLL_MS = 30_000
@@ -331,6 +334,19 @@ function watchLockHolder() {
     pid = Number(fs.readFileSync(WATCH_LOCK_PATH, 'utf8').trim().split(/\s+/)[0])
   } catch {}
   return { pid: Number.isSafeInteger(pid) ? pid : null, alive: processIsAlive(pid) }
+}
+
+function assertGenericSignerInactive() {
+  const arm = readJsonIfExists(GENERIC_WATCH_ARM_PATH)
+  const lockExists = fs.existsSync(GENERIC_WATCH_LOCK_PATH)
+  let lockPid = null
+  if (lockExists) {
+    try {
+      lockPid = Number(fs.readFileSync(GENERIC_WATCH_LOCK_PATH, 'utf8').trim().split(/\s+/)[0])
+    } catch {}
+  }
+  const conflict = genericSignerLaneConflict({ arm, lockExists, lockPid, processIsAlive })
+  if (conflict) throw new Error(`${conflict}; disarm or cleanly stop it before using the fixed-route lane`)
 }
 
 function assertWatchArm(arm, state) {
@@ -705,6 +721,7 @@ async function deployPreflight({ print = true } = {}) {
 async function deploy() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     const check = await deployPreflight({ print: true })
     const account = loadAccount()
@@ -890,6 +907,7 @@ async function deploy() {
 async function recoverDeployment() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     if (readState()?.executor) throw new Error('部署状态已经存在，无需恢复')
     await assertCanonicalTargets()
     const compiled = compileContract()
@@ -1170,6 +1188,7 @@ async function executionPreflight({ print = true } = {}) {
 async function execute() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     const check = await executionPreflight({ print: true })
     const account = loadAccount()
@@ -1627,6 +1646,7 @@ async function finalizeReconciledSuccess(mutation, plan, receipt) {
 
 async function reconcile() {
   assertLiveTransport(RUNTIME_CONFIG)
+  assertGenericSignerInactive()
   const release = acquireLock()
   try {
     const records = readAuditRecords()
@@ -1751,6 +1771,7 @@ async function reconcile() {
 async function withdrawAll() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     const unresolved = latestUnresolvedExecution()
     if (unresolved)
@@ -1933,6 +1954,7 @@ async function withdrawAll() {
 async function armWatcher() {
   const release = acquireLock(WATCH_LOCK_PATH)
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG, { requireWss: true })
     const unresolved = latestUnresolvedExecution()
     if (unresolved) throw new Error(`存在未收敛执行 ${unresolved.hash}，禁止 arm`)
@@ -2036,6 +2058,7 @@ async function watch() {
   process.once('SIGINT', requestStop)
   let watchState = null
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG, { requireWss: true })
     const arm = readWatchArm()
     const state = readState()

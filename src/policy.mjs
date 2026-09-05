@@ -158,22 +158,72 @@ export function evaluateArmBudget(arm, usage) {
 }
 
 /**
+ * Paid exact preflights are a separately bounded resource from signed attempts.
+ * @param {{maxConfirmedExecutions: number, maxAttempts: number, maxFailedGasWei: string | bigint, maxExactPreflights: number, expiresAt: string}} arm
+ * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, exactPreflights: number, now?: number}} usage
+ */
+export function evaluateGenericArmBudget(arm, usage) {
+  const transactionBudget = evaluateArmBudget(arm, usage)
+  if (!transactionBudget.allowed) return transactionBudget
+  if (!Number.isSafeInteger(arm.maxExactPreflights) || arm.maxExactPreflights <= 0) {
+    return { allowed: false, reason: 'invalid-exact-preflight-limit' }
+  }
+  if (usage.exactPreflights >= arm.maxExactPreflights) {
+    return { allowed: false, reason: 'exact-preflight-limit' }
+  }
+  return { allowed: true, reason: null }
+}
+
+/**
+ * Select from an already validated, board-ranked candidate set without making
+ * an RPC call. Exact simulation remains mandatory before signing.
+ * @param {Array<Record<string, any>>} candidates
+ * @param {{minimumScreenedNetProfit: bigint, maxPrincipal: bigint, attemptedOpportunityIds?: Iterable<string>}} policy
+ */
+export function selectGenericWatchCandidate(candidates, policy) {
+  const attempted = new Set(policy.attemptedOpportunityIds || [])
+  for (const candidate of candidates) {
+    if (attempted.has(candidate.opportunityId)) continue
+    if (BigInt(candidate.amountIn) > policy.maxPrincipal) continue
+    if (BigInt(candidate.screenedNetProfit) < policy.minimumScreenedNetProfit) continue
+    return candidate
+  }
+  return null
+}
+
+/** @param {unknown} error */
+export function isGenericOpportunityMiss(error) {
+  const message = errorText(error)
+  return /snapshot has no fresh|quote is stale|no screened candidate passed exact executor preflight|selected route and amount left|triggered candidate left|principal below candidate amount|exact simulation does not meet the net floor|gross profit cannot fund|protected max fee is below|worst-case gas cost breaks|wallet cannot fund worst-case gas|wallet ETH reserve failed immediately before signing/i.test(
+    message,
+  )
+}
+
+/**
  * Enforce one nonce-writing lane per wallet. Corrupt active-arm or lock state
  * is a conflict, not an invitation to guess that the other signer is idle.
  *
  * @param {{arm?: Record<string, any> | null, lockExists: boolean, lockPid?: number | null, nowMs?: number, processIsAlive: (pid: number) => boolean}} input
  */
-export function fixedSignerLaneConflict(input) {
+function signerLaneConflict(input, lane) {
   const nowMs = input.nowMs ?? Date.now()
   if (input.arm?.status === 'ARMED') {
     const expiresAt = Date.parse(input.arm.expiresAt)
-    if (!Number.isFinite(expiresAt)) return 'the fixed-route signing arm has an invalid expiry'
-    if (nowMs < expiresAt) return 'the fixed-route signing arm is still active'
+    if (!Number.isFinite(expiresAt)) return `the ${lane} signing arm has an invalid expiry`
+    if (nowMs < expiresAt) return `the ${lane} signing arm is still active`
   }
   if (!input.lockExists) return null
-  if (!Number.isSafeInteger(input.lockPid) || input.lockPid <= 0) return 'the fixed-route watcher lock is malformed'
-  if (input.processIsAlive(input.lockPid)) return `the fixed-route watcher is still running as PID ${input.lockPid}`
+  if (!Number.isSafeInteger(input.lockPid) || input.lockPid <= 0) return `the ${lane} watcher lock is malformed`
+  if (input.processIsAlive(input.lockPid)) return `the ${lane} watcher is still running as PID ${input.lockPid}`
   return null
+}
+
+export function fixedSignerLaneConflict(input) {
+  return signerLaneConflict(input, 'fixed-route')
+}
+
+export function genericSignerLaneConflict(input) {
+  return signerLaneConflict(input, 'generic-v2')
 }
 
 export class EventRevisionQueue {
