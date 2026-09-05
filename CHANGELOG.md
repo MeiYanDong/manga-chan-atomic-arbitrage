@@ -9,6 +9,8 @@
 - Mutually exclude fixed and generic watcher generations in code and systemd while retaining the shared wallet lock and UNKNOWN barrier.
 - Require receipt, event, executor balance, wallet Gas delta and contemporaneous native mark before a generic execution becomes a terminal economic effect.
 - Add hardened one-shot deployment and arm units plus a persistent generic watcher unit.
+- Give the deployment one-shot a 180-second start timeout so its 120-second canonical receipt wait cannot be killed by
+  systemd's default start timeout.
 
 ## 0.3.0 — 2026-09-05
 

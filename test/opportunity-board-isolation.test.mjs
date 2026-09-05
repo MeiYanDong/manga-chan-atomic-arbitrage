@@ -78,6 +78,7 @@ test('generic systemd services isolate the board and mutually exclude the fixed 
   assert.match(arm, /^ExecStart=\/usr\/bin\/env npm run generic:watch:arm$/m)
   assert.match(deploy, /^Type=oneshot$/m)
   assert.match(deploy, /^ExecStart=\/usr\/bin\/env npm run generic:deploy$/m)
+  assert.match(deploy, /^TimeoutStartSec=180$/m)
   assert.match(deploy, /^Conflicts=manga-chan-watcher\.service manga-generic-watcher\.service$/m)
   assert.match(
     fixed,

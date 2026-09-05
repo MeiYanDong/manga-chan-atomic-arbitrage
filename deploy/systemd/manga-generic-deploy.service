@@ -17,6 +17,7 @@ LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private
 Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
 UMask=0077
 ExecStart=/usr/bin/env npm run generic:deploy
+TimeoutStartSec=180
 StateDirectory=manga-chan-arbitrage
 StateDirectoryMode=0700
 MemoryMax=512M
