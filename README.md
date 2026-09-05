@@ -26,7 +26,7 @@ adds material changes to an append-only event ledger. The board has no wallet, s
 ## Honest status
 
 - Fixed-route contracts are deployed and funded with small canary floats. Their public evidence is under [`deployments`](deployments).
-- Generic-v2 is implemented and has deterministic plus historical mainnet-fork evidence, but it is **not deployed on mainnet**. It has no mainnet signature, broadcast, receipt or realized profit.
+- Generic-v2, including its bounded autonomous watcher, is implemented and has deterministic plus historical mainnet-fork evidence, but it is **not yet deployed on mainnet at this revision**. It has no generic mainnet signature, broadcast, receipt or realized profit yet.
 - Historical fixed-route receipt evidence is documented separately. A test, screen, running process or fork transaction is never presented as a new mainnet profit.
 - The old macOS polling watcher is stopped. This repository's watcher uses targeted WSS swap events plus a recovery poll and must be explicitly armed.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
@@ -43,6 +43,8 @@ Atomic settlement removes intermediate-token inventory exposure if the transacti
 - Adaptive probes and a bounded amount grid choose the amount with the greatest absolute screened net profit; the signing preflight then re-ranks up to six typed candidates using exact executor simulation and gas.
 - On-chain gross-profit floor: `0.05 USDG`.
 - Default off-chain net-profit floor after exact gas: `0.10 USDG`, configurable upward.
+- Automated execution requires an explicit deployment-bound arm. The arm expires and separately caps principal, exact preflights, signed attempts, confirmed executions and failed Gas.
+- While idle, the generic watcher reads only the local signer-free board. A strategy-owned RPC is touched only after one new candidate clears the board gate; that exact candidate is then simulated twice before signing.
 - No wallet token approvals, Universal Router, or Permit2.
 - Every mutation follows `intent -> immutable plan -> exact raw persisted -> broadcast -> receipt/effect`.
 - A receipt or nonce ambiguity becomes `UNKNOWN`; no new nonce is permitted until `reconcile` converges.
@@ -93,15 +95,20 @@ npm run board              # continuous scanner and loopback dashboard
 npm run board:status       # persisted read-only snapshot
 npm run generic:plan       # typed top candidate set; board evidence only
 npm run generic:status     # local generic state and current board candidate
+npm run generic:runtime-verify  # canonical deployment + loopback-board readback
 npm run generic:deploy-preflight  # read-only deployment economics
 npm run generic:preflight  # exact executor eth_call + estimateGas; read-only
 npm run generic:deploy     # one guarded deployment mutation
 npm run generic:execute    # one guarded, dynamically selected mutation
 npm run generic:reconcile  # converge an UNKNOWN generic mutation
 npm run generic:withdraw   # return all executor USDG to the operator
+npm run generic:watch:arm  # explicit expiring, deployment-bound authorization
+npm run generic:watch      # autonomous loopback-board watcher
+npm run generic:watch:status
+npm run generic:watch:disarm
 ```
 
-No command automatically deploys and trades in one step. There is no generic auto-watcher in this version: every generic signature still requires an explicit command invocation.
+No command automatically deploys and trades in one step. Deployment remains a separate one-shot mutation. The generic watcher can sign only while an explicit arm is active and inside all arm and exact-net boundaries; stopping, expiry, budget exhaustion, UNKNOWN receipt, nonce conflict or an invariant failure closes the lane.
 
 ## Live opportunity board
 
@@ -110,15 +117,17 @@ The board's evidence ladder is intentionally narrower than the executor's:
 ```text
 PAIR metadata -> fixed-block four-leg Quoter screen -> gas proxy
               -> bounded typed candidate set
-              -> separate generic preflight: exact eth_call + estimateGas
-              -> explicit signing command -> canonical receipt/effect
+              -> new-generation and arm gate (no chain RPC while idle)
+              -> targeted generic preflight: exact eth_call + estimateGas
+              -> authorization recheck -> signature -> canonical receipt/effect
 ```
 
 Rows can be `DISCOVERED_UNQUOTED`, `UNQUOTABLE`, `NO_EDGE`, `GROSS_POSITIVE_NET_NEGATIVE`,
 `SCREENED_NET_POSITIVE` or `STALE`. A screened-positive row is still a research candidate, not a risk-free or executable
-trade. Only `generic:preflight` can promote a bounded candidate to `GENERIC_READY_TO_EXECUTE`, and even that is not a
-receipt or guaranteed inclusion. The first adapter covers PAIR's first-party multi-pool catalog; arbitrary external V4
-pools are not claimed as a complete census.
+trade. Only the exact generic preflight can promote a bounded candidate to `GENERIC_READY_TO_EXECUTE`, and even that is
+not a receipt or guaranteed inclusion. Manual execution and the autonomous watcher share the same exact preflight,
+immutable plan, raw-before-broadcast journal and UNKNOWN barrier. The first adapter covers PAIR's first-party multi-pool
+catalog; arbitrary external V4 pools are not claimed as a complete census.
 
 Use a dedicated protected configuration based on [`deploy/opportunity-board.env.example`](deploy/opportunity-board.env.example).
 The supported service binds to `127.0.0.1:8788`; open it privately with:
@@ -132,7 +141,11 @@ for the isolation boundary.
 
 ## Deployment
 
-The supported production shape is a small Linux host using a managed HTTP RPC and WSS endpoint. A full node is intentionally out of scope. The release workflow creates a commit-addressed artifact; promotion to a signing host is manual and uses the systemd materials in [`deploy/systemd`](deploy/systemd).
+The supported production shape is a small Linux host. The signer-free board may use the official public HTTP RPC. The
+fixed-route watcher still needs a managed HTTP/WSS pair; the generic watcher needs only a strategy-owned HTTP execution
+RPC because it consumes the local board while idle. A full node is intentionally out of scope. The release workflow
+creates a commit-addressed artifact; deployment and arm promotion to a signing host remain explicit operations using
+the systemd materials in [`deploy/systemd`](deploy/systemd).
 
 Follow [`docs/operations.md`](docs/operations.md). In particular, never run the macOS and cloud signer lanes at the same time.
 

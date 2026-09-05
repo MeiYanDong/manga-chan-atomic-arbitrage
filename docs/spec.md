@@ -71,6 +71,11 @@ exact net USDG profit**. It does not optimize ROI and does not force 100 USDG. B
 amount must still be in the board's positive set, nonce and residual/allowance boundaries must still be clean, and a
 fresh exact simulation must satisfy both the gross-retention floor and worst-case gas-adjusted net floor.
 
+Autonomous generic shots additionally require an expiring deployment-bound arm. The watcher processes each board
+generation once, deduplicates by opportunity identity and rejects candidates outside the arm's principal or
+screened-net floor before making a chain request. Exact preflights, signed attempts, confirmed executions and failed Gas
+have independent arm budgets. The arm and stop signal are checked immediately before and immediately after signing.
+
 The only valid no-action result is `NO_SHOT` with evidence. Quote failure is not the same as an unprofitable quote.
 
 ## 4. Durable mutation protocol
@@ -90,7 +95,12 @@ Opportunity -> Intent -> Plan -> Signed exact raw -> Broadcast observation
 
 ## 5. Provider and event model
 
-The watcher subscribes only to:
+The generic and fixed generations deliberately use different hot paths. Generic idle discovery is the signer-free
+loopback board backed by the official public RPC. Only a new eligible board candidate escalates to the strategy-owned
+HTTP RPC for exact simulation, Gas, signing, broadcast and receipt convergence. This bounds paid-RPC use without making
+the rate-limited public endpoint a live signing dependency.
+
+The fixed-route watcher subscribes only to:
 
 - the V3 `Swap` event at the USDG/MSFT entry pool;
 - the V3 `Swap` event at the USDG/NVDA exit pool;
@@ -111,7 +121,7 @@ A 30-second recovery poll protects against subscription gaps. It is not the prim
 | simulation                                          | current-call feasibility at one observed state |
 | accepted transaction hash                           | provider acceptance, not inclusion             |
 | confirmed receipt + Executed event + balance change | realized gross effect                          |
-| gas receipt + contemporaneous mark                  | estimated realized net PnL                     |
+| gas receipt + contemporaneous mark                  | realized marked net PnL                        |
 
 No process state, CI result or simulation is labeled as live profit.
 
@@ -124,6 +134,9 @@ No process state, CI result or simulation is labeled as live profit.
 - `header not found` cannot terminate as an invariant on its first occurrence.
 - execute, deploy and withdraw persist the signed raw transaction before broadcast.
 - withdraw, deploy, execute and arm all reject an unresolved mutation.
+- fixed and generic signer generations reject one another's active arm or watcher lock.
+- generic idle polling performs no chain RPC and each arm independently caps exact-preflight consumption.
+- generic completion requires wallet Gas delta and marked net profit to meet the immutable plan floor before the mutation becomes terminal.
 - UNKNOWN recovery never creates a second raw transaction for the nonce.
 - The public repository secret scan finds no signer, provider credential, signed raw, runtime log or personal absolute path.
 
@@ -143,11 +156,11 @@ screened net = quoted USDG out - USDG in - native gas proxy converted to USDG
 ```
 
 The board itself deliberately stops below `READY_TO_EXECUTE`: it has no signer, wallet client or generic executor state.
-Generic-v2's separate signing-lane preflight can consume the typed candidate payload and add exact `eth_call`, execution
-gas, residual, allowance and nonce evidence. No generic mainnet deployment exists at this repository revision, so
-current mainnet executor simulation and receipt evidence remain absent. Old observations become `STALE` instead of
-remaining actionable. Metadata failures, missing anchors and quote reverts are `UNQUOTABLE`, never silently converted
-to zero profit.
+Generic-v2's separate signing lane can consume one typed candidate and add exact `eth_call`, execution Gas, residual,
+allowance and nonce evidence. No generic mainnet deployment exists at this repository revision, so current mainnet
+executor simulation and receipt evidence remain absent. Old observations become `STALE` instead of remaining
+actionable. Metadata failures, missing anchors and quote reverts are `UNQUOTABLE`, never silently converted to zero
+profit.
 
 The catalog is refreshed in full and supplemented by a frequent newest-token page. Priority candidates and current
 positive rows are requoted first; the rest are covered with a persistent round-robin cursor. Coverage is reported in

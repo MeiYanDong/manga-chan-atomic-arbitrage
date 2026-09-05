@@ -20,13 +20,24 @@ import {
   parseTransaction,
   parseUnits,
   recoverTransactionAddress,
+  toHex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
 import { deriveExecutionEconomics } from '../src/execution-economics.mjs'
 import { GENERIC_USDG, GENERIC_WETH, buildGenericExecutionCandidates } from '../src/generic-plan.mjs'
-import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
-import { classifyReconciliation, errorText, fixedSignerLaneConflict, latestUnresolvedMutation } from '../src/policy.mjs'
+import { assertPrivateFile, buildMutationPlan, persistSignedRaw, stableStringify } from '../src/journal.mjs'
+import {
+  classifyReconciliation,
+  errorText,
+  evaluateGenericArmBudget,
+  fixedSignerLaneConflict,
+  genericSignerLaneConflict,
+  isGenericOpportunityMiss,
+  isTransientRpcError,
+  latestUnresolvedMutation,
+  selectGenericWatchCandidate,
+} from '../src/policy.mjs'
 import { compileGenericContract } from './generic-contract-compile.mjs'
 
 const CHAIN_ID = 4_663
@@ -52,6 +63,9 @@ const AUDIT_PATH = path.join(RUN_DIR, 'audit.jsonl')
 const LOCK_PATH = path.join(RUN_DIR, 'wallet.lock')
 const FIXED_WATCH_LOCK_PATH = path.join(RUN_DIR, 'watch.lock')
 const FIXED_WATCH_ARM_PATH = path.join(RUN_DIR, 'watch-arm.json')
+const GENERIC_WATCH_LOCK_PATH = path.join(RUN_DIR, 'generic-watch.lock')
+const GENERIC_WATCH_ARM_PATH = path.join(RUN_DIR, 'generic-watch-arm.json')
+const GENERIC_WATCH_STATE_PATH = path.join(RUN_DIR, 'generic-watch-state.json')
 const SIGNED_TX_DIR = path.join(RUN_DIR, 'signed')
 
 const chain = defineChain({
@@ -187,6 +201,74 @@ function acquireWalletLock() {
   }
 }
 
+function acquireGenericWatchLock() {
+  fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 })
+  let descriptor
+  try {
+    descriptor = fs.openSync(GENERIC_WATCH_LOCK_PATH, 'wx', 0o600)
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error
+    const holder = genericWatchLockHolder()
+    if (holder.alive) throw new Error(`generic watcher lock is held by PID ${holder.pid}`)
+    fs.unlinkSync(GENERIC_WATCH_LOCK_PATH)
+    descriptor = fs.openSync(GENERIC_WATCH_LOCK_PATH, 'wx', 0o600)
+  }
+  fs.writeFileSync(descriptor, `${process.pid} ${new Date().toISOString()} generic-v2-watch\n`)
+  return () => {
+    try {
+      fs.closeSync(descriptor)
+    } catch {}
+    try {
+      fs.unlinkSync(GENERIC_WATCH_LOCK_PATH)
+    } catch {}
+  }
+}
+
+function genericWatchLockHolder() {
+  if (!fs.existsSync(GENERIC_WATCH_LOCK_PATH)) return { pid: null, alive: false }
+  let pid = null
+  try {
+    pid = Number(fs.readFileSync(GENERIC_WATCH_LOCK_PATH, 'utf8').trim().split(/\s+/)[0])
+  } catch {}
+  return { pid: Number.isSafeInteger(pid) ? pid : null, alive: processIsAlive(pid) }
+}
+
+function assertGenericWatcherInactive() {
+  const holder = genericWatchLockHolder()
+  if (holder.alive && holder.pid !== process.pid) {
+    throw new Error(`generic watcher is active as PID ${holder.pid}; stop or disarm it before this mutation`)
+  }
+}
+
+function assertGenericExecutionContext(authorizationId) {
+  const holder = genericWatchLockHolder()
+  if (!holder.alive) {
+    if (authorizationId) throw new Error('generic watcher authorization was supplied without the watcher lock')
+    const arm = readJson(GENERIC_WATCH_ARM_PATH)
+    const conflict = genericSignerLaneConflict({
+      arm,
+      lockExists: false,
+      lockPid: null,
+      processIsAlive,
+    })
+    if (conflict) throw new Error(`${conflict}; disarm it before manual generic execution`)
+    return
+  }
+  const arm = readJson(GENERIC_WATCH_ARM_PATH)
+  if (
+    holder.pid !== process.pid ||
+    !authorizationId ||
+    arm?.status !== 'ARMED' ||
+    arm.authorizationId !== authorizationId
+  ) {
+    throw new Error(`generic watcher controls the signing lane as PID ${holder.pid}`)
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function loadAccount() {
   let privateKey
   if (RUNTIME_CONFIG.privateKeyFile) {
@@ -231,12 +313,21 @@ async function loadBoardSnapshot() {
   return response.json()
 }
 
-async function selectedCandidates() {
+async function boardCandidates({ limit = RUNTIME_CONFIG.genericPreflightCandidates } = {}) {
   const snapshot = await loadBoardSnapshot()
   const candidates = buildGenericExecutionCandidates(snapshot, {
     maxAgeMs: RUNTIME_CONFIG.genericMaxQuoteAgeMs,
-    limit: RUNTIME_CONFIG.genericPreflightCandidates,
+    limit,
   })
+  return { snapshot, candidates }
+}
+
+async function selectedCandidates({ opportunityId = null, limit = RUNTIME_CONFIG.genericPreflightCandidates } = {}) {
+  const { snapshot, candidates: boardSelection } = await boardCandidates({ limit })
+  const candidates = opportunityId
+    ? boardSelection.filter((candidate) => candidate.opportunityId === opportunityId)
+    : boardSelection
+  if (opportunityId && candidates.length === 0) throw new Error('triggered candidate left the fresh board set')
   const quotedBlocks = await Promise.all(
     candidates.map((candidate) =>
       publicClient.getBlock({ blockNumber: candidate.quoteBlockNumber }).then((block) => ({ candidate, block })),
@@ -418,7 +509,7 @@ async function deployPreflight({ print = true } = {}) {
   return { compiled, snapshot, seedEth, minimumSeedOut, gasLimit, maxFeePerGas, report }
 }
 
-async function executionPreflight({ print = true } = {}) {
+async function executionPreflight({ print = true, opportunityId = null } = {}) {
   assertFixedSignerInactive()
   const unresolved = latestUnresolved()
   if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
@@ -426,7 +517,10 @@ async function executionPreflight({ print = true } = {}) {
   const compiled = compileGenericContract()
   const state = readJson(STATE_PATH)
   const executor = await assertGenericDeployment(state, compiled)
-  const { snapshot: board, candidates } = await selectedCandidates()
+  const { snapshot: board, candidates } = await selectedCandidates({
+    opportunityId,
+    limit: opportunityId ? 32 : RUNTIME_CONFIG.genericPreflightCandidates,
+  })
   const wallet = await walletSnapshot()
   if (wallet.nonceLatest !== wallet.noncePending) throw new Error('wallet has a pending nonce')
   const principal = await publicClient.readContract({
@@ -591,13 +685,16 @@ async function executionPreflight({ print = true } = {}) {
   }
 }
 
-async function signBroadcastWait(plan, transaction) {
+async function signBroadcastWait(plan, transaction, assertStillAuthorized = null) {
+  if (assertStillAuthorized) assertStillAuthorized()
   const account = loadAccount()
   const serializedTransaction = await account.signTransaction(transaction)
+  if (assertStillAuthorized) assertStillAuthorized()
   const hash = keccak256(serializedTransaction)
   const rawPrivateRef = persistSignedRaw(SIGNED_TX_DIR, hash, serializedTransaction)
   appendAudit('mutation_signed', {
     kind: plan.kind,
+    authorizationId: plan.authorizationId || null,
     intentId: plan.intentId,
     planHash: plan.planHash,
     hash,
@@ -609,6 +706,7 @@ async function signBroadcastWait(plan, transaction) {
     chain,
     transport: http(RPC_URL, { timeout: 30_000, retryCount: 0 }),
   })
+  if (assertStillAuthorized) assertStillAuthorized()
   try {
     const acceptedHash = await walletClient.sendRawTransaction({ serializedTransaction })
     if (acceptedHash.toLowerCase() !== hash.toLowerCase()) throw new Error('RPC returned a different transaction hash')
@@ -669,7 +767,9 @@ async function deploymentStateFromReceipt(plan, hash, receipt, compiled, reconci
       quoteAssetCategories: ['ROBINHOOD_ASSET', 'AI', 'MEME', 'TOKEN'],
       v3Anchor: 'DIRECT_OR_ONE_WETH_BRIDGE',
       noWalletTokenApproval: true,
-      manualExecutionOnly: true,
+      manualExecutionAllowed: true,
+      autonomousExecutionRequiresArm: true,
+      idleRpcBehavior: 'LOOPBACK_BOARD_ONLY',
     },
     deployment: {
       hash,
@@ -703,6 +803,7 @@ async function deploymentStateFromReceipt(plan, hash, receipt, compiled, reconci
 async function deploy() {
   const release = acquireWalletLock()
   try {
+    assertGenericWatcherInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     const check = await deployPreflight({ print: true })
     const latest = await publicClient.getTransactionCount({ address: WALLET, blockTag: 'latest' })
@@ -742,7 +843,13 @@ async function deploy() {
     if (receipt.status !== 'success') {
       const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
       appendAudit('generic_deployment_reverted', { hash, gasSpentWei, blockNumber: receipt.blockNumber })
-      appendAudit('mutation_reverted', { kind: plan.kind, hash, planHash: plan.planHash, gasSpentWei })
+      appendAudit('mutation_reverted', {
+        kind: plan.kind,
+        authorizationId: plan.authorizationId || null,
+        hash,
+        planHash: plan.planHash,
+        gasSpentWei,
+      })
       throw new Error(`generic deployment reverted: ${hash}`)
     }
     const state = await deploymentStateFromReceipt(plan, hash, receipt, check.compiled)
@@ -803,12 +910,12 @@ async function executionStateFromReceipt(plan, hash, receipt, compiled, reconcil
     throw new Error('generic receipt event and exact USDG post-state disagree')
   }
   const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
-  let gasSpentUsdg = null
-  try {
-    const mark = await nativeMark(receipt.blockNumber)
-    gasSpentUsdg = (gasSpentWei * mark + NATIVE_MARK_INPUT - 1n) / NATIVE_MARK_INPUT
-  } catch {}
-  const netProfit = gasSpentUsdg === null ? null : BigInt(executed.grossProfit) - gasSpentUsdg
+  const mark = await nativeMark(receipt.blockNumber)
+  const gasSpentUsdg = (gasSpentWei * mark + NATIVE_MARK_INPUT - 1n) / NATIVE_MARK_INPUT
+  const netProfit = BigInt(executed.grossProfit) - gasSpentUsdg
+  if (netProfit < BigInt(plan.minimumNetProfit)) {
+    throw new Error('confirmed execution net profit is below the immutable plan floor')
+  }
   const record = {
     hash,
     blockNumber: receipt.blockNumber.toString(),
@@ -816,6 +923,7 @@ async function executionStateFromReceipt(plan, hash, receipt, compiled, reconcil
     candidateHash: plan.candidateHash,
     executionKey: plan.executionKey,
     opportunityId: plan.opportunityId,
+    authorizationId: plan.authorizationId || null,
     routeHash: plan.routeHash,
     routeLabel: plan.routeLabel,
     targetToken: plan.targetToken,
@@ -825,11 +933,11 @@ async function executionStateFromReceipt(plan, hash, receipt, compiled, reconcil
     gasUsed: receipt.gasUsed.toString(),
     effectiveGasPriceWei: receipt.effectiveGasPrice.toString(),
     gasSpentWei: gasSpentWei.toString(),
-    gasSpentUsdgWei: gasSpentUsdg?.toString() || null,
-    netProfitUsdgWei: netProfit?.toString() || null,
+    gasSpentUsdgWei: gasSpentUsdg.toString(),
+    netProfitUsdgWei: netProfit.toString(),
     executorUsdgBeforeWei: String(plan.executorUsdgBefore),
     executorUsdgAfterWei: executorUsdg.toString(),
-    evidence: gasSpentUsdg === null ? 'CONFIRMED_GROSS_NET_UNKNOWN' : 'CONFIRMED_GROSS_AND_MARKED_NET',
+    evidence: 'CONFIRMED_GROSS_AND_MARKED_NET',
     reconciled,
     confirmedAt: new Date().toISOString(),
   }
@@ -853,13 +961,30 @@ async function executionStateFromReceipt(plan, hash, receipt, compiled, reconcil
   return record
 }
 
-async function execute() {
+async function execute({ opportunityId = null, authorizationId = null, abortRequested = null } = {}) {
   const release = acquireWalletLock()
   try {
     assertLiveTransport(RUNTIME_CONFIG)
-    const check = await executionPreflight({ print: true })
-    const currentSelection = await selectedCandidates()
-    if (!currentSelection.candidates.some((candidate) => candidate.executionKey === check.candidate.executionKey)) {
+    assertGenericExecutionContext(authorizationId)
+    const check = await executionPreflight({ print: true, opportunityId })
+    if (authorizationId) {
+      const liveArm = readJson(GENERIC_WATCH_ARM_PATH)
+      if (liveArm?.authorizationId !== authorizationId) {
+        throw new Error('generic watcher authorization id changed during exact preflight')
+      }
+      const usage = assertGenericWatchArm(liveArm, readJson(STATE_PATH), { allowCurrentExactPreflight: true })
+      const expectedNonce = Number(liveArm.baselineNonce) + usage.confirmedExecutions
+      if (check.wallet.nonceLatest !== expectedNonce) {
+        throw new Error(
+          `generic watcher nonce conflict: observed=${check.wallet.nonceLatest}, expected=${expectedNonce}`,
+        )
+      }
+    }
+    const currentSelection = await selectedCandidates({
+      opportunityId: check.candidate.opportunityId,
+      limit: opportunityId ? 32 : RUNTIME_CONFIG.genericPreflightCandidates,
+    })
+    if (!currentSelection.candidates.some((candidate) => candidate.opportunityId === check.candidate.opportunityId)) {
       throw new Error('selected route and amount left the positive board set after preflight')
     }
     const [latest, pending, block, gasPrice, executorUsdgBefore, walletEthBefore, boundary] = await Promise.all([
@@ -926,10 +1051,28 @@ async function execute() {
       functionName: 'execute',
       args: protectedArgs,
     })
+    const assertStillAuthorized = authorizationId
+      ? () => {
+          if (abortRequested?.()) stopForPolicy('stop requested before signing')
+          const liveArm = readJson(GENERIC_WATCH_ARM_PATH)
+          if (liveArm?.authorizationId !== authorizationId) {
+            throw new Error('generic watcher authorization id changed during exact preflight')
+          }
+          assertGenericWatchArm(liveArm, readJson(STATE_PATH), { allowCurrentExactPreflight: true })
+          if (
+            check.candidate.amountIn > BigInt(liveArm.maxPrincipalUsdgWei) ||
+            check.candidate.screenedNetProfit < BigInt(liveArm.minimumScreenedNetProfitUsdgWei)
+          ) {
+            throw new Error('triggered candidate is outside the live generic watcher authorization')
+          }
+        }
+      : null
+    if (assertStillAuthorized) assertStillAuthorized()
     const plan = mutationPlan('generic-execute', {
       chainId: CHAIN_ID,
       wallet: WALLET,
       executor: check.executor,
+      authorizationId,
       nonce: latest,
       to: check.executor,
       value: 0n,
@@ -955,26 +1098,35 @@ async function execute() {
       executorUsdgBefore,
       walletEthBefore,
     })
-    const { hash, receipt } = await signBroadcastWait(plan, {
-      chainId: CHAIN_ID,
-      type: 'eip1559',
-      to: check.executor,
-      data,
-      gas: economics.gasLimit,
-      maxFeePerGas: economics.maxFeePerGas,
-      maxPriorityFeePerGas: 0n,
-      nonce: latest,
-    })
+    const { hash, receipt } = await signBroadcastWait(
+      plan,
+      {
+        chainId: CHAIN_ID,
+        type: 'eip1559',
+        to: check.executor,
+        data,
+        gas: economics.gasLimit,
+        maxFeePerGas: economics.maxFeePerGas,
+        maxPriorityFeePerGas: 0n,
+        nonce: latest,
+      },
+      assertStillAuthorized,
+    )
     if (receipt.status !== 'success') {
       const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
       const state = readJson(STATE_PATH)
       state.status = 'halted_after_revert'
       writeProtectedJson(STATE_PATH, state)
       appendAudit('generic_execution_reverted', { hash, gasSpentWei, blockNumber: receipt.blockNumber })
-      appendAudit('mutation_reverted', { kind: plan.kind, hash, planHash: plan.planHash, gasSpentWei })
+      appendAudit('mutation_reverted', {
+        kind: plan.kind,
+        authorizationId: plan.authorizationId || null,
+        hash,
+        planHash: plan.planHash,
+        gasSpentWei,
+      })
       throw new Error(`generic execution reverted and the lane is halted: ${hash}`)
     }
-    const record = await executionStateFromReceipt(plan, hash, receipt, check.compiled)
     const walletEthAfter = await publicClient.getBalance({ address: WALLET })
     const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
     if (walletEthBefore - walletEthAfter !== gasSpentWei) {
@@ -991,6 +1143,7 @@ async function execute() {
         'receipt succeeded but wallet ETH delta does not equal canonical gas; investigate external wallet use',
       )
     }
+    const record = await executionStateFromReceipt(plan, hash, receipt, check.compiled)
     console.log(
       stringify({
         status: 'GENERIC_LIVE_EXECUTION_CONFIRMED',
@@ -1053,6 +1206,7 @@ function assertRawMatchesPlan(parsed, plan) {
 
 async function reconcile() {
   assertLiveTransport(RUNTIME_CONFIG)
+  assertGenericWatcherInactive()
   assertFixedSignerInactive()
   const release = acquireWalletLock()
   try {
@@ -1123,6 +1277,7 @@ async function reconcile() {
       appendAudit('generic_mutation_reverted', { kind: mutation.kind, hash: mutation.hash, gasSpentWei })
       appendAudit('mutation_reverted', {
         kind: mutation.kind,
+        authorizationId: plan.authorizationId || null,
         hash: mutation.hash,
         planHash: plan.planHash,
         gasSpentWei,
@@ -1216,6 +1371,7 @@ async function withdrawalStateFromReceipt(plan, hash, receipt, compiled, reconci
 async function withdrawAll() {
   const release = acquireWalletLock()
   try {
+    assertGenericWatcherInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     assertFixedSignerInactive()
     const unresolved = latestUnresolved()
@@ -1286,6 +1442,768 @@ async function withdrawAll() {
   }
 }
 
+function configuredWatchMinimumScreenedNet() {
+  const configured = RUNTIME_CONFIG.genericWatchMinScreenedNetUsdg || RUNTIME_CONFIG.genericMinNetUsdg
+  return nonNegativeUnits(configured, 6, 'generic watcher minimum screened net profit')
+}
+
+function stopForPolicy(reason) {
+  const error = new Error(`generic watch authorization stopped: ${reason}`)
+  error.watchPolicyStop = true
+  throw error
+}
+
+function genericWatchUsage(arm, deploymentState, records = readAuditRecords()) {
+  const completedExecutions = (deploymentState?.executions || []).length - Number(arm.baselineExecutionCount)
+  if (!Number.isSafeInteger(completedExecutions) || completedExecutions < 0) {
+    throw new Error('generic watch execution baseline is ahead of the deployment ledger')
+  }
+  const authorized = records.filter((item) => item.authorizationId === arm.authorizationId)
+  return {
+    confirmedExecutions: completedExecutions,
+    attempts: authorized.filter((item) => item.event === 'mutation_signed' && item.kind === 'generic-execute').length,
+    failedGasWei: authorized
+      .filter((item) => item.event === 'mutation_reverted' && item.kind === 'generic-execute')
+      .reduce((total, item) => total + BigInt(item.gasSpentWei || 0), 0n),
+    exactPreflights: authorized.filter((item) => item.event === 'generic_watch_exact_preflight_started').length,
+    attemptedOpportunityIds: new Set(
+      authorized
+        .filter((item) => item.event === 'generic_watch_exact_preflight_started' && item.opportunityId)
+        .map((item) => item.opportunityId),
+    ),
+  }
+}
+
+function genericWatchAuthorizationCommitment(arm) {
+  return {
+    schemaVersion: arm.schemaVersion,
+    mode: arm.mode,
+    policyVersion: arm.policyVersion,
+    issuedAt: arm.issuedAt,
+    expiresAt: arm.expiresAt,
+    chainId: arm.chainId,
+    wallet: arm.wallet,
+    executor: arm.executor,
+    sourceHash: arm.sourceHash,
+    runtimeCodeHash: arm.runtimeCodeHash,
+    maxPrincipalUsdgWei: arm.maxPrincipalUsdgWei,
+    minimumGrossProfitUsdgWei: arm.minimumGrossProfitUsdgWei,
+    minimumNetProfitUsdgWei: arm.minimumNetProfitUsdgWei,
+    minimumScreenedNetProfitUsdgWei: arm.minimumScreenedNetProfitUsdgWei,
+    profitRetentionBps: arm.profitRetentionBps,
+    walletEthReserveWei: arm.walletEthReserveWei,
+    maxConfirmedExecutions: arm.maxConfirmedExecutions,
+    maxAttempts: arm.maxAttempts,
+    maxExactPreflights: arm.maxExactPreflights,
+    maxFailedGasWei: arm.maxFailedGasWei,
+    baselineNonce: arm.baselineNonce,
+    baselineExecutionCount: arm.baselineExecutionCount,
+    pollIntervalMs: arm.pollIntervalMs,
+    idleRpcBehavior: arm.idleRpcBehavior,
+    escalationRpcBehavior: arm.escalationRpcBehavior,
+    rpcSource: arm.rpcSource,
+    principalUsdgWeiAtArm: arm.principalUsdgWeiAtArm,
+    walletEthWeiAtArm: arm.walletEthWeiAtArm,
+  }
+}
+
+function genericWatchAuthorizationId(arm) {
+  return keccak256(toHex(stableStringify(genericWatchAuthorizationCommitment(arm))))
+}
+
+function assertGenericWatchArm(arm, deploymentState, { allowCurrentExactPreflight = false } = {}) {
+  if (!arm || arm.status !== 'ARMED') stopForPolicy('not armed')
+  if (
+    arm.schemaVersion !== 1 ||
+    arm.mode !== 'AUTO_POLICY' ||
+    arm.policyVersion !== 'generic-v2-loopback-escalation-v1'
+  ) {
+    throw new Error('generic watch authorization policy version mismatch')
+  }
+  if (genericWatchAuthorizationId(arm) !== arm.authorizationId) {
+    throw new Error('generic watch authorization commitment mismatch')
+  }
+  if (arm.chainId !== CHAIN_ID || arm.wallet?.toLowerCase() !== WALLET.toLowerCase()) {
+    throw new Error('generic watch authorization chain or wallet mismatch')
+  }
+  if (
+    arm.executor?.toLowerCase() !== deploymentState?.executor?.toLowerCase() ||
+    arm.sourceHash !== deploymentState?.sourceHash ||
+    arm.runtimeCodeHash !== deploymentState?.runtimeCodeHash
+  ) {
+    throw new Error('generic watch authorization is not bound to the current deployment')
+  }
+  if (!['deployed', 'live_gross_validated'].includes(deploymentState.status)) {
+    throw new Error(`generic executor state ${deploymentState.status} is not eligible for automated execution`)
+  }
+  const configuredMinimumNet = nonNegativeUnits(RUNTIME_CONFIG.genericMinNetUsdg, 6, 'minimum net profit')
+  const configuredReserve = nonNegativeUnits(RUNTIME_CONFIG.genericMinEthReserve, 18, 'minimum ETH reserve')
+  if (
+    BigInt(arm.minimumNetProfitUsdgWei) !== configuredMinimumNet ||
+    BigInt(arm.walletEthReserveWei) !== configuredReserve ||
+    Number(arm.profitRetentionBps) !== RUNTIME_CONFIG.genericProfitRetentionBps
+  ) {
+    throw new Error('generic watcher runtime economics differ from the signed authorization scope')
+  }
+  if (
+    BigInt(arm.maxPrincipalUsdgWei) <= 0n ||
+    BigInt(arm.maxPrincipalUsdgWei) > MAXIMUM_AMOUNT_IN ||
+    BigInt(arm.minimumGrossProfitUsdgWei) !== MINIMUM_GROSS_PROFIT ||
+    BigInt(arm.minimumScreenedNetProfitUsdgWei) < configuredMinimumNet
+  ) {
+    throw new Error('generic watch authorization has an invalid economic boundary')
+  }
+  const usage = genericWatchUsage(arm, deploymentState)
+  const budget = evaluateGenericArmBudget(arm, usage)
+  if (
+    !budget.allowed &&
+    !(
+      allowCurrentExactPreflight &&
+      budget.reason === 'exact-preflight-limit' &&
+      usage.exactPreflights === arm.maxExactPreflights
+    )
+  ) {
+    stopForPolicy(budget.reason)
+  }
+  return usage
+}
+
+async function armGenericWatcher() {
+  const releaseWatch = acquireGenericWatchLock()
+  const releaseWallet = acquireWalletLock()
+  try {
+    assertLiveTransport(RUNTIME_CONFIG)
+    assertFixedSignerInactive()
+    const existing = readJson(GENERIC_WATCH_ARM_PATH)
+    if (existing?.status === 'ARMED') {
+      const existingExpiry = Date.parse(existing.expiresAt)
+      if (!Number.isFinite(existingExpiry)) throw new Error('existing generic watcher authorization has invalid expiry')
+      if (Date.now() < existingExpiry) {
+        throw new Error('an unexpired generic watcher authorization already exists; disarm it before replacing it')
+      }
+    }
+    const unresolved = latestUnresolved()
+    if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
+    await assertCanonicalBase()
+    const compiled = compileGenericContract()
+    const deploymentState = readJson(STATE_PATH)
+    const executor = await assertGenericDeployment(deploymentState, compiled)
+    loadAccount()
+    const [wallet, principal] = await Promise.all([
+      walletSnapshot(),
+      publicClient.readContract({
+        address: GENERIC_USDG,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [executor],
+      }),
+    ])
+    if (wallet.nonceLatest !== wallet.noncePending) throw new Error('wallet has a pending nonce')
+    const walletEthReserve = nonNegativeUnits(RUNTIME_CONFIG.genericMinEthReserve, 18, 'minimum ETH reserve')
+    if (wallet.ethBalance <= walletEthReserve) throw new Error('wallet ETH is at or below the authorized gas reserve')
+    if (principal <= 0n) throw new Error('generic executor has no USDG principal')
+    const minimumNetProfit = nonNegativeUnits(RUNTIME_CONFIG.genericMinNetUsdg, 6, 'minimum net profit')
+    const minimumScreenedNetProfit = configuredWatchMinimumScreenedNet()
+    if (minimumScreenedNetProfit < minimumNetProfit) {
+      throw new Error('watcher screened-net gate must be at least the exact minimum-net floor')
+    }
+    const maxPrincipal = principal < MAXIMUM_AMOUNT_IN ? principal : MAXIMUM_AMOUNT_IN
+    const issuedAt = new Date()
+    const expiresAt = new Date(issuedAt.getTime() + RUNTIME_CONFIG.genericWatchArmHours * 60 * 60 * 1_000)
+    const scope = {
+      policyVersion: 'generic-v2-loopback-escalation-v1',
+      chainId: CHAIN_ID,
+      wallet: WALLET,
+      executor,
+      sourceHash: deploymentState.sourceHash,
+      runtimeCodeHash: deploymentState.runtimeCodeHash,
+      maxPrincipalUsdgWei: maxPrincipal.toString(),
+      minimumGrossProfitUsdgWei: MINIMUM_GROSS_PROFIT.toString(),
+      minimumNetProfitUsdgWei: minimumNetProfit.toString(),
+      minimumScreenedNetProfitUsdgWei: minimumScreenedNetProfit.toString(),
+      profitRetentionBps: RUNTIME_CONFIG.genericProfitRetentionBps,
+      walletEthReserveWei: walletEthReserve.toString(),
+      maxConfirmedExecutions: RUNTIME_CONFIG.genericWatchMaxExecutions,
+      maxAttempts: RUNTIME_CONFIG.maxAttempts,
+      maxExactPreflights: RUNTIME_CONFIG.genericWatchMaxPreflights,
+      maxFailedGasWei: RUNTIME_CONFIG.maxFailedGasWei.toString(),
+      expiresAt: expiresAt.toISOString(),
+    }
+    const authorization = {
+      schemaVersion: 1,
+      mode: 'AUTO_POLICY',
+      issuedAt: issuedAt.toISOString(),
+      ...scope,
+      baselineNonce: wallet.nonceLatest,
+      baselineExecutionCount: (deploymentState.executions || []).length,
+      pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
+      idleRpcBehavior: 'LOOPBACK_BOARD_ONLY',
+      escalationRpcBehavior: 'ONE_TRIGGERED_CANDIDATE_EXACT_PREFLIGHT_THEN_SIGN',
+      rpcSource: RUNTIME_CONFIG.rpcSource,
+      principalUsdgWeiAtArm: principal.toString(),
+      walletEthWeiAtArm: wallet.ethBalance.toString(),
+    }
+    const arm = {
+      ...authorization,
+      authorizationId: genericWatchAuthorizationId(authorization),
+      status: 'ARMED',
+      reason: 'user explicitly approved autonomous generic-v2 live execution in the current Codex task',
+    }
+    writeProtectedJson(GENERIC_WATCH_ARM_PATH, arm)
+    const watchState = {
+      schemaVersion: 1,
+      status: 'ARMED_NOT_RUNNING',
+      authorizationId: arm.authorizationId,
+      wallet: WALLET,
+      executor,
+      updatedAt: new Date().toISOString(),
+    }
+    writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+    appendAudit('generic_watch_armed', {
+      authorizationId: arm.authorizationId,
+      executor,
+      expiresAt: arm.expiresAt,
+      maxPrincipalUsdgWei: arm.maxPrincipalUsdgWei,
+      minimumNetProfitUsdgWei: arm.minimumNetProfitUsdgWei,
+      minimumScreenedNetProfitUsdgWei: arm.minimumScreenedNetProfitUsdgWei,
+      maxConfirmedExecutions: arm.maxConfirmedExecutions,
+      maxAttempts: arm.maxAttempts,
+      maxExactPreflights: arm.maxExactPreflights,
+      maxFailedGasWei: arm.maxFailedGasWei,
+      baselineNonce: arm.baselineNonce,
+      baselineExecutionCount: arm.baselineExecutionCount,
+    })
+    console.log(
+      stringify({
+        status: 'GENERIC_WATCH_ARMED',
+        authorizationId: arm.authorizationId,
+        executor,
+        expiresAt: arm.expiresAt,
+        principalCapUsdg: formatUnits(maxPrincipal, 6),
+        minimumNetProfitUsdg: formatUnits(minimumNetProfit, 6),
+        minimumScreenedNetProfitUsdg: formatUnits(minimumScreenedNetProfit, 6),
+        maxConfirmedExecutions: arm.maxConfirmedExecutions,
+        maxSignedAttempts: arm.maxAttempts,
+        maxExactPreflights: arm.maxExactPreflights,
+        maxFailedGasWei: arm.maxFailedGasWei,
+        idleRpcBehavior: arm.idleRpcBehavior,
+      }),
+    )
+    return arm
+  } finally {
+    releaseWallet()
+    releaseWatch()
+  }
+}
+
+function boardTransportFailure(error) {
+  return isTransientRpcError(error) || /board snapshot HTTP (?:429|5\d\d)/i.test(errorText(error))
+}
+
+async function watchGeneric() {
+  const release = acquireGenericWatchLock()
+  let stopRequested = false
+  let watchState = null
+  const requestStop = () => {
+    stopRequested = true
+  }
+  process.once('SIGTERM', requestStop)
+  process.once('SIGINT', requestStop)
+  try {
+    assertLiveTransport(RUNTIME_CONFIG)
+    assertFixedSignerInactive()
+    const arm = readJson(GENERIC_WATCH_ARM_PATH)
+    const deploymentState = readJson(STATE_PATH)
+    const usage = assertGenericWatchArm(arm, deploymentState)
+    const unresolved = latestUnresolved()
+    if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
+    await assertCanonicalBase()
+    const compiled = compileGenericContract()
+    const executor = await assertGenericDeployment(deploymentState, compiled)
+    loadAccount()
+    const [wallet, principal] = await Promise.all([
+      walletSnapshot(),
+      publicClient.readContract({
+        address: GENERIC_USDG,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [executor],
+      }),
+    ])
+    const expectedNonce = Number(arm.baselineNonce) + usage.confirmedExecutions
+    if (wallet.nonceLatest !== wallet.noncePending || wallet.nonceLatest !== expectedNonce || principal < 1n) {
+      throw new Error(
+        `generic watcher startup state mismatch: latest/pending/expected=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}, principal=${principal}`,
+      )
+    }
+    const startedAt = new Date().toISOString()
+    watchState = {
+      schemaVersion: 1,
+      status: 'RUNNING',
+      pid: process.pid,
+      authorizationId: arm.authorizationId,
+      wallet: WALLET,
+      executor,
+      startedAt,
+      updatedAt: startedAt,
+      triggerMode: 'LOOPBACK_BOARD_THEN_TARGETED_EXACT_PREFLIGHT',
+      idleRpcBehavior: 'NONE',
+      pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
+      processedBoardGenerations: 0,
+      consecutiveBoardErrors: 0,
+      consecutiveExecutionRpcErrors: 0,
+      completedExecutionsThisArm: usage.confirmedExecutions,
+      exactPreflightsThisArm: usage.exactPreflights,
+      signedAttemptsThisArm: usage.attempts,
+      lastDecision: 'STARTING',
+    }
+    writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+    appendAudit('generic_watch_started', {
+      authorizationId: arm.authorizationId,
+      pid: process.pid,
+      executor,
+      baselineNonce: arm.baselineNonce,
+      idleRpcBehavior: watchState.idleRpcBehavior,
+      triggerMode: watchState.triggerMode,
+    })
+    console.log(
+      stringify({
+        status: 'GENERIC_WATCH_RUNNING',
+        authorizationId: arm.authorizationId,
+        pid: process.pid,
+        executor,
+        expiresAt: arm.expiresAt,
+        idleRpcBehavior: watchState.idleRpcBehavior,
+      }),
+    )
+
+    let lastBoardGeneratedAt = null
+    while (!stopRequested) {
+      const loopStartedAt = Date.now()
+      let phase = 'BOARD'
+      try {
+        const currentArm = readJson(GENERIC_WATCH_ARM_PATH)
+        const currentDeploymentState = readJson(STATE_PATH)
+        const currentUsage = assertGenericWatchArm(currentArm, currentDeploymentState)
+        const unresolvedNow = latestUnresolved()
+        if (unresolvedNow) throw new Error(`unresolved ${unresolvedNow.kind} mutation ${unresolvedNow.hash}`)
+
+        const snapshot = await loadBoardSnapshot()
+        if (!snapshot?.generatedAt || !Number.isFinite(Date.parse(snapshot.generatedAt))) {
+          throw new Error('loopback board snapshot has no valid generation timestamp')
+        }
+        if (watchState.consecutiveBoardErrors !== 0) {
+          watchState = {
+            ...watchState,
+            consecutiveBoardErrors: 0,
+            updatedAt: new Date().toISOString(),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+        }
+        if (snapshot.generatedAt === lastBoardGeneratedAt) {
+          await sleep(RUNTIME_CONFIG.genericWatchPollMs)
+          continue
+        }
+        lastBoardGeneratedAt = snapshot.generatedAt
+
+        let candidates = []
+        try {
+          candidates = buildGenericExecutionCandidates(snapshot, {
+            maxAgeMs: RUNTIME_CONFIG.genericMaxQuoteAgeMs,
+            limit: 32,
+          })
+        } catch (error) {
+          if (!isGenericOpportunityMiss(error)) throw error
+        }
+        const candidate = selectGenericWatchCandidate(candidates, {
+          minimumScreenedNetProfit: BigInt(currentArm.minimumScreenedNetProfitUsdgWei),
+          maxPrincipal: BigInt(currentArm.maxPrincipalUsdgWei),
+          attemptedOpportunityIds: currentUsage.attemptedOpportunityIds,
+        })
+        watchState = {
+          ...watchState,
+          status: 'RUNNING',
+          updatedAt: new Date().toISOString(),
+          processedBoardGenerations: watchState.processedBoardGenerations + 1,
+          consecutiveBoardErrors: 0,
+          completedExecutionsThisArm: currentUsage.confirmedExecutions,
+          exactPreflightsThisArm: currentUsage.exactPreflights,
+          signedAttemptsThisArm: currentUsage.attempts,
+          lastBoardGeneratedAt,
+          lastDecision: candidate ? 'SCREEN_GATE_PASSED' : 'NO_ELIGIBLE_SCREEN',
+          lastCandidate: candidate
+            ? {
+                opportunityId: candidate.opportunityId,
+                candidateHash: candidate.candidateHash,
+                route: candidate.routeLabel,
+                amountInUsdg: formatUnits(candidate.amountIn, 6),
+                screenedNetUsdg: formatUnits(candidate.screenedNetProfit, 6),
+                quoteBlockNumber: candidate.quoteBlockNumber.toString(),
+              }
+            : null,
+          lastLoopLatencyMs: Date.now() - loopStartedAt,
+        }
+        writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+        if (!candidate) {
+          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+          continue
+        }
+
+        appendAudit('generic_watch_exact_preflight_started', {
+          authorizationId: currentArm.authorizationId,
+          opportunityId: candidate.opportunityId,
+          candidateHash: candidate.candidateHash,
+          route: candidate.routeLabel,
+          amountIn: candidate.amountIn,
+          screenedNetProfit: candidate.screenedNetProfit,
+          quoteBlockNumber: candidate.quoteBlockNumber,
+          quoteBlockHash: candidate.quoteBlockHash,
+        })
+        watchState = {
+          ...watchState,
+          status: 'EXECUTING',
+          updatedAt: new Date().toISOString(),
+          exactPreflightsThisArm: currentUsage.exactPreflights + 1,
+          lastDecision: 'EXACT_PREFLIGHT_RUNNING',
+        }
+        writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+        phase = 'EXECUTION'
+        const record = await execute({
+          opportunityId: candidate.opportunityId,
+          authorizationId: currentArm.authorizationId,
+          abortRequested: () => stopRequested,
+        })
+        const confirmedState = readJson(STATE_PATH)
+        const confirmedUsage = genericWatchUsage(currentArm, confirmedState)
+        watchState = {
+          ...watchState,
+          status: 'RUNNING',
+          updatedAt: new Date().toISOString(),
+          completedExecutionsThisArm: confirmedUsage.confirmedExecutions,
+          exactPreflightsThisArm: confirmedUsage.exactPreflights,
+          signedAttemptsThisArm: confirmedUsage.attempts,
+          consecutiveExecutionRpcErrors: 0,
+          lastDecision: 'CONFIRMED_EXECUTION',
+          lastTransaction: record.hash,
+          lastConfirmedNetProfitUsdg:
+            record.netProfitUsdgWei === null ? null : formatUnits(BigInt(record.netProfitUsdgWei), 6),
+        }
+        writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+        appendAudit('generic_watch_execution_confirmed', {
+          authorizationId: currentArm.authorizationId,
+          hash: record.hash,
+          opportunityId: candidate.opportunityId,
+          completedExecutionsThisArm: confirmedUsage.confirmedExecutions,
+          netProfitUsdgWei: record.netProfitUsdgWei,
+        })
+      } catch (error) {
+        const unresolvedNow = latestUnresolved()
+        if (error.watchPolicyStop) {
+          watchState = {
+            ...watchState,
+            status: 'STOPPED_POLICY',
+            reason: error.message,
+            updatedAt: new Date().toISOString(),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          appendAudit('generic_watch_stopped_policy', {
+            authorizationId: watchState.authorizationId,
+            reason: error.message,
+          })
+          return watchState
+        }
+        if (unresolvedNow) {
+          watchState = {
+            ...watchState,
+            status: 'HALTED_UNKNOWN',
+            reason: errorText(error),
+            transaction: unresolvedNow.hash,
+            updatedAt: new Date().toISOString(),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          appendAudit('generic_watch_halted_unknown', {
+            authorizationId: watchState.authorizationId,
+            hash: unresolvedNow.hash,
+            reason: errorText(error),
+          })
+          return watchState
+        }
+        if (isGenericOpportunityMiss(error)) {
+          watchState = {
+            ...watchState,
+            status: 'RUNNING',
+            updatedAt: new Date().toISOString(),
+            consecutiveExecutionRpcErrors: 0,
+            lastDecision: 'CANDIDATE_REJECTED_EXACT',
+            reason: errorText(error),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          appendAudit('generic_watch_candidate_rejected_exact', {
+            authorizationId: watchState.authorizationId,
+            opportunityId: watchState.lastCandidate?.opportunityId || null,
+            reason: errorText(error),
+          })
+        } else if (boardTransportFailure(error)) {
+          const counter = phase === 'BOARD' ? 'consecutiveBoardErrors' : 'consecutiveExecutionRpcErrors'
+          const consecutiveErrors = Number(watchState?.[counter] || 0) + 1
+          watchState = {
+            ...watchState,
+            status:
+              consecutiveErrors >= RUNTIME_CONFIG.genericWatchMaxConsecutiveErrors ? 'HALTED_RPC' : 'DEGRADED_RPC',
+            updatedAt: new Date().toISOString(),
+            [counter]: consecutiveErrors,
+            lastDecision: 'RPC_ERROR',
+            reason: errorText(error),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          appendAudit('generic_watch_rpc_error', {
+            authorizationId: watchState.authorizationId,
+            consecutiveErrors,
+            reason: errorText(error),
+          })
+          if (watchState.status === 'HALTED_RPC') return watchState
+          await sleep(Math.min(30_000, RUNTIME_CONFIG.genericWatchPollMs * consecutiveErrors))
+        } else if (/nonce/i.test(errorText(error))) {
+          watchState = {
+            ...watchState,
+            status: 'HALTED_NONCE_CONFLICT',
+            updatedAt: new Date().toISOString(),
+            lastDecision: 'NONCE_CONFLICT',
+            reason: errorText(error),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          appendAudit('generic_watch_halted_nonce_conflict', {
+            authorizationId: watchState.authorizationId,
+            reason: errorText(error),
+          })
+          return watchState
+        } else {
+          watchState = {
+            ...watchState,
+            status: 'HALTED_INVARIANT',
+            updatedAt: new Date().toISOString(),
+            lastDecision: 'INVARIANT_FAILED',
+            reason: errorText(error),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          appendAudit('generic_watch_halted_invariant', {
+            authorizationId: watchState.authorizationId,
+            reason: errorText(error),
+          })
+          return watchState
+        }
+      }
+      await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+    }
+
+    watchState = { ...watchState, status: 'STOPPED_BY_SIGNAL', updatedAt: new Date().toISOString() }
+    writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+    appendAudit('generic_watch_stopped_signal', { authorizationId: watchState.authorizationId })
+    return watchState
+  } catch (error) {
+    const unresolved = latestUnresolved()
+    watchState = {
+      ...(watchState || {
+        schemaVersion: 1,
+        pid: process.pid,
+        wallet: WALLET,
+        executor: readJson(STATE_PATH)?.executor || null,
+        authorizationId: readJson(GENERIC_WATCH_ARM_PATH)?.authorizationId || null,
+      }),
+      status: error.watchPolicyStop ? 'STOPPED_POLICY' : unresolved ? 'HALTED_UNKNOWN' : 'HALTED_STARTUP',
+      reason: errorText(error),
+      transaction: unresolved?.hash || null,
+      updatedAt: new Date().toISOString(),
+    }
+    writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+    appendAudit('generic_watch_startup_stopped', {
+      authorizationId: watchState.authorizationId,
+      status: watchState.status,
+      reason: watchState.reason,
+      unresolvedHash: unresolved?.hash || null,
+    })
+    return watchState
+  } finally {
+    process.removeListener('SIGTERM', requestStop)
+    process.removeListener('SIGINT', requestStop)
+    release()
+  }
+}
+
+async function genericWatchStatus() {
+  const arm = readJson(GENERIC_WATCH_ARM_PATH)
+  const runtime = readJson(GENERIC_WATCH_STATE_PATH)
+  const deploymentState = readJson(STATE_PATH)
+  const processState = genericWatchLockHolder()
+  let usage = null
+  if (arm && deploymentState) {
+    try {
+      const observed = genericWatchUsage(arm, deploymentState)
+      usage = {
+        confirmedExecutions: observed.confirmedExecutions,
+        signedAttempts: observed.attempts,
+        exactPreflights: observed.exactPreflights,
+        failedGasWei: observed.failedGasWei.toString(),
+      }
+    } catch (error) {
+      usage = { error: errorText(error) }
+    }
+  }
+  let board = null
+  try {
+    const selected = await boardCandidates({ limit: 32 })
+    const candidate = selected.candidates[0]
+    board = {
+      evidence: 'LOOPBACK_BOARD_SCREEN_ONLY_NO_CHAIN_READBACK',
+      generatedAt: selected.snapshot.generatedAt,
+      candidateCount: selected.candidates.length,
+      top: {
+        opportunityId: candidate.opportunityId,
+        route: candidate.routeLabel,
+        amountInUsdg: formatUnits(candidate.amountIn, 6),
+        screenedNetUsdg: formatUnits(candidate.screenedNetProfit, 6),
+      },
+    }
+  } catch (error) {
+    board = { status: 'NO_FRESH_ELIGIBLE_BOARD_SCREEN', error: errorText(error) }
+  }
+  let authorization = null
+  if (arm) {
+    try {
+      authorization = {
+        id: arm.authorizationId,
+        status: arm.status,
+        issuedAt: arm.issuedAt,
+        expiresAt: arm.expiresAt,
+        maxPrincipalUsdg: formatUnits(BigInt(arm.maxPrincipalUsdgWei), 6),
+        minimumNetProfitUsdg: formatUnits(BigInt(arm.minimumNetProfitUsdgWei), 6),
+        minimumScreenedNetProfitUsdg: formatUnits(BigInt(arm.minimumScreenedNetProfitUsdgWei), 6),
+        maxConfirmedExecutions: arm.maxConfirmedExecutions,
+        maxSignedAttempts: arm.maxAttempts,
+        maxExactPreflights: arm.maxExactPreflights,
+        maxFailedGasWei: arm.maxFailedGasWei,
+      }
+    } catch (error) {
+      authorization = {
+        id: arm.authorizationId || null,
+        status: arm.status || 'INVALID',
+        error: `INVALID_AUTHORIZATION_READBACK: ${errorText(error)}`,
+      }
+    }
+  }
+  const output = {
+    status: runtime?.status || 'NOT_CONFIGURED',
+    evidence: 'LOCAL_RUNTIME_AND_AUTHORIZATION_READBACK_NO_CHAIN_QUERY',
+    process: processState,
+    authorization,
+    usage,
+    runtime,
+    deployment: deploymentState
+      ? {
+          status: deploymentState.status,
+          executor: deploymentState.executor,
+          confirmedExecutions: (deploymentState.executions || []).length,
+        }
+      : null,
+    unresolvedMutation: latestUnresolved()
+      ? { kind: latestUnresolved().kind || null, hash: latestUnresolved().hash }
+      : null,
+    board,
+  }
+  console.log(stringify(output))
+  return output
+}
+
+async function disarmGenericWatcher() {
+  const arm = readJson(GENERIC_WATCH_ARM_PATH)
+  if (!arm) throw new Error('no generic watcher authorization exists')
+  arm.status = 'DISARMED'
+  arm.disarmedAt = new Date().toISOString()
+  writeProtectedJson(GENERIC_WATCH_ARM_PATH, arm)
+  const holder = genericWatchLockHolder()
+  const runtime = readJson(GENERIC_WATCH_STATE_PATH)
+  writeProtectedJson(GENERIC_WATCH_STATE_PATH, {
+    ...(runtime || { schemaVersion: 1, wallet: WALLET, executor: readJson(STATE_PATH)?.executor || null }),
+    status: holder.alive ? 'DISARM_REQUESTED' : 'DISARMED',
+    authorizationId: arm.authorizationId,
+    updatedAt: new Date().toISOString(),
+  })
+  if (holder.alive && holder.pid !== process.pid) process.kill(holder.pid, 'SIGTERM')
+  appendAudit('generic_watch_disarmed', {
+    authorizationId: arm.authorizationId,
+    watcherPid: holder.pid,
+    watcherWasAlive: holder.alive,
+  })
+  const output = {
+    status: 'GENERIC_WATCH_DISARMED',
+    authorizationId: arm.authorizationId,
+    watcherPid: holder.pid,
+    watcherWasAlive: holder.alive,
+  }
+  console.log(stringify(output))
+  return output
+}
+
+async function genericRuntimeVerify() {
+  assertLiveTransport(RUNTIME_CONFIG)
+  assertFixedSignerInactive()
+  const unresolved = latestUnresolved()
+  if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
+  await assertCanonicalBase()
+  const compiled = compileGenericContract()
+  const deploymentState = readJson(STATE_PATH)
+  const executor = await assertGenericDeployment(deploymentState, compiled)
+  const [wallet, principal, board] = await Promise.all([
+    walletSnapshot(),
+    publicClient.readContract({
+      address: GENERIC_USDG,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [executor],
+    }),
+    loadBoardSnapshot(),
+  ])
+  if (wallet.nonceLatest !== wallet.noncePending) throw new Error('wallet latest and pending nonce have not converged')
+  if (
+    board?.schemaVersion !== 2 ||
+    board.service !== 'manga-opportunity-board' ||
+    board.mode !== 'READ_ONLY_NO_SIGNING_NO_BROADCAST' ||
+    board.selection?.executionAuthorized !== false
+  ) {
+    throw new Error('loopback opportunity board identity or read-only boundary is invalid')
+  }
+  const arm = readJson(GENERIC_WATCH_ARM_PATH)
+  const output = {
+    status: 'RUNTIME_VERIFIED_READY_FOR_GENERIC_ARM',
+    evidence: 'CANONICAL_CHAIN_AND_LOOPBACK_BOARD_READBACK_NO_SIGNATURE_NO_BROADCAST',
+    releaseSha: process.env.MANGA_RELEASE_SHA || 'UNKNOWN',
+    chainId: CHAIN_ID,
+    rpcSource: RUNTIME_CONFIG.rpcSource,
+    wallet: WALLET,
+    walletEth: formatEther(wallet.ethBalance),
+    nonceLatest: wallet.nonceLatest,
+    noncePending: wallet.noncePending,
+    executor,
+    executorUsdg: formatUnits(principal, 6),
+    sourceHash: compiled.sourceHash,
+    runtimeCodeHash: deploymentState.runtimeCodeHash,
+    confirmedExecutions: (deploymentState.executions || []).length,
+    unresolvedMutation: null,
+    board: {
+      service: board.service,
+      mode: board.mode,
+      generatedAt: board.generatedAt,
+      status: board.health?.status || null,
+      signerLoaded: board.health?.signerLoaded,
+      executionAuthorized: board.selection.executionAuthorized,
+    },
+    authorization: arm ? { id: arm.authorizationId, status: arm.status, expiresAt: arm.expiresAt } : null,
+  }
+  appendAudit('generic_runtime_verified', output)
+  console.log(stringify(output))
+  return output
+}
+
 async function plan() {
   await assertCanonicalBase()
   const { snapshot, candidates } = await selectedCandidates()
@@ -1312,7 +2230,7 @@ async function status() {
   const unresolved = latestUnresolved()
   let board = null
   try {
-    const selected = await selectedCandidates()
+    const selected = await boardCandidates()
     const candidate = selected.candidates[0]
     board = {
       candidateCount: selected.candidates.length,
@@ -1343,12 +2261,21 @@ async function main() {
   if (command === 'compile') return console.log(stringify(compileGenericContract()))
   if (command === 'plan') return plan()
   if (command === 'status') return status()
+  if (command === 'runtime-verify') return genericRuntimeVerify()
   if (command === 'deploy-preflight') return deployPreflight()
   if (command === 'deploy') return deploy()
   if (command === 'preflight') return executionPreflight()
   if (command === 'execute') return execute()
   if (command === 'reconcile') return reconcile()
   if (command === 'withdraw-all') return withdrawAll()
+  if (command === 'watch-arm') return armGenericWatcher()
+  if (command === 'watch') {
+    const result = await watchGeneric()
+    if (result.status.startsWith('HALTED')) process.exitCode = 1
+    return result
+  }
+  if (command === 'watch-status') return genericWatchStatus()
+  if (command === 'watch-disarm') return disarmGenericWatcher()
   throw new Error(`unknown generic command: ${command}`)
 }
 

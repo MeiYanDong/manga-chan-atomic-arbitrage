@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-09-05
+
+- Add an expiring, bounded generic-v2 authorization and autonomous Linux watcher.
+- Keep idle discovery on the signer-free loopback board; use the strategy RPC only for one newly triggered candidate's exact preflight, signing and receipt convergence.
+- Independently cap exact preflights, signed attempts, confirmed executions, failed gas, per-transaction principal and authorization lifetime.
+- Revalidate the authorization immediately before and immediately after signing, and refuse a public RPC in the live mutation lane.
+- Mutually exclude fixed and generic watcher generations in code and systemd while retaining the shared wallet lock and UNKNOWN barrier.
+- Require receipt, event, executor balance, wallet Gas delta and contemporaneous native mark before a generic execution becomes a terminal economic effect.
+- Add hardened one-shot deployment and arm units plus a persistent generic watcher unit.
+
 ## 0.3.0 — 2026-09-05
 
 - Add a typed generic PAIR executor for stock, AI, meme and other quote assets without arbitrary call targets.

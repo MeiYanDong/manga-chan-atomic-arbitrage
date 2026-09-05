@@ -45,7 +45,7 @@ test('SSH access permits only a client-local forward to the loopback board', () 
   assert.match(sshd, /^PasswordAuthentication no$/m)
 })
 
-test('generic signer keeps the board read-only and refuses an active fixed signer lane', () => {
+test('generic signer keeps the board read-only and uses a bounded loopback-escalation watcher', () => {
   const source = fs.readFileSync(path.join(root, 'scripts', 'generic-arb.mjs'), 'utf8')
   const plannerSource = fs.readFileSync(path.join(root, 'src', 'generic-plan.mjs'), 'utf8')
   assert.match(source, /MANGA_GENERIC_BOARD_URL|genericBoardUrl/)
@@ -54,5 +54,33 @@ test('generic signer keeps the board read-only and refuses an active fixed signe
   assert.match(source, /watch-arm\.json/)
   assert.match(source, /watch\.lock/)
   assert.match(source, /assertFixedSignerInactive\(\)/)
-  assert.doesNotMatch(source, /async function watch\(/)
+  assert.match(source, /async function watchGeneric\(/)
+  assert.match(source, /idleRpcBehavior: 'NONE'/)
+  assert.match(source, /generic_watch_exact_preflight_started/)
+})
+
+test('generic systemd services isolate the board and mutually exclude the fixed signer', () => {
+  const watcher = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-generic-watcher.service'), 'utf8')
+  const arm = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-generic-arm.service'), 'utf8')
+  const deploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-generic-deploy.service'), 'utf8')
+  const fixed = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-chan-watcher.service'), 'utf8')
+
+  for (const unit of [watcher, arm, deploy]) {
+    assert.match(unit, /^User=manga-chan-arb$/m)
+    assert.match(unit, /^LoadCredentialEncrypted=manga-private-key:/m)
+    assert.match(unit, /^Environment=MANGA_RUN_DIR=\/var\/lib\/manga-chan-arbitrage$/m)
+    assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-chan-arbitrage$/m)
+  }
+  assert.match(watcher, /^Conflicts=manga-chan-watcher\.service$/m)
+  assert.match(arm, /^Conflicts=manga-chan-watcher\.service$/m)
+  assert.match(watcher, /^ExecStart=\/usr\/bin\/env npm run generic:watch$/m)
+  assert.match(arm, /^Type=oneshot$/m)
+  assert.match(arm, /^ExecStart=\/usr\/bin\/env npm run generic:watch:arm$/m)
+  assert.match(deploy, /^Type=oneshot$/m)
+  assert.match(deploy, /^ExecStart=\/usr\/bin\/env npm run generic:deploy$/m)
+  assert.match(deploy, /^Conflicts=manga-chan-watcher\.service manga-generic-watcher\.service$/m)
+  assert.match(
+    fixed,
+    /^Conflicts=manga-generic-watcher\.service manga-generic-arm\.service manga-generic-deploy\.service$/m,
+  )
 })

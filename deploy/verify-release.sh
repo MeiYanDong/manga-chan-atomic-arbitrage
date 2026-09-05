@@ -12,8 +12,16 @@ source /etc/manga-chan-arbitrage/live.env
 source /etc/manga-chan-arbitrage/release.env
 set +a
 export MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
-runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run runtime:verify
+if systemctl is-active --quiet manga-chan-watcher.service || systemctl is-enabled --quiet manga-chan-watcher.service; then
+  runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run runtime:verify
+else
+  echo "fixed-route runtime verification skipped: service is inactive and disabled"
+fi
+if [[ -f /var/lib/manga-chan-arbitrage/generic-state.json ]]; then
+  runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run generic:runtime-verify
+fi
 systemctl --no-pager --full status manga-chan-watcher.service || true
+systemctl --no-pager --full status manga-generic-watcher.service || true
 
 if [[ -f /etc/manga-opportunity-board/live.env ]]; then
   runuser -u manga-board -- /usr/bin/env -i \

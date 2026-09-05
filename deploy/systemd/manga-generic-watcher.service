@@ -1,8 +1,8 @@
 [Unit]
-Description=MANGA CHAN bounded atomic-arbitrage watcher
-Wants=network-online.target
-After=network-online.target
-Conflicts=manga-generic-watcher.service manga-generic-arm.service manga-generic-deploy.service
+Description=MANGA bounded generic-v2 autonomous arbitrage watcher
+Wants=network-online.target manga-opportunity-board.service
+After=network-online.target manga-opportunity-board.service
+Conflicts=manga-chan-watcher.service
 OnFailure=manga-chan-alert@%n.service
 StartLimitIntervalSec=10min
 StartLimitBurst=3
@@ -18,7 +18,7 @@ Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
 LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
 Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
 UMask=0077
-ExecStart=/usr/bin/env npm run watch
+ExecStart=/usr/bin/env npm run generic:watch
 Restart=on-abnormal
 RestartSec=5s
 TimeoutStopSec=20

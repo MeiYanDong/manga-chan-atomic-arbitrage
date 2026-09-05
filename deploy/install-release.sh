@@ -57,6 +57,9 @@ mv "${config_dir}/release.env.tmp" "${config_dir}/release.env"
 ln -sfn "${release_dir}" "${prefix}/current.next"
 mv -Tf "${prefix}/current.next" "${prefix}/current"
 install -o root -g root -m 0644 deploy/systemd/manga-chan-watcher.service /etc/systemd/system/manga-chan-watcher.service
+install -o root -g root -m 0644 deploy/systemd/manga-generic-arm.service /etc/systemd/system/manga-generic-arm.service
+install -o root -g root -m 0644 deploy/systemd/manga-generic-deploy.service /etc/systemd/system/manga-generic-deploy.service
+install -o root -g root -m 0644 deploy/systemd/manga-generic-watcher.service /etc/systemd/system/manga-generic-watcher.service
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
 systemctl daemon-reload

@@ -64,7 +64,7 @@
     "ordering_evidence": ["UNKNOWN: provider acceptance and gas price do not prove sequencer arrival order"],
     "sample_policy": {
       "minimum_total": 20,
-      "insufficient_behavior": "remain manual and report intervals without claiming opportunity frequency or win probability"
+      "insufficient_behavior": "keep the bounded guarded policy and report intervals without claiming opportunity frequency or win probability"
     }
   },
   "shot_policy": {
@@ -123,7 +123,7 @@
     "source": "manga-opportunity-board schema v2",
     "event_name": "fresh_typed_screened_positive",
     "identity_fields": ["chain_id", "target", "entry_pool", "exit_pool", "amount", "quote_block_hash"],
-    "dedupe_key": "candidate_hash"
+    "dedupe_key": "opportunity_id; candidate_hash remains the immutable payload fingerprint"
   },
   "timing": {
     "opportunity_ttl_ms": 45000,
@@ -211,6 +211,25 @@
         "fallback": "reconcile_before_new_intent"
       },
       {
+        "id": "bounded_autonomous_authorization",
+        "condition": "an unexpired arm matches chain, wallet, executor, source and runtime hashes and remains below principal, exact-preflight, signed-attempt, confirmed-execution and failed-gas budgets at the final signing boundary",
+        "risk_reduced": "unbounded key authority, configuration drift, duplicate signer generations and paid-RPC exhaustion",
+        "false_block_cost": "a valid opportunity is skipped until a fresh explicit arm is issued",
+        "latency_budget_ms": 10,
+        "latency_estimate": {
+          "state": "UNKNOWN",
+          "reason": "local file checks are implemented but signing-host p95 is not yet recorded"
+        },
+        "voi_estimate": {
+          "state": "KNOWN",
+          "expected_loss_reduction": "bounds every autonomous economic and infrastructure spend dimension",
+          "basis": "deployment-bound arm plus independent durable usage counters"
+        },
+        "blocking_mode": "block",
+        "isolation_scope": "wallet_lane",
+        "fallback": "STOPPED_POLICY"
+      },
+      {
         "id": "exact_atomic_profit_boundary",
         "condition": "current-block GenericAtomicArb simulation succeeds and exact gas supports both the on-chain gross floor and configured net floor",
         "risk_reduced": "stale screen, intermediate inventory and predictable negative-net execution",
@@ -233,7 +252,7 @@
     "adaptive_gates": [
       {
         "id": "bounded_candidate_set",
-        "condition": "screen the adaptive amount grid broadly, then exact-preflight at most six strongest typed candidates",
+        "condition": "screen the adaptive amount grid broadly; manual preflight evaluates at most six candidates while the autonomous watcher escalates only one newly eligible opportunity",
         "risk_reduced": "RPC exhaustion and opportunity expiry from an unbounded exact sweep",
         "false_block_cost": "a lower-ranked proxy candidate may have the best exact net profit",
         "latency_budget_ms": 20000,
@@ -278,10 +297,10 @@
       "rationale": "intermediate leg bounds are replaced by one atomic final USDG gross-profit floor; any insufficient cycle reverts"
     },
     "authorization": {
-      "mode": "MANUAL_ARM",
-      "scope_binding": "candidate executionKey, wallet, executor, nonce, routeHash, amount and economic envelope in planHash",
-      "expiry_policy": "the persisted contract deadline ends the one-shot authorization",
-      "evidence_record": "append-only mutation intent, plan, exact raw hash, receipt and effect record"
+      "mode": "AUTO_POLICY",
+      "scope_binding": "the arm binds wallet, executor, source/runtime hashes, principal and spend budgets; each plan additionally binds candidate, nonce, routeHash, amount and economic envelope",
+      "expiry_policy": "the arm has an absolute expiry and every transaction has a separately persisted short contract deadline",
+      "evidence_record": "append-only arm, exact-preflight attempt, mutation intent, plan, exact raw hash, receipt and effect records"
     },
     "nonce_policy": "one shared wallet lane; persist exact raw before first broadcast",
     "signing_policy": "sign once per immutable plan",

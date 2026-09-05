@@ -108,4 +108,23 @@ Acceptance:
 - one current mainnet deployment is read back by source/code/operator/economic constants before the first live execution;
 - a canonical receipt, event, balance delta and gas mark distinguish realized gross, marked net and UNKNOWN net.
 
-Status: code implemented; mainnet deployment, signer invocation, generic receipt and automated watcher remain open.
+Status: one-shot signing path implemented; mainnet deployment, signer invocation and generic receipt remain open.
+
+## S12 — Server-autonomous generic execution
+
+Acceptance:
+
+- idle monitoring reads only the loopback signer-free board and consumes no strategy RPC request;
+- one new eligible opportunity escalates to one targeted exact-preflight path, with no retry of the same opportunity
+  identity;
+- an explicit arm binds executor/source/runtime identity, principal, screened and exact net floors, Gas reserve,
+  lifetime, exact-preflight count, signed attempts, confirmed executions and failed Gas;
+- authorization and stop state are rechecked at the final signing boundary;
+- fixed and generic systemd services plus in-process locks enforce one signing generation and one wallet nonce lane;
+- UNKNOWN receipt, nonce conflict, post-state mismatch, under-floor marked net, exhausted budget and invariant failure all
+  stop the watcher;
+- Linux CI validates the hardened deployment, arm and watcher units before merge;
+- live promotion requires a commit-addressed release, deployment receipt, runtime verification, arm readback and active
+  service readback.
+
+Status: code and local gates implemented; Linux CI and live promotion pending.
