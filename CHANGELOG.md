@@ -11,6 +11,7 @@
 - Add hardened one-shot deployment and arm units plus a persistent generic watcher unit.
 - Give the deployment one-shot a 180-second start timeout so its 120-second canonical receipt wait cannot be killed by
   systemd's default start timeout.
+- Clear a recovered board-transport error from watcher readback as soon as the loopback board succeeds again.
 
 ## 0.3.0 — 2026-09-05
 

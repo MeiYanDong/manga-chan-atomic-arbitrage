@@ -1795,7 +1795,9 @@ async function watchGeneric() {
         if (watchState.consecutiveBoardErrors !== 0) {
           watchState = {
             ...watchState,
+            status: 'RUNNING',
             consecutiveBoardErrors: 0,
+            reason: null,
             updatedAt: new Date().toISOString(),
           }
           writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
@@ -1831,6 +1833,7 @@ async function watchGeneric() {
           signedAttemptsThisArm: currentUsage.attempts,
           lastBoardGeneratedAt,
           lastDecision: candidate ? 'SCREEN_GATE_PASSED' : 'NO_ELIGIBLE_SCREEN',
+          reason: null,
           lastCandidate: candidate
             ? {
                 opportunityId: candidate.opportunityId,
@@ -1884,6 +1887,7 @@ async function watchGeneric() {
           signedAttemptsThisArm: confirmedUsage.attempts,
           consecutiveExecutionRpcErrors: 0,
           lastDecision: 'CONFIRMED_EXECUTION',
+          reason: null,
           lastTransaction: record.hash,
           lastConfirmedNetProfitUsdg:
             record.netProfitUsdgWei === null ? null : formatUnits(BigInt(record.netProfitUsdgWei), 6),

@@ -57,6 +57,7 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   assert.match(source, /async function watchGeneric\(/)
   assert.match(source, /idleRpcBehavior: 'NONE'/)
   assert.match(source, /generic_watch_exact_preflight_started/)
+  assert.match(source, /status: 'RUNNING',[\s\S]*consecutiveBoardErrors: 0,[\s\S]*reason: null/)
 })
 
 test('generic systemd services isolate the board and mutually exclude the fixed signer', () => {
