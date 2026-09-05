@@ -108,7 +108,9 @@ Acceptance:
 - one current mainnet deployment is read back by source/code/operator/economic constants before the first live execution;
 - a canonical receipt, event, balance delta and gas mark distinguish realized gross, marked net and UNKNOWN net.
 
-Status: one-shot signing path implemented; mainnet deployment, signer invocation and generic receipt remain open.
+Status: accepted for deployment and execution. The current mainnet executor identity was read back and the first
+autonomous transaction has canonical receipt, event, balance-delta and marked-net evidence. The withdrawal path remains
+implemented and tested but has not been invoked on this executor.
 
 ## S12 — Server-autonomous generic execution
 
@@ -127,4 +129,6 @@ Acceptance:
 - live promotion requires a commit-addressed release, deployment receipt, runtime verification, arm readback and active
   service readback.
 
-Status: code and local gates implemented; Linux CI and live promotion pending.
+Status: accepted for the bounded live canary. Linux CI passed, a commit-addressed release was installed, deployment and
+arm readback passed, both server services are enabled and the first autonomous execution confirmed. One live sample is
+insufficient to estimate opportunity frequency or race win probability.

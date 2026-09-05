@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "lane": "generic-v2",
+  "chainId": 4663,
+  "network": "Robinhood Chain Mainnet",
+  "releaseCommit": "a21b782c9a2fec3522f7a7a8f73a10c7df236e43",
+  "releaseArchiveSha256": "430e77a54b7a1b0b58a46acc69e900d7e383fe422332fa50753cc81272199965",
+  "operator": "0x77f771E83f118C32547A1291dda438a757B4b91B",
+  "executor": "0x3f3A60A2da9E8D9811F41c6093280D7a90685aDD",
+  "deploymentTransaction": "0x6d81fc0ecd1fc57d4d90303e90635593aeac07b6fcea11b2f6e569a30e87ada1",
+  "deploymentBlock": 54861614,
+  "sourceHash": "0x5b03b1f117600d2e241f67eaa5026adc80082172daaa28b7cf84dfc3f26da78e",
+  "creationCodeHash": "0x6c0b71f16b9e68a3f8a66f3d81593439223198309906b259a3368bead40c7d2a",
+  "runtimeCodeHash": "0x066ba301d3cda99b19801675673cb4e82c168ff9c51f8429e3cedf5bef66d706",
+  "compiler": "solc 0.8.26",
+  "evmVersion": "cancun",
+  "optimizerRuns": 200,
+  "seedEthWei": "9000000000000000",
+  "seededUsdgAtomic": "22040906",
+  "deploymentGasWei": "948489282692000"
+}

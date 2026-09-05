@@ -157,10 +157,11 @@ screened net = quoted USDG out - USDG in - native gas proxy converted to USDG
 
 The board itself deliberately stops below `READY_TO_EXECUTE`: it has no signer, wallet client or generic executor state.
 Generic-v2's separate signing lane can consume one typed candidate and add exact `eth_call`, execution Gas, residual,
-allowance and nonce evidence. No generic mainnet deployment exists at this repository revision, so current mainnet
-executor simulation and receipt evidence remain absent. Old observations become `STALE` instead of remaining
-actionable. Metadata failures, missing anchors and quote reverts are `UNQUOTABLE`, never silently converted to zero
-profit.
+allowance and nonce evidence. Generic-v2 is now deployed and a first bounded autonomous execution has canonical
+receipt, event, balance-delta and marked-net evidence. That single success proves the path can execute profitably in one
+observed state; it does not establish opportunity frequency, race win probability or recovery of the one-time deployment
+cost. Old observations become `STALE` instead of remaining actionable. Metadata failures, missing anchors and quote
+reverts are `UNQUOTABLE`, never silently converted to zero profit.
 
 The catalog is refreshed in full and supplemented by a frequent newest-token page. Priority candidates and current
 positive rows are requoted first; the rest are covered with a persistent round-robin cursor. Coverage is reported in

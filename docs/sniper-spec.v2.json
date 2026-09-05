@@ -72,7 +72,7 @@
       {
         "id": "typed-exact-positive",
         "profile": "REACTIVE_GUARDED",
-        "race_mode": "SHADOW"
+        "race_mode": "PROFIT"
       },
       {
         "id": "no-shot-on-unknown-or-negative-net",
@@ -81,7 +81,13 @@
       }
     ],
     "race_experiment": {
-      "enabled": false
+      "enabled": true,
+      "question": "Can loopback-board triggering plus a dedicated strategy RPC capture PAIR relative-price discrepancies before they decay while preserving the exact marked-net floor?",
+      "max_failed_cost": "0.001",
+      "max_attempts": 5,
+      "expires_at": "2026-09-12T05:13:52.489Z",
+      "sample_isolation": "Treat this bounded live canary separately from the minimum-20 race sample and do not infer win probability from it.",
+      "stop_condition": "Stop at authorization expiry, five signed attempts, five confirmed executions, twenty-four exact preflights, 0.001 ETH failed Gas, UNKNOWN receipt, nonce conflict or any invariant failure."
     }
   },
   "race_timeline": {
@@ -168,7 +174,7 @@
     "protocol": "PAIR V4 multi-pool plus canonical V3 anchors",
     "execution_adapter": "GenericAtomicArb typed atomic cycle",
     "wallet_scope": "single",
-    "operation_mode": "shadow"
+    "operation_mode": "live"
   },
   "decision": {
     "correctness_invariants": [
@@ -199,7 +205,7 @@
         "latency_budget_ms": 3000,
         "latency_estimate": {
           "state": "UNKNOWN",
-          "reason": "live generic wallet-lane timing has not been measured"
+          "reason": "one successful live wallet-lane sample exists, but it is insufficient for a p95 distribution"
         },
         "voi_estimate": {
           "state": "KNOWN",
@@ -218,7 +224,7 @@
         "latency_budget_ms": 10,
         "latency_estimate": {
           "state": "UNKNOWN",
-          "reason": "local file checks are implemented but signing-host p95 is not yet recorded"
+          "reason": "one successful live authorization and signing sample exists, but signing-host p95 is not yet established"
         },
         "voi_estimate": {
           "state": "KNOWN",
@@ -237,7 +243,7 @@
         "latency_budget_ms": 15000,
         "latency_estimate": {
           "state": "UNKNOWN",
-          "reason": "only one historical fork route has exact gas evidence"
+          "reason": "one historical fork route and one successful mainnet route have exact gas evidence; the sample remains insufficient for p95"
         },
         "voi_estimate": {
           "state": "KNOWN",
@@ -258,7 +264,7 @@
         "latency_budget_ms": 20000,
         "latency_estimate": {
           "state": "UNKNOWN",
-          "reason": "exact-preflight latency distribution has not been sampled on the signing host"
+          "reason": "one signing-host exact preflight completed in about 4.1 seconds, but no latency distribution exists"
         },
         "voi_estimate": {
           "state": "UNKNOWN",
@@ -332,9 +338,9 @@
   },
   "capabilities": {
     "transport": {
-      "level": "IMPLEMENTED",
+      "level": "TESTED",
       "access": "READ",
-      "limitations": ["generic-v2 signing-host latency and sequencer arrival remain unmeasured"]
+      "limitations": ["one live provider path succeeded; sequencer arrival and p95 transport latency remain unmeasured"]
     },
     "discovery": {
       "level": "TESTED",
@@ -347,7 +353,7 @@
       "level": "TESTED",
       "access": "READ",
       "limitations": [
-        "current generic mainnet deployment identity cannot be verified because no generic executor is deployed"
+        "one current mainnet deployment is verified; every future release or executor requires fresh readback"
       ]
     },
     "quote": {
@@ -359,7 +365,7 @@
       "level": "TESTED",
       "access": "READ",
       "limitations": [
-        "one selected real route was validated on a local historical mainnet fork; no current deployed generic executor exists"
+        "one historical fork route and one current mainnet route are exact-simulated; no frequency sample exists"
       ]
     },
     "calldata": {
@@ -368,14 +374,14 @@
       "limitations": ["typed PAIR route only; no arbitrary target or calldata adapter"]
     },
     "sign": {
-      "level": "IMPLEMENTED",
+      "level": "TESTED",
       "access": "WRITE",
-      "limitations": ["generic-v2 mainnet signing has not been invoked or receipt-verified"]
+      "limitations": ["one generic-v2 mainnet signature is receipt-verified; broader reliability is not established"]
     },
     "broadcast": {
-      "level": "IMPLEMENTED",
+      "level": "TESTED",
       "access": "WRITE",
-      "limitations": ["generic-v2 mainnet broadcast has not been invoked or receipt-verified"]
+      "limitations": ["one generic-v2 mainnet broadcast is receipt-verified; race win probability remains unknown"]
     },
     "reconcile": {
       "level": "IMPLEMENTED",

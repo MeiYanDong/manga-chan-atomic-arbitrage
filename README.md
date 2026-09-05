@@ -1,9 +1,9 @@
 # Bounded Generic PAIR Atomic Arbitrage + Opportunity Board
 
-> The `live/spx-aapl-nvda-canary` branch is an isolated fixed-route canary for
-> `USDG -> AAPL -> SPX -> NVDA -> USDG`. It uses separate release, runtime and
-> systemd paths and does not replace the existing MANGA deployment. See
-> `docs/stories/spx-live-canary.md` for its risk envelope and acceptance criteria.
+> The `live/spx-aapl-nvda-canary` branch is the protected production line for the
+> isolated fixed-route canary and the separately bounded generic-v2 lane. The two
+> generations retain separate contracts and state; only one may own the wallet's
+> signing lane at a time.
 
 The repository now has two deliberately separate execution generations:
 
@@ -25,11 +25,25 @@ adds material changes to an append-only event ledger. The board has no wallet, s
 
 ## Honest status
 
-- Fixed-route contracts are deployed and funded with small canary floats. Their public evidence is under [`deployments`](deployments).
-- Generic-v2, including its bounded autonomous watcher, is implemented and has deterministic plus historical mainnet-fork evidence, but it is **not yet deployed on mainnet at this revision**. It has no generic mainnet signature, broadcast, receipt or realized profit yet.
+- Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
+  disabled while generic-v2 owns the wallet lane. Their public evidence is under [`deployments`](deployments).
+- Generic-v2 is deployed on Robinhood Chain mainnet at
+  `0x3f3A60A2da9E8D9811F41c6093280D7a90685aDD` from release
+  `a21b782c9a2fec3522f7a7a8f73a10c7df236e43`. The deployment receipt and identity are recorded in
+  [`deployments/generic-v2-mainnet.json`](deployments/generic-v2-mainnet.json).
+- The bounded server watcher is active. Its first autonomous execution, `AAPL -> ASS -> SPCX`, was canonically
+  confirmed with `0.176846 USDG` marked net execution profit after Gas. This is one observation, not evidence of an
+  opportunity frequency or win probability.
+- The one-time deployment Gas was marked at `2.322841 USDG`; deployment plus the first execution therefore remains
+  `-2.145995 USDG`, excluding seed conversion impact. The execution was profitable, but the live lifecycle has not yet
+  recovered deployment cost.
 - Historical fixed-route receipt evidence is documented separately. A test, screen, running process or fork transaction is never presented as a new mainnet profit.
-- The old macOS polling watcher is stopped. This repository's watcher uses targeted WSS swap events plus a recovery poll and must be explicitly armed.
+- The old macOS polling watcher and the fixed-route cloud signer are stopped. Generic-v2 is explicitly armed on the
+  server and consumes the loopback board while idle.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
+
+See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
+for the receipt, post-state, bounded authorization, service and economic evidence.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 
