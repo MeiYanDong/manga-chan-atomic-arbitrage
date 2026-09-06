@@ -129,6 +129,24 @@ Acceptance:
 - live promotion requires a commit-addressed release, deployment receipt, runtime verification, arm readback and active
   service readback.
 
-Status: accepted for the bounded live canary. Linux CI passed, a commit-addressed release was installed, deployment and
-arm readback passed, both server services are enabled and the first autonomous execution confirmed. One live sample is
-insufficient to estimate opportunity frequency or race win probability.
+Status: accepted for the bounded live canary. Linux CI passed, a commit-addressed release was installed, and deployment
+and arm readback passed. The first arm later produced four confirmed executions before stopping on the signed-attempt
+lifecycle defect covered by S13. The signer remains stopped pending reconciliation, repaired promotion and fresh human
+authorization.
+
+## S13 — Signed-attempt lifecycle repair
+
+Acceptance:
+
+- the final authorized signed attempt can cross its own broadcast boundary without being mistaken for a new attempt;
+- only the exact latest unresolved `authorizationId + kind + intentId + planHash + hash + nonce` reservation receives
+  that treatment;
+- a mismatched, duplicate, terminal or stale reservation fails closed, and a sixth attempt remains blocked before
+  signing;
+- expiry, confirmed-execution, failed-Gas and exact-preflight limits remain independently enforced after signing;
+- credentialized HTTP and WebSocket URLs are redacted before provider errors enter logs;
+- an explicit recovery command can close the old raw only after two independent readers prove absence and both chain
+  heads are past its deadline; the expired raw can never enter the replay path.
+
+Status: implementation and regression tests complete locally. CI, commit-addressed server promotion, two-reader stale
+raw reconciliation and a fresh human authorization remain required before the watcher can resume.

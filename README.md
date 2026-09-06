@@ -31,15 +31,19 @@ adds material changes to an append-only event ledger. The board has no wallet, s
   `0x3f3A60A2da9E8D9811F41c6093280D7a90685aDD` from release
   `a21b782c9a2fec3522f7a7a8f73a10c7df236e43`. The deployment receipt and identity are recorded in
   [`deployments/generic-v2-mainnet.json`](deployments/generic-v2-mainnet.json).
-- The bounded server watcher is active. Its first autonomous execution, `AAPL -> ASS -> SPCX`, was canonically
-  confirmed with `0.176846 USDG` marked net execution profit after Gas. This is one observation, not evidence of an
-  opportunity frequency or win probability.
-- The one-time deployment Gas was marked at `2.322841 USDG`; deployment plus the first execution therefore remains
-  `-2.145995 USDG`, excluding seed conversion impact. The execution was profitable, but the live lifecycle has not yet
-  recovered deployment cost.
+- The first bounded arm produced four canonically confirmed autonomous executions with `2.253959 USDG` gross profit,
+  `1.396380 USDG` marked Gas and `0.857579 USDG` marked net execution profit. This small sample does not establish an
+  opportunity frequency or race-win probability.
+- The server watcher is currently stopped. Its fifth attempt exposed a lifecycle defect: the transaction was signed
+  and durably recorded, then the post-sign budget check counted that same attempt as a new attempt and stopped before
+  broadcast. The raw transaction expired and must be reconciled as absent before any fresh authorization.
+- The one-time deployment Gas was marked at `2.322841 USDG`; deployment plus the four confirmed executions therefore
+  remains `-1.465262 USDG`, excluding seed conversion impact. The execution set was profitable, but the live lifecycle
+  has not yet recovered deployment cost.
 - Historical fixed-route receipt evidence is documented separately. A test, screen, running process or fork transaction is never presented as a new mainnet profit.
-- The old macOS polling watcher and the fixed-route cloud signer are stopped. Generic-v2 is explicitly armed on the
-  server and consumes the loopback board while idle.
+- The old macOS polling watcher and the fixed-route cloud signer are stopped. The generic-v2 watcher is also stopped;
+  its exhausted arm cannot authorize a new attempt. It will not resume until the stale signed attempt is reconciled,
+  the repaired release is deployed and a fresh bounded authorization is approved.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)

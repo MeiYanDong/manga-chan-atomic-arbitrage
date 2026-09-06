@@ -57,6 +57,10 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   assert.match(source, /async function watchGeneric\(/)
   assert.match(source, /idleRpcBehavior: 'NONE'/)
   assert.match(source, /generic_watch_exact_preflight_started/)
+  assert.match(source, /evaluateGenericArmBudgetAtBroadcast/)
+  assert.match(source, /assertStillAuthorized\(\{ stage: 'before-broadcast', currentSignedAttempt \}\)/)
+  assert.match(source, /generic execution raw must not be rebroadcast/)
+  assert.match(source, /appendAudit\('mutation_abandoned'/)
   assert.match(source, /status: 'RUNNING',[\s\S]*consecutiveBoardErrors: 0,[\s\S]*reason: null/)
 })
 

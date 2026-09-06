@@ -5,8 +5,12 @@ import {
   RpcErrorClass,
   classifyReconciliation,
   classifyRpcError,
+  errorText,
   evaluateArmBudget,
+  evaluateExpiredMutationAbandonment,
   evaluateGenericArmBudget,
+  evaluateGenericArmBudgetAtBroadcast,
+  evaluateRawReplayDeadline,
   fixedSignerLaneConflict,
   genericSignerLaneConflict,
   isGenericOpportunityMiss,
@@ -26,6 +30,12 @@ test('keeps a business invariant distinct from transport failures', () => {
   assert.equal(classifyRpcError(new Error('429 Too Many Requests')), RpcErrorClass.THROTTLED)
 })
 
+test('redacts credentialized RPC URLs before errors enter logs', () => {
+  const error = new Error('HTTP request failed\nURL: https://node.example/v1/private-token?key=secret')
+  assert.equal(errorText(error), 'HTTP request failed\nURL: <RPC_URL_REDACTED>')
+  assert.doesNotMatch(errorText(error), /private-token|secret/)
+})
+
 test('finds unresolved mutations across execute, deploy and withdraw', () => {
   /** @type {Array<Record<string, any>>} */
   const execute = [
@@ -38,6 +48,13 @@ test('finds unresolved mutations across execute, deploy and withdraw', () => {
   assert.equal(latestUnresolvedMutation(execute), null)
 
   assert.equal(latestUnresolvedMutation([{ event: 'deployment_signed', hash: '0x03' }]).kind, 'deploy')
+  assert.equal(
+    latestUnresolvedMutation([
+      { event: 'mutation_signed', kind: 'generic-execute', hash: '0x04' },
+      { event: 'mutation_abandoned', hash: '0x04', result: 'EXPIRED_NOT_OBSERVED' },
+    ]),
+    null,
+  )
 })
 
 test('reconciliation distinguishes final, provisional, pending and conflicting evidence', () => {
@@ -83,6 +100,60 @@ test('reconciliation requires two clean readers before declaring not observed', 
   assert.equal(classifyReconciliation([{ ...one[0], latestNonce: 2 }], 1, 3).state, 'NONCE_CONFLICT')
 })
 
+test('only an expired generic execution with two-reader absence can be abandoned', () => {
+  const plan = { kind: 'generic-execute', nonce: 8, deadline: 100n }
+  const observation = {
+    head: 10n,
+    headTimestamp: 101n,
+    latestNonce: 8,
+    pendingNonce: 8,
+    transaction: null,
+    receipt: null,
+  }
+  const absent = [
+    { ...observation, source: 'primary' },
+    { ...observation, source: 'secondary' },
+  ]
+  assert.equal(evaluateExpiredMutationAbandonment(plan, absent).allowed, true)
+  assert.equal(
+    evaluateExpiredMutationAbandonment(plan, [{ ...observation, source: 'primary' }]).reason,
+    'reconciliation-unknown',
+  )
+  assert.equal(
+    evaluateExpiredMutationAbandonment(plan, [
+      { ...observation, source: 'primary', headTimestamp: 100n },
+      { ...observation, source: 'secondary' },
+    ]).reason,
+    'deadline-not-expired-on-every-reader',
+  )
+  assert.equal(
+    evaluateExpiredMutationAbandonment({ ...plan, kind: 'generic-withdraw' }, absent).reason,
+    'unsupported-mutation-kind',
+  )
+  assert.equal(
+    evaluateExpiredMutationAbandonment(
+      plan,
+      absent.map((item) => ({ ...item, latestNonce: 9 })),
+    ).reason,
+    'reconciliation-nonce_conflict',
+  )
+})
+
+test('generic raw replay requires every reader timestamp to remain within deadline', () => {
+  const plan = { kind: 'generic-execute', deadline: 100n }
+  const observations = [
+    { source: 'primary', headTimestamp: 100n },
+    { source: 'secondary', headTimestamp: 99n },
+  ]
+  assert.equal(evaluateRawReplayDeadline(plan, observations).allowed, true)
+  assert.equal(
+    evaluateRawReplayDeadline(plan, [{ ...observations[0], headTimestamp: 101n }, observations[1]]).reason,
+    'mutation-deadline-expired',
+  )
+  assert.equal(evaluateRawReplayDeadline(plan, observations.slice(0, 1)).reason, 'insufficient-reader-timestamps')
+  assert.equal(evaluateRawReplayDeadline({ kind: 'generic-withdraw' }, []).allowed, true)
+})
+
 test('arm budget stops on each independent boundary', () => {
   const arm = {
     expiresAt: '2030-01-01T00:00:00.000Z',
@@ -118,6 +189,161 @@ test('generic arm independently bounds paid exact preflights', () => {
   assert.equal(
     evaluateGenericArmBudget({ ...arm, maxExactPreflights: 0 }, usage).reason,
     'invalid-exact-preflight-limit',
+  )
+})
+
+test('the exact fifth signed attempt can cross its broadcast boundary but cannot authorize a sixth', () => {
+  const arm = {
+    authorizationId: 'arm-1',
+    expiresAt: '2030-01-01T00:00:00.000Z',
+    maxConfirmedExecutions: 5,
+    maxAttempts: 5,
+    maxFailedGasWei: '1000',
+    maxExactPreflights: 24,
+  }
+  const usage = {
+    confirmedExecutions: 4,
+    attempts: 5,
+    failedGasWei: 0n,
+    exactPreflights: 5,
+    now: Date.parse('2029-01-01T00:00:00Z'),
+  }
+  const older = Array.from({ length: 4 }, (_, index) => ({
+    event: 'mutation_signed',
+    authorizationId: arm.authorizationId,
+    kind: 'generic-execute',
+    intentId: `intent-${index}`,
+    planHash: `plan-${index}`,
+    hash: `hash-${index}`,
+    nonce: index,
+  }))
+  const current = {
+    event: 'mutation_signed',
+    authorizationId: arm.authorizationId,
+    kind: 'generic-execute',
+    intentId: 'intent-4',
+    planHash: 'plan-4',
+    hash: 'hash-4',
+    nonce: 4,
+  }
+  const records = [...older, current]
+
+  assert.equal(evaluateGenericArmBudgetAtBroadcast(arm, usage, records, current).allowed, true)
+  assert.equal(evaluateGenericArmBudget(arm, usage).reason, 'attempt-limit')
+  assert.equal(
+    evaluateGenericArmBudgetAtBroadcast(arm, { ...usage, attempts: 6 }, records, current).reason,
+    'signed-attempt-reservation-mismatch',
+  )
+})
+
+test('broadcast reservation must be the exact latest unresolved signed mutation', () => {
+  const arm = {
+    authorizationId: 'arm-1',
+    expiresAt: '2030-01-01T00:00:00.000Z',
+    maxConfirmedExecutions: 5,
+    maxAttempts: 5,
+    maxFailedGasWei: '1000',
+    maxExactPreflights: 24,
+  }
+  const usage = {
+    confirmedExecutions: 4,
+    attempts: 5,
+    failedGasWei: 0n,
+    exactPreflights: 5,
+    now: Date.parse('2029-01-01T00:00:00Z'),
+  }
+  const current = {
+    event: 'mutation_signed',
+    authorizationId: arm.authorizationId,
+    kind: 'generic-execute',
+    intentId: 'intent-4',
+    planHash: 'plan-4',
+    hash: 'hash-4',
+    nonce: 4,
+  }
+  const records = [
+    ...Array.from({ length: 4 }, (_, index) => ({
+      ...current,
+      intentId: `intent-${index}`,
+      planHash: `plan-${index}`,
+      hash: `hash-${index}`,
+      nonce: index,
+    })),
+    current,
+  ]
+
+  for (const [field, value] of Object.entries({
+    authorizationId: 'wrong-arm',
+    kind: 'generic-withdraw',
+    intentId: 'wrong-intent',
+    planHash: 'wrong-plan',
+    hash: 'wrong-hash',
+    nonce: 99,
+  })) {
+    assert.equal(
+      evaluateGenericArmBudgetAtBroadcast(arm, usage, records, { ...current, [field]: value }).reason,
+      'signed-attempt-reservation-mismatch',
+      field,
+    )
+  }
+  assert.equal(
+    evaluateGenericArmBudgetAtBroadcast(arm, { ...usage, attempts: 6 }, [...records, current], current).reason,
+    'signed-attempt-reservation-mismatch',
+  )
+  assert.equal(
+    evaluateGenericArmBudgetAtBroadcast(
+      arm,
+      usage,
+      [...records, { event: 'mutation_effect', hash: current.hash }],
+      current,
+    ).reason,
+    'signed-attempt-reservation-mismatch',
+  )
+})
+
+test('an in-flight reservation never relaxes expiry, confirmed execution, failed gas, or preflight caps', () => {
+  const arm = {
+    authorizationId: 'arm-1',
+    expiresAt: '2030-01-01T00:00:00.000Z',
+    maxConfirmedExecutions: 5,
+    maxAttempts: 5,
+    maxFailedGasWei: '1000',
+    maxExactPreflights: 5,
+  }
+  const current = {
+    event: 'mutation_signed',
+    authorizationId: arm.authorizationId,
+    kind: 'generic-execute',
+    intentId: 'intent-4',
+    planHash: 'plan-4',
+    hash: 'hash-4',
+    nonce: 4,
+  }
+  const records = [current]
+  const usage = {
+    confirmedExecutions: 4,
+    attempts: 1,
+    failedGasWei: 0n,
+    exactPreflights: 4,
+    now: Date.parse('2029-01-01T00:00:00Z'),
+  }
+
+  assert.equal(
+    evaluateGenericArmBudgetAtBroadcast(arm, { ...usage, confirmedExecutions: 5 }, records, current).reason,
+    'confirmed-execution-limit',
+  )
+  assert.equal(
+    evaluateGenericArmBudgetAtBroadcast(arm, { ...usage, failedGasWei: 1000n }, records, current).reason,
+    'failed-gas-limit',
+  )
+  assert.equal(
+    evaluateGenericArmBudgetAtBroadcast(arm, { ...usage, exactPreflights: 5 }, records, current).reason,
+    'exact-preflight-limit',
+  )
+  assert.equal(
+    evaluateGenericArmBudgetAtBroadcast(arm, { ...usage, now: Date.parse('2030-01-01T00:00:00Z') }, records, current)
+      .reason,
+    'expired',
   )
 })
 

@@ -5,6 +5,11 @@ export const RpcErrorClass = Object.freeze({
   INVARIANT: 'INVARIANT',
 })
 
+/** @param {string} value */
+export function redactSensitiveText(value) {
+  return value.replace(/\b(?:https?|wss?):\/\/[^\s"'<>|]+/gi, '<RPC_URL_REDACTED>')
+}
+
 /** @param {unknown} error */
 export function errorText(error) {
   const parts = []
@@ -28,7 +33,7 @@ export function errorText(error) {
       break
     }
   }
-  return [...new Set(parts)].join(' | ') || 'UNKNOWN'
+  return redactSensitiveText([...new Set(parts)].join(' | ')) || 'UNKNOWN'
 }
 
 /** @param {unknown} error */
@@ -74,6 +79,7 @@ const SIGNED_EVENTS = new Map([
 const TERMINAL_EVENTS = new Set([
   'mutation_effect',
   'mutation_reverted',
+  'mutation_abandoned',
   'execution_complete',
   'execution_reverted',
   'deployment_complete',
@@ -143,6 +149,74 @@ export function classifyReconciliation(observations, nonce, minConfirmations = 3
 }
 
 /**
+ * Closing an unbroadcast transaction is safe only when its on-chain deadline
+ * has expired and two readers independently prove that neither the hash nor
+ * its nonce was observed.
+ *
+ * @param {{kind?: string, deadline?: string | number | bigint, nonce?: string | number}} plan
+ * @param {Array<{source: string, receipt?: any, transaction?: any, latestNonce?: number, pendingNonce?: number, head?: bigint, headTimestamp?: string | number | bigint, error?: unknown}>} observations
+ */
+export function evaluateExpiredMutationAbandonment(plan, observations) {
+  if (plan.kind !== 'generic-execute') return { allowed: false, reason: 'unsupported-mutation-kind' }
+  if (plan.nonce === undefined || !Number.isSafeInteger(Number(plan.nonce))) {
+    return { allowed: false, reason: 'invalid-mutation-nonce' }
+  }
+  let deadline
+  try {
+    deadline = BigInt(plan.deadline)
+  } catch {
+    return { allowed: false, reason: 'invalid-mutation-deadline' }
+  }
+  if (deadline <= 0n) return { allowed: false, reason: 'invalid-mutation-deadline' }
+  const reconciliation = classifyReconciliation(observations, Number(plan.nonce))
+  if (reconciliation.state !== 'NOT_OBSERVED') {
+    return { allowed: false, reason: `reconciliation-${reconciliation.state.toLowerCase()}` }
+  }
+  const usable = observations.filter((item) => !item.error)
+  try {
+    if (usable.some((item) => item.headTimestamp === undefined || BigInt(item.headTimestamp) <= deadline)) {
+      return { allowed: false, reason: 'deadline-not-expired-on-every-reader' }
+    }
+  } catch {
+    return { allowed: false, reason: 'invalid-reader-timestamp' }
+  }
+  return { allowed: true, reason: null }
+}
+
+/**
+ * Generic execution replay is permitted only while every independent reader's
+ * current chain timestamp is still within the signed deadline.
+ *
+ * @param {{kind?: string, deadline?: string | number | bigint}} plan
+ * @param {Array<{source: string, headTimestamp?: string | number | bigint, error?: unknown}>} observations
+ */
+export function evaluateRawReplayDeadline(plan, observations) {
+  if (plan.kind !== 'generic-execute') return { allowed: true, reason: null }
+  let deadline
+  try {
+    deadline = BigInt(plan.deadline)
+  } catch {
+    return { allowed: false, reason: 'invalid-mutation-deadline' }
+  }
+  if (deadline <= 0n) return { allowed: false, reason: 'invalid-mutation-deadline' }
+  const usable = observations.filter((item) => !item.error)
+  if (new Set(usable.map((item) => item.source)).size < 2) {
+    return { allowed: false, reason: 'insufficient-reader-timestamps' }
+  }
+  try {
+    if (usable.some((item) => item.headTimestamp === undefined)) {
+      return { allowed: false, reason: 'invalid-reader-timestamp' }
+    }
+    if (usable.some((item) => BigInt(item.headTimestamp) > deadline)) {
+      return { allowed: false, reason: 'mutation-deadline-expired' }
+    }
+  } catch {
+    return { allowed: false, reason: 'invalid-reader-timestamp' }
+  }
+  return { allowed: true, reason: null }
+}
+
+/**
  * @param {{maxConfirmedExecutions: number, maxAttempts: number, maxFailedGasWei: string | bigint, expiresAt: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, now?: number}} usage
  */
@@ -172,6 +246,59 @@ export function evaluateGenericArmBudget(arm, usage) {
     return { allowed: false, reason: 'exact-preflight-limit' }
   }
   return { allowed: true, reason: null }
+}
+
+/**
+ * A just-persisted signed attempt already consumes one attempt slot. At the
+ * final broadcast boundary, treat only that exact latest unresolved mutation
+ * as the attempt currently in flight instead of rejecting it as a new sixth
+ * attempt. All other arm budgets remain unchanged.
+ *
+ * @param {{authorizationId?: string, maxConfirmedExecutions: number, maxAttempts: number, maxFailedGasWei: string | bigint, maxExactPreflights: number, expiresAt: string}} arm
+ * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, exactPreflights: number, now?: number}} usage
+ * @param {Array<Record<string, any>>} records
+ * @param {{authorizationId: string, kind: string, intentId: string, planHash: string, hash: string, nonce: number | string}} currentSignedAttempt
+ */
+export function evaluateGenericArmBudgetAtBroadcast(arm, usage, records, currentSignedAttempt) {
+  const mismatch = () => ({ allowed: false, reason: 'signed-attempt-reservation-mismatch' })
+  if (
+    !currentSignedAttempt ||
+    currentSignedAttempt.authorizationId !== arm.authorizationId ||
+    currentSignedAttempt.kind !== 'generic-execute' ||
+    !Number.isSafeInteger(usage.attempts) ||
+    usage.attempts <= 0
+  ) {
+    return mismatch()
+  }
+
+  const matchesAttempt = (record) =>
+    record.event === 'mutation_signed' &&
+    record.authorizationId === currentSignedAttempt.authorizationId &&
+    record.kind === currentSignedAttempt.kind &&
+    record.intentId === currentSignedAttempt.intentId &&
+    record.planHash === currentSignedAttempt.planHash &&
+    record.hash === currentSignedAttempt.hash &&
+    String(record.nonce) === String(currentSignedAttempt.nonce)
+
+  const authorizedAttempts = records.filter(
+    (record) =>
+      record.event === 'mutation_signed' &&
+      record.authorizationId === arm.authorizationId &&
+      record.kind === 'generic-execute',
+  )
+  const matchingAttempts = authorizedAttempts.filter(matchesAttempt)
+  const unresolved = latestUnresolvedMutation(records)
+  if (
+    usage.attempts !== authorizedAttempts.length ||
+    matchingAttempts.length !== 1 ||
+    authorizedAttempts.at(-1) !== matchingAttempts[0] ||
+    !unresolved ||
+    !matchesAttempt(unresolved)
+  ) {
+    return mismatch()
+  }
+
+  return evaluateGenericArmBudget(arm, { ...usage, attempts: usage.attempts - 1 })
 }
 
 /**
