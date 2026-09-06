@@ -36,9 +36,10 @@ adds material changes to an append-only event ledger. The board has no wallet, s
   opportunity frequency or race-win probability.
 - The server watcher is currently stopped. Its fifth attempt exposed a lifecycle defect: the transaction was signed
   and durably recorded, then the post-sign budget check counted that same attempt as a new attempt and stopped before
-  broadcast. Release `137e081303b11429a8391f25ce2532e58d1df4bc` repairs that boundary and redacts provider URLs
-  from terminal diagnostics. Two independent readers later proved the expired raw transaction absent with nonce `8`
-  unconsumed, and the audit ledger closed it as `EXPIRED_NOT_OBSERVED` without broadcasting it.
+  broadcast. Active server release `24c1d869ff82e912dc3ab85c147476f039247a93` repairs that boundary, redacts
+  provider URLs from terminal diagnostics and derives operational counters from the audit ledger. Two independent
+  readers later proved the expired raw transaction absent with nonce `8` unconsumed, and the audit ledger closed it as
+  `EXPIRED_NOT_OBSERVED` without broadcasting it.
 - The one-time deployment Gas was marked at `2.322841 USDG`; deployment plus the four confirmed executions therefore
   remains `-1.465262 USDG`, excluding seed conversion impact. The execution set was profitable, but the live lifecycle
   has not yet recovered deployment cost.

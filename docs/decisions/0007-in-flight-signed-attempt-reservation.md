@@ -1,6 +1,6 @@
 # ADR 0007: bind the in-flight signed attempt at the broadcast boundary
 
-- Status: Accepted for implementation; production promotion pending
+- Status: Accepted and promoted in bounded production release
 - Date: 2026-09-06
 
 ## Context
