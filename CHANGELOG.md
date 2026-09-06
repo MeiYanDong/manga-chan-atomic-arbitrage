@@ -10,6 +10,8 @@
   output.
 - Add an explicit two-reader `--abandon-expired` reconciliation terminal for unbroadcast generic executions and reject
   attempts to replay a raw transaction after its on-chain deadline.
+- Project canonical audit-ledger usage over stale watcher snapshots and refresh persisted counters on every terminal or
+  degraded watcher path, so operational readback cannot under-report signed attempts.
 
 ## 0.4.0 — 2026-09-05
 

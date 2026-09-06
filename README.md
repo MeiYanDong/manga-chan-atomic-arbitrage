@@ -36,18 +36,23 @@ adds material changes to an append-only event ledger. The board has no wallet, s
   opportunity frequency or race-win probability.
 - The server watcher is currently stopped. Its fifth attempt exposed a lifecycle defect: the transaction was signed
   and durably recorded, then the post-sign budget check counted that same attempt as a new attempt and stopped before
-  broadcast. The raw transaction expired and must be reconciled as absent before any fresh authorization.
+  broadcast. Release `137e081303b11429a8391f25ce2532e58d1df4bc` repairs that boundary and redacts provider URLs
+  from terminal diagnostics. Two independent readers later proved the expired raw transaction absent with nonce `8`
+  unconsumed, and the audit ledger closed it as `EXPIRED_NOT_OBSERVED` without broadcasting it.
 - The one-time deployment Gas was marked at `2.322841 USDG`; deployment plus the four confirmed executions therefore
   remains `-1.465262 USDG`, excluding seed conversion impact. The execution set was profitable, but the live lifecycle
   has not yet recovered deployment cost.
 - Historical fixed-route receipt evidence is documented separately. A test, screen, running process or fork transaction is never presented as a new mainnet profit.
 - The old macOS polling watcher and the fixed-route cloud signer are stopped. The generic-v2 watcher is also stopped;
-  its exhausted arm cannot authorize a new attempt. It will not resume until the stale signed attempt is reconciled,
-  the repaired release is deployed and a fresh bounded authorization is approved.
+  its exhausted arm cannot authorize a new attempt. The repaired release is deployed, but it will not resume until the
+  exhausted execution RPC is replaced, the previously exposed endpoint credential is rotated and a fresh bounded
+  authorization is explicitly approved.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
+See [`docs/evidence/2026-09-06-signed-attempt-recovery.md`](docs/evidence/2026-09-06-signed-attempt-recovery.md)
+for the lifecycle root cause, repaired release, two-reader terminal recovery and current restart blockers.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 
