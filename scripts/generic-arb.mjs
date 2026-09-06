@@ -1526,6 +1526,25 @@ function genericWatchUsage(arm, deploymentState, records = readAuditRecords()) {
   }
 }
 
+function genericWatchUsageStateFields(usage) {
+  return {
+    completedExecutionsThisArm: usage.confirmedExecutions,
+    exactPreflightsThisArm: usage.exactPreflights,
+    signedAttemptsThisArm: usage.attempts,
+  }
+}
+
+function currentGenericWatchUsageStateFields() {
+  try {
+    const arm = readJson(GENERIC_WATCH_ARM_PATH)
+    const deploymentState = readJson(STATE_PATH)
+    if (!arm || !deploymentState) return {}
+    return genericWatchUsageStateFields(genericWatchUsage(arm, deploymentState))
+  } catch {
+    return {}
+  }
+}
+
 function genericWatchAuthorizationCommitment(arm) {
   return {
     schemaVersion: arm.schemaVersion,
@@ -1961,9 +1980,11 @@ async function watchGeneric() {
         })
       } catch (error) {
         const unresolvedNow = latestUnresolved()
+        const usageStateFields = currentGenericWatchUsageStateFields()
         if (error.watchPolicyStop) {
           watchState = {
             ...watchState,
+            ...usageStateFields,
             status: 'STOPPED_POLICY',
             reason: errorText(error),
             updatedAt: new Date().toISOString(),
@@ -1978,6 +1999,7 @@ async function watchGeneric() {
         if (unresolvedNow) {
           watchState = {
             ...watchState,
+            ...usageStateFields,
             status: 'HALTED_UNKNOWN',
             reason: errorText(error),
             transaction: unresolvedNow.hash,
@@ -1994,6 +2016,7 @@ async function watchGeneric() {
         if (isGenericOpportunityMiss(error)) {
           watchState = {
             ...watchState,
+            ...usageStateFields,
             status: 'RUNNING',
             updatedAt: new Date().toISOString(),
             consecutiveExecutionRpcErrors: 0,
@@ -2011,6 +2034,7 @@ async function watchGeneric() {
           const consecutiveErrors = Number(watchState?.[counter] || 0) + 1
           watchState = {
             ...watchState,
+            ...usageStateFields,
             status:
               consecutiveErrors >= RUNTIME_CONFIG.genericWatchMaxConsecutiveErrors ? 'HALTED_RPC' : 'DEGRADED_RPC',
             updatedAt: new Date().toISOString(),
@@ -2029,6 +2053,7 @@ async function watchGeneric() {
         } else if (/nonce/i.test(errorText(error))) {
           watchState = {
             ...watchState,
+            ...usageStateFields,
             status: 'HALTED_NONCE_CONFLICT',
             updatedAt: new Date().toISOString(),
             lastDecision: 'NONCE_CONFLICT',
@@ -2043,6 +2068,7 @@ async function watchGeneric() {
         } else {
           watchState = {
             ...watchState,
+            ...usageStateFields,
             status: 'HALTED_INVARIANT',
             updatedAt: new Date().toISOString(),
             lastDecision: 'INVARIANT_FAILED',
@@ -2073,6 +2099,7 @@ async function watchGeneric() {
         executor: readJson(STATE_PATH)?.executor || null,
         authorizationId: readJson(GENERIC_WATCH_ARM_PATH)?.authorizationId || null,
       }),
+      ...currentGenericWatchUsageStateFields(),
       status: error.watchPolicyStop ? 'STOPPED_POLICY' : unresolved ? 'HALTED_UNKNOWN' : 'HALTED_STARTUP',
       reason: errorText(error),
       transaction: unresolved?.hash || null,
@@ -2099,9 +2126,11 @@ async function genericWatchStatus() {
   const deploymentState = readJson(STATE_PATH)
   const processState = genericWatchLockHolder()
   let usage = null
+  let observedUsage = null
   if (arm && deploymentState) {
     try {
       const observed = genericWatchUsage(arm, deploymentState)
+      observedUsage = observed
       usage = {
         confirmedExecutions: observed.confirmedExecutions,
         signedAttempts: observed.attempts,
@@ -2160,7 +2189,7 @@ async function genericWatchStatus() {
     process: processState,
     authorization,
     usage,
-    runtime,
+    runtime: runtime && observedUsage ? { ...runtime, ...genericWatchUsageStateFields(observedUsage) } : runtime,
     deployment: deploymentState
       ? {
           status: deploymentState.status,

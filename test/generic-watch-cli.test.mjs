@@ -46,6 +46,65 @@ test('generic watch status is a local readback even when the configured strategy
   assert.equal(output.board.status, 'NO_FRESH_ELIGIBLE_BOARD_SCREEN')
 })
 
+test('generic watch status projects canonical ledger usage over a stale runtime snapshot', (context) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-usage-'))
+  context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const authorizationId = 'test-authorization'
+  fs.writeFileSync(
+    path.join(runDir, 'generic-watch-arm.json'),
+    JSON.stringify({
+      authorizationId,
+      status: 'ARMED',
+      issuedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-02T00:00:00.000Z',
+      baselineExecutionCount: 0,
+      maxPrincipalUsdgWei: '22040906',
+      minimumNetProfitUsdgWei: '100000',
+      minimumScreenedNetProfitUsdgWei: '100000',
+      maxConfirmedExecutions: 5,
+      maxAttempts: 5,
+      maxExactPreflights: 24,
+      maxFailedGasWei: '1000000000000000',
+    }),
+    { mode: 0o600 },
+  )
+  fs.writeFileSync(
+    path.join(runDir, 'generic-state.json'),
+    JSON.stringify({ status: 'live_gross_validated', executor: '0xexecutor', executions: [{}, {}, {}, {}] }),
+    { mode: 0o600 },
+  )
+  fs.writeFileSync(
+    path.join(runDir, 'generic-watch-state.json'),
+    JSON.stringify({
+      status: 'STOPPED_POLICY',
+      completedExecutionsThisArm: 4,
+      exactPreflightsThisArm: 10,
+      signedAttemptsThisArm: 4,
+    }),
+    { mode: 0o600 },
+  )
+  const audit = [
+    ...Array.from({ length: 5 }, () => ({ authorizationId, event: 'mutation_signed', kind: 'generic-execute' })),
+    ...Array.from({ length: 10 }, () => ({ authorizationId, event: 'generic_watch_exact_preflight_started' })),
+  ]
+  fs.writeFileSync(path.join(runDir, 'audit.jsonl'), `${audit.map((record) => JSON.stringify(record)).join('\n')}\n`, {
+    mode: 0o600,
+  })
+
+  const result = run('watch-status', runDir)
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.deepEqual(output.usage, {
+    confirmedExecutions: 4,
+    signedAttempts: 5,
+    exactPreflights: 10,
+    failedGasWei: '0',
+  })
+  assert.equal(output.runtime.completedExecutionsThisArm, 4)
+  assert.equal(output.runtime.exactPreflightsThisArm, 10)
+  assert.equal(output.runtime.signedAttemptsThisArm, 5)
+})
+
 test('generic watch status reports a corrupt authorization without crashing', (context) => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-corrupt-arm-'))
   context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))

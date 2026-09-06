@@ -148,5 +148,7 @@ Acceptance:
 - an explicit recovery command can close the old raw only after two independent readers prove absence and both chain
   heads are past its deadline; the expired raw can never enter the replay path.
 
-Status: implementation and regression tests complete locally. CI, commit-addressed server promotion, two-reader stale
-raw reconciliation and a fresh human authorization remain required before the watcher can resume.
+Status: implementation, regression tests, protected-branch CI, commit-addressed server promotion and two-reader stale
+raw reconciliation are complete. The watcher remains disabled because the old arm is exhausted and the configured
+execution RPC exhausted its monthly quota. Provider credential rotation, a working execution RPC and a fresh human
+authorization remain required before the watcher can resume.
