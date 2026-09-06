@@ -60,3 +60,22 @@ test('generic watch status reports a corrupt authorization without crashing', (c
   assert.equal(output.authorization.id, 'invalid-arm')
   assert.match(output.authorization.error, /INVALID_AUTHORIZATION_READBACK/)
 })
+
+test('generic CLI redacts credentialized RPC URLs from stderr diagnostics', (context) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-stderr-'))
+  context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const result = spawnSync(process.execPath, [script, 'runtime-verify'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 5_000,
+    env: {
+      ...process.env,
+      MANGA_CONFIG_FILE: path.join(runDir, 'missing.env'),
+      MANGA_RPC_URL: 'http://127.0.0.1:1/private-token?key=secret',
+      MANGA_RUN_DIR: runDir,
+    },
+  })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /<RPC_URL_REDACTED>/)
+  assert.doesNotMatch(result.stderr, /private-token|key=secret/)
+})

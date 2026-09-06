@@ -31,6 +31,7 @@ import {
   RpcErrorClass,
   classifyReconciliation,
   classifyRpcError,
+  diagnosticErrorText,
   errorText,
   evaluateArmBudget,
   genericSignerLaneConflict,
@@ -2142,11 +2143,11 @@ async function watch() {
           watchState = {
             ...watchState,
             status: 'STOPPED_POLICY',
-            reason: error.message,
+            reason: errorText(error),
             updatedAt: new Date().toISOString(),
           }
           writeWatchState(watchState)
-          appendAudit('watch_stopped_policy', { reason: error.message, authorizationId: arm.authorizationId })
+          appendAudit('watch_stopped_policy', { reason: errorText(error), authorizationId: arm.authorizationId })
           return watchState
         }
 
@@ -2259,14 +2260,14 @@ async function watch() {
               watchState = {
                 ...watchState,
                 status: 'HALTED_UNKNOWN',
-                reason: error.message,
+                reason: errorText(error),
                 transaction: unresolvedAfter.hash,
                 updatedAt: new Date().toISOString(),
               }
               writeWatchState(watchState)
               appendAudit('watch_halted_unknown', {
                 hash: unresolvedAfter.hash,
-                reason: error.message,
+                reason: errorText(error),
                 authorizationId: arm.authorizationId,
               })
               return watchState
@@ -2276,22 +2277,28 @@ async function watch() {
                 ...watchState,
                 status: 'RUNNING',
                 lastDecision: 'CANDIDATE_EVAPORATED',
-                reason: error.message,
+                reason: errorText(error),
                 updatedAt: new Date().toISOString(),
               }
               writeWatchState(watchState)
-              appendAudit('watch_candidate_evaporated', { reason: error.message, authorizationId: arm.authorizationId })
+              appendAudit('watch_candidate_evaporated', {
+                reason: errorText(error),
+                authorizationId: arm.authorizationId,
+              })
             } else if (isTransientRpcError(error)) {
               throw error
             } else {
               watchState = {
                 ...watchState,
                 status: 'HALTED_INVARIANT',
-                reason: error.message,
+                reason: errorText(error),
                 updatedAt: new Date().toISOString(),
               }
               writeWatchState(watchState)
-              appendAudit('watch_halted_invariant', { reason: error.message, authorizationId: arm.authorizationId })
+              appendAudit('watch_halted_invariant', {
+                reason: errorText(error),
+                authorizationId: arm.authorizationId,
+              })
               return watchState
             }
           }
@@ -2337,14 +2344,14 @@ async function watch() {
           watchState = {
             ...watchState,
             status: 'HALTED_UNKNOWN',
-            reason: error.message,
+            reason: errorText(error),
             transaction: unresolved.hash,
             updatedAt: new Date().toISOString(),
           }
           writeWatchState(watchState)
           appendAudit('watch_halted_unknown', {
             hash: unresolved.hash,
-            reason: error.message,
+            reason: errorText(error),
             authorizationId: arm.authorizationId,
           })
           return watchState
@@ -2353,11 +2360,14 @@ async function watch() {
           watchState = {
             ...watchState,
             status: 'HALTED_INVARIANT',
-            reason: error.message,
+            reason: errorText(error),
             updatedAt: new Date().toISOString(),
           }
           writeWatchState(watchState)
-          appendAudit('watch_halted_invariant', { reason: error.message, authorizationId: arm.authorizationId })
+          appendAudit('watch_halted_invariant', {
+            reason: errorText(error),
+            authorizationId: arm.authorizationId,
+          })
           return watchState
         }
         const consecutiveErrors = (watchState.consecutiveErrors || 0) + 1
@@ -2401,7 +2411,7 @@ async function watch() {
         executor: readState()?.executor || null,
       }),
       status: unresolved ? 'HALTED_UNKNOWN' : 'HALTED_STARTUP',
-      reason: error.shortMessage || error.message,
+      reason: errorText(error),
       transaction: unresolved?.hash || null,
       authorizationId: currentArm?.authorizationId || null,
       updatedAt: new Date().toISOString(),
@@ -2409,10 +2419,10 @@ async function watch() {
     writeWatchState(watchState)
     appendAudit('watch_halted_startup', {
       authorizationId: currentArm?.authorizationId || null,
-      reason: error.shortMessage || error.message,
+      reason: errorText(error),
       unresolvedHash: unresolved?.hash || null,
     })
-    console.error(error.stack || error)
+    console.error(diagnosticErrorText(error))
     return watchState
   } finally {
     stopPoolSubscriptions()
@@ -2903,7 +2913,7 @@ main()
   .then(closeWatchTransport)
   .catch(async (error) => {
     appendAudit('command_failed', { command: process.argv[2] || 'status', error: errorText(error) })
-    console.error(error.stack || error)
+    console.error(diagnosticErrorText(error))
     process.exitCode = 1
     await closeWatchTransport()
   })

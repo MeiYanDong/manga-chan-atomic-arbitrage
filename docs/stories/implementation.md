@@ -144,7 +144,7 @@ Acceptance:
 - a mismatched, duplicate, terminal or stale reservation fails closed, and a sixth attempt remains blocked before
   signing;
 - expiry, confirmed-execution, failed-Gas and exact-preflight limits remain independently enforced after signing;
-- credentialized HTTP and WebSocket URLs are redacted before provider errors enter logs;
+- credentialized HTTP and WebSocket URLs are redacted before provider errors enter state, logs or CLI output;
 - an explicit recovery command can close the old raw only after two independent readers prove absence and both chain
   heads are past its deadline; the expired raw can never enter the replay path.
 
