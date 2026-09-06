@@ -29,7 +29,9 @@ The fixes passed the repository quality gate and protected-branch CI in:
 - [PR #28](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/28), merge commit
   `a1796eb951bd4f1d5c2cc3593c62bf11e5ae5dba`;
 - [PR #29](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/29), merge commit
-  `137e081303b11429a8391f25ce2532e58d1df4bc`.
+  `137e081303b11429a8391f25ce2532e58d1df4bc`;
+- [PR #30](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/30), merge commit
+  `24c1d869ff82e912dc3ab85c147476f039247a93`.
 
 The second repair ensures credentialized HTTP/WSS URLs are redacted from provider errors before state, audit or CLI
 stderr output. The previously exposed provider endpoint credential must still be rotated at the provider.
@@ -37,8 +39,10 @@ stderr output. The previously exposed provider endpoint credential must still be
 ## Server and terminal recovery readback
 
 The signing host's active release symlink resolved to
-`137e081303b11429a8391f25ce2532e58d1df4bc`. Its install gate passed formatting, lint, Linux systemd validation,
-checked-JS types, compilation, 52 unit tests, both deterministic Cancun contract suites and the secret scan.
+`24c1d869ff82e912dc3ab85c147476f039247a93`. Its install gate passed formatting, lint, Linux systemd validation,
+checked-JS types, compilation, 53 unit tests, both deterministic Cancun contract suites and the secret scan. The live
+status readback now agrees with the audit ledger: four confirmed executions, five signed attempts and ten exact
+preflights.
 
 At `2026-09-06T06:53:22.880Z`, the append-only audit ledger recorded:
 
@@ -69,8 +73,10 @@ the expired transaction and receipt as absent.
 - old authorization: still recorded as `ARMED` but exhausted at five signed attempts, so it cannot authorize another
   transaction;
 - `manga-opportunity-board.service`: enabled and active;
-- board snapshot `2026-09-06T07:07:47.205Z`: complete catalog, 496 candidates, 23 freshly quoted tokens and zero
-  screened-positive opportunities; `/healthz` returned HTTP `200` and `HEALTHY`.
+- after the release restart, board snapshot `2026-09-06T07:15:15.295Z` had a complete catalog, 496 candidates, 15
+  freshly quoted tokens and one proxy-screened candidate at `0.061447 USDG` net. That candidate was below the current
+  `0.10 USDG` authorization gate and was not execution-authorized; `/healthz` returned HTTP `200` and `HEALTHY` after
+  the first scan completed.
 
 The configured Chainstack execution endpoint currently rejects `eth_chainId` because its monthly Request Unit quota is
 exhausted. Runtime diagnostics now display `<RPC_URL_REDACTED>` instead of the credentialized URL.
