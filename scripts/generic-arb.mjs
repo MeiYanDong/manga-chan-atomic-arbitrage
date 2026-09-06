@@ -30,7 +30,10 @@ import { assertPrivateFile, buildMutationPlan, persistSignedRaw, stableStringify
 import {
   classifyReconciliation,
   errorText,
+  evaluateExpiredMutationAbandonment,
   evaluateGenericArmBudget,
+  evaluateGenericArmBudgetAtBroadcast,
+  evaluateRawReplayDeadline,
   fixedSignerLaneConflict,
   genericSignerLaneConflict,
   isGenericOpportunityMiss,
@@ -686,13 +689,13 @@ async function executionPreflight({ print = true, opportunityId = null } = {}) {
 }
 
 async function signBroadcastWait(plan, transaction, assertStillAuthorized = null) {
-  if (assertStillAuthorized) assertStillAuthorized()
+  if (assertStillAuthorized) assertStillAuthorized({ stage: 'before-sign' })
   const account = loadAccount()
   const serializedTransaction = await account.signTransaction(transaction)
-  if (assertStillAuthorized) assertStillAuthorized()
+  if (assertStillAuthorized) assertStillAuthorized({ stage: 'after-sign-before-persist' })
   const hash = keccak256(serializedTransaction)
   const rawPrivateRef = persistSignedRaw(SIGNED_TX_DIR, hash, serializedTransaction)
-  appendAudit('mutation_signed', {
+  const currentSignedAttempt = {
     kind: plan.kind,
     authorizationId: plan.authorizationId || null,
     intentId: plan.intentId,
@@ -700,13 +703,14 @@ async function signBroadcastWait(plan, transaction, assertStillAuthorized = null
     hash,
     nonce: plan.nonce,
     rawPrivateRef,
-  })
+  }
+  appendAudit('mutation_signed', currentSignedAttempt)
   const walletClient = createWalletClient({
     account,
     chain,
     transport: http(RPC_URL, { timeout: 30_000, retryCount: 0 }),
   })
-  if (assertStillAuthorized) assertStillAuthorized()
+  if (assertStillAuthorized) assertStillAuthorized({ stage: 'before-broadcast', currentSignedAttempt })
   try {
     const acceptedHash = await walletClient.sendRawTransaction({ serializedTransaction })
     if (acceptedHash.toLowerCase() !== hash.toLowerCase()) throw new Error('RPC returned a different transaction hash')
@@ -1052,13 +1056,16 @@ async function execute({ opportunityId = null, authorizationId = null, abortRequ
       args: protectedArgs,
     })
     const assertStillAuthorized = authorizationId
-      ? () => {
+      ? ({ currentSignedAttempt = null } = {}) => {
           if (abortRequested?.()) stopForPolicy('stop requested before signing')
           const liveArm = readJson(GENERIC_WATCH_ARM_PATH)
           if (liveArm?.authorizationId !== authorizationId) {
             throw new Error('generic watcher authorization id changed during exact preflight')
           }
-          assertGenericWatchArm(liveArm, readJson(STATE_PATH), { allowCurrentExactPreflight: true })
+          assertGenericWatchArm(liveArm, readJson(STATE_PATH), {
+            allowCurrentExactPreflight: true,
+            currentSignedAttempt,
+          })
           if (
             check.candidate.amountIn > BigInt(liveArm.maxPrincipalUsdgWei) ||
             check.candidate.screenedNetProfit < BigInt(liveArm.minimumScreenedNetProfitUsdgWei)
@@ -1175,14 +1182,22 @@ async function optionalLookup(operation) {
 
 async function observeMutation(client, source, hash) {
   try {
-    const [head, latestNonce, pendingNonce, transaction, receipt] = await Promise.all([
-      client.getBlockNumber(),
+    const [headBlock, latestNonce, pendingNonce, transaction, receipt] = await Promise.all([
+      client.getBlock(),
       client.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
       client.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
       optionalLookup(() => client.getTransaction({ hash })),
       optionalLookup(() => client.getTransactionReceipt({ hash })),
     ])
-    return { source, head, latestNonce, pendingNonce, transaction, receipt }
+    return {
+      source,
+      head: headBlock.number,
+      headTimestamp: headBlock.timestamp,
+      latestNonce,
+      pendingNonce,
+      transaction,
+      receipt,
+    }
   } catch (error) {
     return { source, error: errorText(error) }
   }
@@ -1221,6 +1236,11 @@ async function reconcile() {
     if (!plan) throw new Error('persisted mutation plan is missing; state remains UNKNOWN')
     if (plan.lane !== 'generic-v2')
       throw new Error(`unresolved mutation belongs to ${plan.lane || 'fixed-v1'}; use its reconciler`)
+    const abandonExpired = process.argv.includes('--abandon-expired')
+    const rebroadcastSameRaw = process.argv.includes('--rebroadcast-same-raw')
+    if (abandonExpired && rebroadcastSameRaw) {
+      throw new Error('choose either --abandon-expired or --rebroadcast-same-raw, never both')
+    }
     const rawFile = path.resolve(mutation.rawPrivateRef || '')
     const signedRoot = `${path.resolve(SIGNED_TX_DIR)}${path.sep}`
     if (!rawFile.startsWith(signedRoot) || !fs.existsSync(rawFile))
@@ -1249,6 +1269,7 @@ async function reconcile() {
       sources: observations.map((item) => ({
         source: item.source,
         head: item.head,
+        headTimestamp: item.headTimestamp,
         latestNonce: item.latestNonce,
         pendingNonce: item.pendingNonce,
         transactionSeen: Boolean(item.transaction),
@@ -1291,7 +1312,37 @@ async function reconcile() {
       console.log(stringify(result))
       return result
     }
-    if (outcome.state === 'NOT_OBSERVED' && process.argv.includes('--rebroadcast-same-raw')) {
+    const expiredAbandonment = evaluateExpiredMutationAbandonment(plan, observations)
+    if (outcome.state === 'NOT_OBSERVED' && abandonExpired) {
+      if (!expiredAbandonment.allowed) {
+        throw new Error(`signed mutation cannot be abandoned: ${expiredAbandonment.reason}`)
+      }
+      appendAudit('mutation_abandoned', {
+        kind: mutation.kind,
+        authorizationId: plan.authorizationId || null,
+        hash: mutation.hash,
+        intentId: plan.intentId,
+        planHash: plan.planHash,
+        nonce: plan.nonce,
+        deadline: plan.deadline,
+        result: 'EXPIRED_NOT_OBSERVED',
+        readerHeads: observations
+          .filter((item) => !item.error)
+          .map((item) => ({ source: item.source, head: item.head, headTimestamp: item.headTimestamp })),
+      })
+      const result = {
+        status: 'RECONCILED_EXPIRED_NOT_OBSERVED',
+        hash: mutation.hash,
+        result: 'EXPIRED_NOT_OBSERVED',
+      }
+      console.log(stringify(result))
+      return result
+    }
+    if (outcome.state === 'NOT_OBSERVED' && rebroadcastSameRaw) {
+      const replayDeadline = evaluateRawReplayDeadline(plan, observations)
+      if (!replayDeadline.allowed) {
+        throw new Error(`generic execution raw must not be rebroadcast: ${replayDeadline.reason}`)
+      }
       const results = await Promise.allSettled(
         [publicClient, ...(secondaryClient ? [secondaryClient] : [])].map(async (client) => {
           const acceptedHash = await client.sendRawTransaction({ serializedTransaction })
@@ -1511,7 +1562,11 @@ function genericWatchAuthorizationId(arm) {
   return keccak256(toHex(stableStringify(genericWatchAuthorizationCommitment(arm))))
 }
 
-function assertGenericWatchArm(arm, deploymentState, { allowCurrentExactPreflight = false } = {}) {
+function assertGenericWatchArm(
+  arm,
+  deploymentState,
+  { allowCurrentExactPreflight = false, currentSignedAttempt = null } = {},
+) {
   if (!arm || arm.status !== 'ARMED') stopForPolicy('not armed')
   if (
     arm.schemaVersion !== 1 ||
@@ -1553,8 +1608,11 @@ function assertGenericWatchArm(arm, deploymentState, { allowCurrentExactPrefligh
   ) {
     throw new Error('generic watch authorization has an invalid economic boundary')
   }
-  const usage = genericWatchUsage(arm, deploymentState)
-  const budget = evaluateGenericArmBudget(arm, usage)
+  const records = readAuditRecords()
+  const usage = genericWatchUsage(arm, deploymentState, records)
+  const budget = currentSignedAttempt
+    ? evaluateGenericArmBudgetAtBroadcast(arm, usage, records, currentSignedAttempt)
+    : evaluateGenericArmBudget(arm, usage)
   if (
     !budget.allowed &&
     !(

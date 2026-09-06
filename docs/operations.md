@@ -56,6 +56,16 @@ npm run reconcile -- --rebroadcast-same-raw
 
 This sends the previously persisted bytes. It does not replace or reprice the transaction.
 
+For a generic execution whose protected on-chain deadline has already expired, do not rebroadcast. Close it only after
+the reconciler proves absence and expiry independently at both readers:
+
+```bash
+npm run generic:reconcile -- --abandon-expired
+```
+
+This appends `EXPIRED_NOT_OBSERVED` as a distinct terminal fact; it does not claim a receipt, consume a nonce or submit
+a transaction. Deployment and withdrawal transactions have no comparable deadline and cannot use this path.
+
 ## Runtime verification
 
 `npm run runtime:verify` checks:

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Treat the exact latest unresolved signed generic execution as the already-reserved current attempt at the final
+  broadcast boundary, so the last authorized attempt can be sent without permitting an additional attempt.
+- Fail closed when the signed-attempt identity, authorization, ordering, ledger count or unresolved state differs from
+  the current immutable plan.
+- Redact credentialized HTTP and WebSocket URLs before provider errors enter runtime or audit logs.
+- Add an explicit two-reader `--abandon-expired` reconciliation terminal for unbroadcast generic executions and reject
+  attempts to replay a raw transaction after its on-chain deadline.
+
 ## 0.4.0 — 2026-09-05
 
 - Add an expiring, bounded generic-v2 authorization and autonomous Linux watcher.
