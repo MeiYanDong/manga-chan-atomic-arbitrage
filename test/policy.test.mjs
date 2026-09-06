@@ -5,6 +5,7 @@ import {
   RpcErrorClass,
   classifyReconciliation,
   classifyRpcError,
+  diagnosticErrorText,
   errorText,
   evaluateArmBudget,
   evaluateExpiredMutationAbandonment,
@@ -34,6 +35,9 @@ test('redacts credentialized RPC URLs before errors enter logs', () => {
   const error = new Error('HTTP request failed\nURL: https://node.example/v1/private-token?key=secret')
   assert.equal(errorText(error), 'HTTP request failed\nURL: <RPC_URL_REDACTED>')
   assert.doesNotMatch(errorText(error), /private-token|secret/)
+  error.stack = `${error.stack}\n    at https://node.example/v1/private-token?key=secret:1:1`
+  assert.match(diagnosticErrorText(error), /at <RPC_URL_REDACTED>/)
+  assert.doesNotMatch(diagnosticErrorText(error), /private-token|secret/)
 })
 
 test('finds unresolved mutations across execute, deploy and withdraw', () => {

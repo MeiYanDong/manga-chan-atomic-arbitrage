@@ -29,6 +29,7 @@ import { GENERIC_USDG, GENERIC_WETH, buildGenericExecutionCandidates } from '../
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw, stableStringify } from '../src/journal.mjs'
 import {
   classifyReconciliation,
+  diagnosticErrorText,
   errorText,
   evaluateExpiredMutationAbandonment,
   evaluateGenericArmBudget,
@@ -1964,13 +1965,13 @@ async function watchGeneric() {
           watchState = {
             ...watchState,
             status: 'STOPPED_POLICY',
-            reason: error.message,
+            reason: errorText(error),
             updatedAt: new Date().toISOString(),
           }
           writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
           appendAudit('generic_watch_stopped_policy', {
             authorizationId: watchState.authorizationId,
-            reason: error.message,
+            reason: errorText(error),
           })
           return watchState
         }
@@ -2343,6 +2344,6 @@ async function main() {
 
 main().catch((error) => {
   appendAudit('generic_command_failed', { command: process.argv[2] || 'status', error: errorText(error) })
-  console.error(error.stack || error)
+  console.error(diagnosticErrorText(error))
   process.exitCode = 1
 })

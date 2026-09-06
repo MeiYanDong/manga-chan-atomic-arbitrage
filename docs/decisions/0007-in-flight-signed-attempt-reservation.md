@@ -24,8 +24,8 @@ Only for that exact in-flight reservation, subtract one from the signed-attempt 
 transaction was permitted to begin. Expiry, confirmed executions, failed Gas and exact preflights are evaluated without
 adjustment. Missing, stale, duplicate, terminal, reordered or mismatched evidence fails closed.
 
-Provider error text is sanitized before persistence so a credential embedded in an RPC URL cannot enter the audit
-ledger.
+Provider error text and diagnostic stacks are sanitized before persistence or console output so a credential embedded
+in an RPC URL cannot enter the runtime state, audit ledger or service journal.
 
 `reconcile --abandon-expired` may append a terminal `EXPIRED_NOT_OBSERVED` record only for a generic execution whose
 deadline is behind both independent readers' chain timestamps and whose hash and nonce are absent at both readers. The

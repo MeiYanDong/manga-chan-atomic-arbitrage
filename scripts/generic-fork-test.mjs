@@ -13,6 +13,7 @@ import {
   parseEther,
 } from 'viem'
 import { buildGenericExecutionCandidate } from '../src/generic-plan.mjs'
+import { diagnosticErrorText } from '../src/policy.mjs'
 import { compileGenericContract } from './generic-contract-compile.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -223,6 +224,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error.stack || error)
+  console.error(diagnosticErrorText(error))
   process.exitCode = 1
 })

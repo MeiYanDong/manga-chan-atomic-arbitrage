@@ -6,7 +6,8 @@
   broadcast boundary, so the last authorized attempt can be sent without permitting an additional attempt.
 - Fail closed when the signed-attempt identity, authorization, ordering, ledger count or unresolved state differs from
   the current immutable plan.
-- Redact credentialized HTTP and WebSocket URLs before provider errors enter runtime or audit logs.
+- Redact credentialized HTTP and WebSocket URLs before provider errors enter runtime state, audit logs or CLI stack
+  output.
 - Add an explicit two-reader `--abandon-expired` reconciliation terminal for unbroadcast generic executions and reject
   attempts to replay a raw transaction after its on-chain deadline.
 

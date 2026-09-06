@@ -37,6 +37,12 @@ export function errorText(error) {
 }
 
 /** @param {unknown} error */
+export function diagnosticErrorText(error) {
+  const object = error && typeof error === 'object' ? /** @type {Record<string, any>} */ (error) : null
+  return redactSensitiveText(typeof object?.stack === 'string' ? object.stack : errorText(error))
+}
+
+/** @param {unknown} error */
 export function classifyRpcError(error) {
   const explicitClass = error && typeof error === 'object' ? /** @type {Record<string, any>} */ (error).rpcClass : null
   if (Object.values(RpcErrorClass).includes(explicitClass)) return explicitClass
