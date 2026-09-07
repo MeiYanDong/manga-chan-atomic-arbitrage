@@ -42,8 +42,13 @@ import {
   evaluateGenericRollingLease,
   evaluateRawReplayDeadline,
   fixedSignerLaneConflict,
+  GENERIC_WATCH_REALIZED_BALANCE_PRINCIPAL,
+  GENERIC_WATCH_UNTIL_REVOKED,
   genericWatchAuthorizationCommitment,
+  genericWatchSpendablePrincipal,
+  genericWatchTransportFailurePolicy,
   genericSignerLaneConflict,
+  isGenericWatchUntilRevoked,
   isGenericOpportunityMiss,
   isTransientRpcError,
   latestUnresolvedMutation,
@@ -322,6 +327,7 @@ async function loadBoardSnapshot() {
     return JSON.parse(fs.readFileSync(path.resolve(RUNTIME_CONFIG.genericBoardSnapshot), 'utf8'))
   }
   const url = assertLoopbackBoardUrl(RUNTIME_CONFIG.genericBoardUrl)
+  url.searchParams.set('view', 'execution')
   const response = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(5_000) })
   if (!response.ok) throw new Error(`board snapshot HTTP ${response.status}`)
   return response.json()
@@ -1077,8 +1083,9 @@ async function execute({ opportunityId = null, authorizationId = null, abortRequ
             allowCurrentExactPreflight: true,
             currentSignedAttempt,
           })
+          const spendablePrincipal = genericWatchSpendablePrincipal(liveArm, readJson(STATE_PATH))
           if (
-            check.candidate.amountIn > BigInt(liveArm.maxPrincipalUsdgWei) ||
+            check.candidate.amountIn > spendablePrincipal ||
             check.candidate.screenedNetProfit < BigInt(liveArm.minimumScreenedNetProfitUsdgWei)
           ) {
             throw new Error('triggered candidate is outside the live generic watcher authorization')
@@ -1578,7 +1585,8 @@ function assertGenericWatchArm(
   if (arm.status !== 'ARMED') stopForPolicy('not armed')
   const legacyPolicy = arm.schemaVersion === 1 && arm.policyVersion === 'generic-v2-loopback-escalation-v1'
   const rollingPolicy = arm.schemaVersion === 2 && arm.policyVersion === 'generic-v2-loopback-escalation-v2'
-  if (arm.mode !== 'AUTO_POLICY' || (!legacyPolicy && !rollingPolicy)) {
+  const untilRevokedPolicy = arm.schemaVersion === 3 && arm.policyVersion === 'generic-v2-loopback-escalation-v3'
+  if (arm.mode !== 'AUTO_POLICY' || (!legacyPolicy && !rollingPolicy && !untilRevokedPolicy)) {
     throw new Error('generic watch authorization policy version mismatch')
   }
   const lease = evaluateGenericRollingLease(arm)
@@ -1611,23 +1619,39 @@ function assertGenericWatchArm(
   }
   if (
     rollingPolicy &&
-    (!RUNTIME_CONFIG.genericWatchAutoRenew ||
+    (RUNTIME_CONFIG.genericWatchUntilRevoked ||
+      !RUNTIME_CONFIG.genericWatchAutoRenew ||
       Number(arm.leaseDurationHours) !== RUNTIME_CONFIG.genericWatchArmHours ||
       Number(arm.renewBeforeHours) !== RUNTIME_CONFIG.genericWatchRenewBeforeHours)
   ) {
     throw new Error('generic watcher rolling-lease runtime differs from the authorization scope')
   }
-  if (legacyPolicy && RUNTIME_CONFIG.genericWatchAutoRenew) {
+  if (legacyPolicy && (RUNTIME_CONFIG.genericWatchAutoRenew || RUNTIME_CONFIG.genericWatchUntilRevoked)) {
     throw new Error('generic watcher requires a schema-v2 arm before rolling renewal can run')
+  }
+  if (
+    untilRevokedPolicy &&
+    (!RUNTIME_CONFIG.genericWatchUntilRevoked ||
+      RUNTIME_CONFIG.genericWatchAutoRenew ||
+      !isGenericWatchUntilRevoked(arm) ||
+      arm.principalPolicy !== GENERIC_WATCH_REALIZED_BALANCE_PRINCIPAL ||
+      arm.expiresAt !== undefined)
+  ) {
+    throw new Error('generic watcher until-revoked runtime differs from the authorization scope')
+  }
+  if (!untilRevokedPolicy && RUNTIME_CONFIG.genericWatchUntilRevoked) {
+    throw new Error('generic watcher requires a schema-v3 arm before until-revoked execution can run')
   }
   if (
     BigInt(arm.maxPrincipalUsdgWei) <= 0n ||
     BigInt(arm.maxPrincipalUsdgWei) > MAXIMUM_AMOUNT_IN ||
+    (untilRevokedPolicy && BigInt(arm.maxPrincipalUsdgWei) !== MAXIMUM_AMOUNT_IN) ||
     BigInt(arm.minimumGrossProfitUsdgWei) !== MINIMUM_GROSS_PROFIT ||
     BigInt(arm.minimumScreenedNetProfitUsdgWei) < configuredMinimumNet
   ) {
     throw new Error('generic watch authorization has an invalid economic boundary')
   }
+  genericWatchSpendablePrincipal(arm, deploymentState)
   const records = readAuditRecords()
   const usage = genericWatchUsage(arm, deploymentState, records)
   const budget = currentSignedAttempt
@@ -1654,6 +1678,9 @@ async function armGenericWatcher() {
     assertFixedSignerInactive()
     const existing = readJson(GENERIC_WATCH_ARM_PATH)
     if (existing?.status === 'ARMED') {
+      if (isGenericWatchUntilRevoked(existing)) {
+        throw new Error('an until-revoked generic watcher authorization already exists; disarm it before replacing it')
+      }
       const existingExpiry = Date.parse(existing.expiresAt)
       if (!Number.isFinite(existingExpiry)) throw new Error('existing generic watcher authorization has invalid expiry')
       if (Date.now() < existingExpiry) {
@@ -1685,12 +1712,21 @@ async function armGenericWatcher() {
     if (minimumScreenedNetProfit < minimumNetProfit) {
       throw new Error('watcher screened-net gate must be at least the exact minimum-net floor')
     }
-    const maxPrincipal = principal < MAXIMUM_AMOUNT_IN ? principal : MAXIMUM_AMOUNT_IN
+    const untilRevoked = RUNTIME_CONFIG.genericWatchUntilRevoked
+    const maxPrincipal = untilRevoked
+      ? MAXIMUM_AMOUNT_IN
+      : principal < MAXIMUM_AMOUNT_IN
+        ? principal
+        : MAXIMUM_AMOUNT_IN
     const issuedAt = new Date()
     const expiresAt = new Date(issuedAt.getTime() + RUNTIME_CONFIG.genericWatchArmHours * 60 * 60 * 1_000)
     const rollingLease = RUNTIME_CONFIG.genericWatchAutoRenew
     const scope = {
-      policyVersion: rollingLease ? 'generic-v2-loopback-escalation-v2' : 'generic-v2-loopback-escalation-v1',
+      policyVersion: untilRevoked
+        ? 'generic-v2-loopback-escalation-v3'
+        : rollingLease
+          ? 'generic-v2-loopback-escalation-v2'
+          : 'generic-v2-loopback-escalation-v1',
       chainId: CHAIN_ID,
       wallet: WALLET,
       executor,
@@ -1708,18 +1744,23 @@ async function armGenericWatcher() {
       maxFailedGasWei: RUNTIME_CONFIG.maxFailedGasWei.toString(),
     }
     const authorization = {
-      schemaVersion: rollingLease ? 2 : 1,
+      schemaVersion: untilRevoked ? 3 : rollingLease ? 2 : 1,
       mode: 'AUTO_POLICY',
       issuedAt: issuedAt.toISOString(),
       ...scope,
-      ...(rollingLease
+      ...(untilRevoked
         ? {
-            initialExpiresAt: expiresAt.toISOString(),
-            autoRenewLease: true,
-            leaseDurationHours: RUNTIME_CONFIG.genericWatchArmHours,
-            renewBeforeHours: RUNTIME_CONFIG.genericWatchRenewBeforeHours,
+            authorizationLifetime: GENERIC_WATCH_UNTIL_REVOKED,
+            principalPolicy: GENERIC_WATCH_REALIZED_BALANCE_PRINCIPAL,
           }
-        : { expiresAt: expiresAt.toISOString() }),
+        : rollingLease
+          ? {
+              initialExpiresAt: expiresAt.toISOString(),
+              autoRenewLease: true,
+              leaseDurationHours: RUNTIME_CONFIG.genericWatchArmHours,
+              renewBeforeHours: RUNTIME_CONFIG.genericWatchRenewBeforeHours,
+            }
+          : { expiresAt: expiresAt.toISOString() }),
       baselineNonce: wallet.nonceLatest,
       baselineExecutionCount: (deploymentState.executions || []).length,
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
@@ -1758,8 +1799,11 @@ async function armGenericWatcher() {
     appendAudit('generic_watch_armed', {
       authorizationId: arm.authorizationId,
       executor,
-      expiresAt: arm.expiresAt,
+      authorizationLifetime: arm.authorizationLifetime || (rollingLease ? 'ROLLING_LEASE' : 'FIXED_EXPIRY'),
+      expiresAt: arm.expiresAt ?? null,
       maxPrincipalUsdgWei: arm.maxPrincipalUsdgWei,
+      principalPolicy: arm.principalPolicy || 'FIXED_AT_ARM',
+      spendablePrincipalUsdgWei: genericWatchSpendablePrincipal(arm, deploymentState).toString(),
       minimumNetProfitUsdgWei: arm.minimumNetProfitUsdgWei,
       minimumScreenedNetProfitUsdgWei: arm.minimumScreenedNetProfitUsdgWei,
       maxConfirmedExecutions: arm.maxConfirmedExecutions,
@@ -1777,8 +1821,11 @@ async function armGenericWatcher() {
         status: 'GENERIC_WATCH_ARMED',
         authorizationId: arm.authorizationId,
         executor,
-        expiresAt: arm.expiresAt,
-        principalCapUsdg: formatUnits(maxPrincipal, 6),
+        authorizationLifetime: arm.authorizationLifetime || (rollingLease ? 'ROLLING_LEASE' : 'FIXED_EXPIRY'),
+        expiresAt: arm.expiresAt ?? null,
+        principalHardCapUsdg: formatUnits(maxPrincipal, 6),
+        currentSpendablePrincipalUsdg: formatUnits(genericWatchSpendablePrincipal(arm, deploymentState), 6),
+        principalPolicy: arm.principalPolicy || 'FIXED_AT_ARM',
         minimumNetProfitUsdg: formatUnits(minimumNetProfit, 6),
         minimumScreenedNetProfitUsdg: formatUnits(minimumScreenedNetProfit, 6),
         maxConfirmedExecutions: displayCountLimit(arm.maxConfirmedExecutions),
@@ -1914,9 +1961,15 @@ async function watchGeneric() {
       }),
     ])
     const expectedNonce = Number(arm.baselineNonce) + usage.confirmedExecutions
-    if (wallet.nonceLatest !== wallet.noncePending || wallet.nonceLatest !== expectedNonce || principal < 1n) {
+    const spendablePrincipal = genericWatchSpendablePrincipal(arm, deploymentState)
+    if (
+      wallet.nonceLatest !== wallet.noncePending ||
+      wallet.nonceLatest !== expectedNonce ||
+      principal < spendablePrincipal ||
+      principal < 1n
+    ) {
       throw new Error(
-        `generic watcher startup state mismatch: latest/pending/expected=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}, principal=${principal}`,
+        `generic watcher startup state mismatch: latest/pending/expected=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}, principal/spendable=${principal}/${spendablePrincipal}`,
       )
     }
     const startedAt = new Date().toISOString()
@@ -1932,9 +1985,13 @@ async function watchGeneric() {
       triggerMode: 'LOOPBACK_BOARD_THEN_TARGETED_EXACT_PREFLIGHT',
       idleRpcBehavior: 'NONE',
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
+      authorizationLifetime:
+        arm.authorizationLifetime || (arm.autoRenewLease === true ? 'ROLLING_LEASE' : 'FIXED_EXPIRY'),
+      principalPolicy: arm.principalPolicy || 'FIXED_AT_ARM',
+      currentSpendablePrincipalUsdg: formatUnits(spendablePrincipal, 6),
       autoRenewLease: arm.autoRenewLease === true,
       leaseRevision: arm.leaseRevision ?? null,
-      authorizationExpiresAt: arm.expiresAt,
+      authorizationExpiresAt: arm.expiresAt ?? null,
       processedBoardGenerations: 0,
       consecutiveBoardErrors: 0,
       consecutiveExecutionRpcErrors: 0,
@@ -1959,7 +2016,9 @@ async function watchGeneric() {
         authorizationId: arm.authorizationId,
         pid: process.pid,
         executor,
-        expiresAt: arm.expiresAt,
+        authorizationLifetime: watchState.authorizationLifetime,
+        expiresAt: arm.expiresAt ?? null,
+        currentSpendablePrincipalUsdg: watchState.currentSpendablePrincipalUsdg,
         autoRenewLease: arm.autoRenewLease === true,
         leaseRevision: arm.leaseRevision ?? null,
         idleRpcBehavior: watchState.idleRpcBehavior,
@@ -2032,9 +2091,10 @@ async function watchGeneric() {
         }
         const candidate = selectGenericWatchCandidate(candidates, {
           minimumScreenedNetProfit: BigInt(currentArm.minimumScreenedNetProfitUsdgWei),
-          maxPrincipal: BigInt(currentArm.maxPrincipalUsdgWei),
+          maxPrincipal: genericWatchSpendablePrincipal(currentArm, currentDeploymentState),
           attemptedOpportunityIds: currentUsage.attemptedOpportunityIds,
         })
+        const currentSpendablePrincipal = genericWatchSpendablePrincipal(currentArm, currentDeploymentState)
         watchState = {
           ...watchState,
           status: 'RUNNING',
@@ -2044,6 +2104,7 @@ async function watchGeneric() {
           completedExecutionsThisArm: currentUsage.confirmedExecutions,
           exactPreflightsThisArm: currentUsage.exactPreflights,
           signedAttemptsThisArm: currentUsage.attempts,
+          currentSpendablePrincipalUsdg: formatUnits(currentSpendablePrincipal, 6),
           lastBoardGeneratedAt,
           lastDecision: candidate ? 'SCREEN_GATE_PASSED' : 'NO_ELIGIBLE_SCREEN',
           reason: null,
@@ -2091,6 +2152,7 @@ async function watchGeneric() {
         })
         const confirmedState = readJson(STATE_PATH)
         const confirmedUsage = genericWatchUsage(currentArm, confirmedState)
+        const confirmedSpendablePrincipal = genericWatchSpendablePrincipal(currentArm, confirmedState)
         watchState = {
           ...watchState,
           status: 'RUNNING',
@@ -2098,6 +2160,7 @@ async function watchGeneric() {
           completedExecutionsThisArm: confirmedUsage.confirmedExecutions,
           exactPreflightsThisArm: confirmedUsage.exactPreflights,
           signedAttemptsThisArm: confirmedUsage.attempts,
+          currentSpendablePrincipalUsdg: formatUnits(confirmedSpendablePrincipal, 6),
           consecutiveExecutionRpcErrors: 0,
           lastDecision: 'CONFIRMED_EXECUTION',
           reason: null,
@@ -2187,14 +2250,18 @@ async function watchGeneric() {
         } else if (boardTransportFailure(error)) {
           const counter = phase === 'BOARD' ? 'consecutiveBoardErrors' : 'consecutiveExecutionRpcErrors'
           const consecutiveErrors = Number(watchState?.[counter] || 0) + 1
+          const failurePolicy = genericWatchTransportFailurePolicy(
+            phase,
+            consecutiveErrors,
+            RUNTIME_CONFIG.genericWatchMaxConsecutiveErrors,
+          )
           watchState = {
             ...watchState,
             ...usageStateFields,
-            status:
-              consecutiveErrors >= RUNTIME_CONFIG.genericWatchMaxConsecutiveErrors ? 'HALTED_RPC' : 'DEGRADED_RPC',
+            status: failurePolicy.status,
             updatedAt: new Date().toISOString(),
             [counter]: consecutiveErrors,
-            lastDecision: 'RPC_ERROR',
+            lastDecision: failurePolicy.decision,
             reason: errorText(error),
           }
           writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
@@ -2203,7 +2270,7 @@ async function watchGeneric() {
             consecutiveErrors,
             reason: errorText(error),
           })
-          if (watchState.status === 'HALTED_RPC') return watchState
+          if (failurePolicy.shouldStop) return watchState
           await sleep(Math.min(30_000, RUNTIME_CONFIG.genericWatchPollMs * consecutiveErrors))
         } else if (/nonce/i.test(errorText(error))) {
           watchState = {
@@ -2282,10 +2349,12 @@ async function genericWatchStatus() {
   const processState = genericWatchLockHolder()
   let usage = null
   let observedUsage = null
+  let observedSpendablePrincipal = null
   if (arm && deploymentState) {
     try {
       const observed = genericWatchUsage(arm, deploymentState)
       observedUsage = observed
+      observedSpendablePrincipal = genericWatchSpendablePrincipal(arm, deploymentState)
       usage = {
         confirmedExecutions: observed.confirmedExecutions,
         signedAttempts: observed.attempts,
@@ -2323,7 +2392,9 @@ async function genericWatchStatus() {
         id: arm.authorizationId,
         status: arm.status,
         issuedAt: arm.issuedAt,
-        expiresAt: arm.expiresAt,
+        authorizationLifetime:
+          arm.authorizationLifetime || (arm.autoRenewLease === true ? 'ROLLING_LEASE' : 'FIXED_EXPIRY'),
+        expiresAt: arm.expiresAt ?? null,
         autoRenewLease: arm.autoRenewLease === true,
         leaseRevision: arm.leaseRevision ?? null,
         renewBeforeHours: arm.renewBeforeHours ?? null,
@@ -2331,7 +2402,10 @@ async function genericWatchStatus() {
         leaseAllowed: lease.allowed && !revocation,
         leaseReason: revocation ? 'disarmed' : lease.reason,
         revokedAt: revocation?.revokedAt ?? null,
-        maxPrincipalUsdg: formatUnits(BigInt(arm.maxPrincipalUsdgWei), 6),
+        principalPolicy: arm.principalPolicy || 'FIXED_AT_ARM',
+        principalHardCapUsdg: formatUnits(BigInt(arm.maxPrincipalUsdgWei), 6),
+        currentSpendablePrincipalUsdg:
+          observedSpendablePrincipal === null ? null : formatUnits(observedSpendablePrincipal, 6),
         minimumNetProfitUsdg: formatUnits(BigInt(arm.minimumNetProfitUsdgWei), 6),
         minimumScreenedNetProfitUsdg: formatUnits(BigInt(arm.minimumScreenedNetProfitUsdgWei), 6),
         maxConfirmedExecutions: displayCountLimit(arm.maxConfirmedExecutions),
@@ -2353,7 +2427,17 @@ async function genericWatchStatus() {
     process: processState,
     authorization,
     usage,
-    runtime: runtime && observedUsage ? { ...runtime, ...genericWatchUsageStateFields(observedUsage) } : runtime,
+    runtime:
+      runtime && observedUsage
+        ? {
+            ...runtime,
+            ...genericWatchUsageStateFields(observedUsage),
+            currentSpendablePrincipalUsdg:
+              observedSpendablePrincipal === null
+                ? runtime.currentSpendablePrincipalUsdg || null
+                : formatUnits(observedSpendablePrincipal, 6),
+          }
+        : runtime,
     deployment: deploymentState
       ? {
           status: deploymentState.status,

@@ -8,6 +8,7 @@ import {
   applyFreshness,
   buildBoardSnapshot,
   catalogIsComplete,
+  compactExecutionBoardSnapshot,
   materialEvents,
   nextCycleDelay,
   normalizePairCandidate,
@@ -26,6 +27,25 @@ test('cycle pacing preserves start interval and enforces a post-cycle cooldown',
     () => nextCycleDelay({ scanIntervalMs: 120_000, cycleDurationMs: -1, minimumPauseMs: 60_000 }),
     /non-negative/,
   )
+})
+
+test('execution snapshot keeps only fresh positive rows without mutating the full dashboard snapshot', () => {
+  const positive = { id: 'positive', status: BoardStatus.SCREENED_POSITIVE, fresh: true }
+  const snapshot = {
+    schemaVersion: 4,
+    service: 'manga-opportunity-board',
+    mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
+    selection: { executionAuthorized: false, id: positive.id },
+    items: [
+      positive,
+      { id: 'stale-positive', status: BoardStatus.SCREENED_POSITIVE, fresh: false },
+      { id: 'no-edge', status: BoardStatus.NO_EDGE, fresh: true },
+    ],
+  }
+  const compact = compactExecutionBoardSnapshot(snapshot)
+  assert.deepEqual(compact.items, [positive])
+  assert.equal(compact.selection, snapshot.selection)
+  assert.equal(snapshot.items.length, 3)
 })
 
 const TOKEN = '0x7aad9faa5ee27bdeeb17d5a8c1870278824c4c59'

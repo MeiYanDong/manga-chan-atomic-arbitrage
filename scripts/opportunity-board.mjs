@@ -23,6 +23,7 @@ import {
   appendEvents,
   buildBoardSnapshot,
   catalogIsComplete,
+  compactExecutionBoardSnapshot,
   nextCycleDelay,
   normalizePairCandidate,
   normalizePersistedBoardSnapshot,
@@ -2227,7 +2228,11 @@ class OpportunityBoard {
       if (request.method !== 'GET') return this.respondJson(response, 405, { error: 'method not allowed' })
       const requestUrl = new URL(request.url || '/', `http://${this.config.host}:${this.config.port}`)
       if (requestUrl.pathname === '/api/snapshot') {
-        return this.respondJson(response, this.snapshot ? 200 : 503, this.snapshot || { status: 'STARTING' })
+        const payload =
+          requestUrl.searchParams.get('view') === 'execution'
+            ? compactExecutionBoardSnapshot(this.snapshot)
+            : this.snapshot
+        return this.respondJson(response, payload ? 200 : 503, payload || { status: 'STARTING' })
       }
       if (requestUrl.pathname === '/api/events') return this.respondJson(response, 200, this.recentEvents())
       if (requestUrl.pathname === '/api/chain-catalog') {

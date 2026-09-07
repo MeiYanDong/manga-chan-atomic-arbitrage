@@ -262,10 +262,20 @@ export function evaluateRawReplayDeadline(plan, observations) {
 
 const HOUR_MS = 60 * 60 * 1_000
 
+export const GENERIC_WATCH_UNTIL_REVOKED = 'UNTIL_REVOKED'
+export const GENERIC_WATCH_REALIZED_BALANCE_PRINCIPAL = 'REALIZED_EXECUTOR_BALANCE_UP_TO_HARD_CAP'
+
+/** @param {Record<string, any> | null | undefined} arm */
+export function isGenericWatchUntilRevoked(arm) {
+  return arm?.schemaVersion === 3 && arm.authorizationLifetime === GENERIC_WATCH_UNTIL_REVOKED
+}
+
 /**
  * Return the immutable authorization/risk-epoch fields. Schema v1 commits its
  * single expiry; schema v2 instead commits the rolling-lease policy and keeps
- * the current lease revision/timestamps outside the authorization ID.
+ * the current lease revision/timestamps outside the authorization ID. Schema
+ * v3 commits a no-expiry-until-revoked lifetime and a realized-balance
+ * principal policy.
  *
  * @param {Record<string, any>} arm
  * @returns {Record<string, any>}
@@ -276,14 +286,19 @@ export function genericWatchAuthorizationCommitment(arm) {
     mode: arm.mode,
     policyVersion: arm.policyVersion,
     issuedAt: arm.issuedAt,
-    ...(arm.schemaVersion === 2
+    ...(arm.schemaVersion === 3
       ? {
-          initialExpiresAt: arm.initialExpiresAt,
-          autoRenewLease: arm.autoRenewLease,
-          leaseDurationHours: arm.leaseDurationHours,
-          renewBeforeHours: arm.renewBeforeHours,
+          authorizationLifetime: arm.authorizationLifetime,
+          principalPolicy: arm.principalPolicy,
         }
-      : { expiresAt: arm.expiresAt }),
+      : arm.schemaVersion === 2
+        ? {
+            initialExpiresAt: arm.initialExpiresAt,
+            autoRenewLease: arm.autoRenewLease,
+            leaseDurationHours: arm.leaseDurationHours,
+            renewBeforeHours: arm.renewBeforeHours,
+          }
+        : { expiresAt: arm.expiresAt }),
     chainId: arm.chainId,
     wallet: arm.wallet,
     executor: arm.executor,
@@ -386,13 +401,18 @@ export function renewGenericRollingLease(arm, now = Date.now()) {
 }
 
 /**
- * @param {{maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, expiresAt: string}} arm
+ * @param {{schemaVersion?: number, authorizationLifetime?: string, maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, expiresAt?: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, now?: number}} usage
  */
 export function evaluateArmBudget(arm, usage) {
   const now = usage.now ?? Date.now()
-  if (!Number.isFinite(Date.parse(arm.expiresAt)) || now >= Date.parse(arm.expiresAt))
+  if (arm.schemaVersion === 3) {
+    if (!isGenericWatchUntilRevoked(arm) || arm.expiresAt !== undefined) {
+      return { allowed: false, reason: 'invalid-authorization-lifetime' }
+    }
+  } else if (!Number.isFinite(Date.parse(arm.expiresAt)) || now >= Date.parse(arm.expiresAt)) {
     return { allowed: false, reason: 'expired' }
+  }
   if (
     arm.maxConfirmedExecutions !== null &&
     (!Number.isSafeInteger(arm.maxConfirmedExecutions) || arm.maxConfirmedExecutions <= 0)
@@ -408,8 +428,39 @@ export function evaluateArmBudget(arm, usage) {
 }
 
 /**
+ * Schema-v3 uses only balance evidence already written after a confirmed
+ * execution. That lets retained USDG profit widen the next eligible amount
+ * without adding an idle signer-RPC read. External top-ups do not silently
+ * expand authority; a fresh arm is required to adopt them.
+ *
+ * @param {Record<string, any>} arm
+ * @param {Record<string, any>} deploymentState
+ */
+export function genericWatchSpendablePrincipal(arm, deploymentState) {
+  const hardCap = BigInt(arm.maxPrincipalUsdgWei)
+  if (hardCap <= 0n) throw new Error('generic watcher principal hard cap must be positive')
+  if (arm.schemaVersion !== 3) return hardCap
+  if (!isGenericWatchUntilRevoked(arm) || arm.principalPolicy !== GENERIC_WATCH_REALIZED_BALANCE_PRINCIPAL) {
+    throw new Error('generic watcher schema-v3 principal policy is invalid')
+  }
+  const executions = deploymentState?.executions || []
+  const baseline = Number(arm.baselineExecutionCount)
+  if (!Array.isArray(executions) || !Number.isSafeInteger(baseline) || baseline < 0 || baseline > executions.length) {
+    throw new Error('generic watcher execution baseline is invalid for principal reconciliation')
+  }
+  const latestExecution = executions.at(-1)
+  const balanceEvidence =
+    executions.length > baseline ? latestExecution?.executorUsdgAfterWei : arm.principalUsdgWeiAtArm
+  if (balanceEvidence === undefined || BigInt(balanceEvidence) <= 0n) {
+    throw new Error('generic watcher has no positive realized principal evidence')
+  }
+  const realizedBalance = BigInt(balanceEvidence)
+  return realizedBalance < hardCap ? realizedBalance : hardCap
+}
+
+/**
  * Paid exact preflights are a separately bounded resource from signed attempts.
- * @param {{maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, maxExactPreflights: number | null, expiresAt: string}} arm
+ * @param {{schemaVersion?: number, authorizationLifetime?: string, maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, maxExactPreflights: number | null, expiresAt?: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, exactPreflights: number, now?: number}} usage
  */
 export function evaluateGenericArmBudget(arm, usage) {
@@ -433,7 +484,7 @@ export function evaluateGenericArmBudget(arm, usage) {
  * as the attempt currently in flight instead of rejecting it as a new sixth
  * attempt. All other arm budgets remain unchanged.
  *
- * @param {{authorizationId?: string, maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, maxExactPreflights: number | null, expiresAt: string}} arm
+ * @param {{authorizationId?: string, schemaVersion?: number, authorizationLifetime?: string, maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, maxExactPreflights: number | null, expiresAt?: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, exactPreflights: number, now?: number}} usage
  * @param {Array<Record<string, any>>} records
  * @param {{authorizationId: string, kind: string, intentId: string, planHash: string, hash: string, nonce: number | string}} currentSignedAttempt
@@ -497,6 +548,29 @@ export function selectGenericWatchCandidate(candidates, policy) {
   return null
 }
 
+/**
+ * Losing the signer-free loopback board cannot spend Gas, so it degrades and
+ * waits without a terminal retry count. Once exact execution RPC work starts,
+ * the existing finite error breaker remains authoritative.
+ *
+ * @param {string} phase
+ * @param {number} consecutiveErrors
+ * @param {number} maximumExecutionErrors
+ */
+export function genericWatchTransportFailurePolicy(phase, consecutiveErrors, maximumExecutionErrors) {
+  if (!Number.isSafeInteger(consecutiveErrors) || consecutiveErrors <= 0) {
+    throw new Error('generic watcher consecutive error count must be positive')
+  }
+  if (!Number.isSafeInteger(maximumExecutionErrors) || maximumExecutionErrors <= 0) {
+    throw new Error('generic watcher execution error limit must be positive')
+  }
+  if (phase === 'BOARD') {
+    return { status: 'DEGRADED_BOARD', shouldStop: false, decision: 'BOARD_RETRY_SCHEDULED' }
+  }
+  const shouldStop = consecutiveErrors >= maximumExecutionErrors
+  return { status: shouldStop ? 'HALTED_RPC' : 'DEGRADED_RPC', shouldStop, decision: 'RPC_ERROR' }
+}
+
 /** @param {unknown} error */
 export function isGenericOpportunityMiss(error) {
   const message = errorText(error)
@@ -514,6 +588,10 @@ export function isGenericOpportunityMiss(error) {
 function signerLaneConflict(input, lane) {
   const nowMs = input.nowMs ?? Date.now()
   if (input.arm?.status === 'ARMED') {
+    if (input.arm.schemaVersion === 3) {
+      if (isGenericWatchUntilRevoked(input.arm)) return `the ${lane} signing arm is still active`
+      return `the ${lane} signing arm has an invalid authorization lifetime`
+    }
     const expiresAt = Date.parse(input.arm.expiresAt)
     if (!Number.isFinite(expiresAt)) return `the ${lane} signing arm has an invalid expiry`
     if (nowMs < expiresAt) return `the ${lane} signing arm is still active`

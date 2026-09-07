@@ -22,6 +22,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'MANGA_GENERIC_WATCH_POLL_MS=750',
       'MANGA_GENERIC_WATCH_ARM_HOURS=168',
       'MANGA_GENERIC_WATCH_AUTO_RENEW=1',
+      'MANGA_GENERIC_WATCH_UNTIL_REVOKED=0',
       'MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS=24',
       'MANGA_GENERIC_WATCH_MAX_ATTEMPTS=unlimited',
       'MANGA_GENERIC_WATCH_MAX_EXECUTIONS=unlimited',
@@ -42,6 +43,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.genericWatchPollMs, 750)
   assert.equal(config.genericWatchArmHours, 168)
   assert.equal(config.genericWatchAutoRenew, true)
+  assert.equal(config.genericWatchUntilRevoked, false)
   assert.equal(config.genericWatchRenewBeforeHours, 24)
   assert.equal(config.genericWatchMaxAttempts, null)
   assert.equal(config.genericWatchMaxExecutions, null)
@@ -79,6 +81,15 @@ test('generic exact-preflight candidate count is bounded at configuration load',
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_ATTEMPTS: '0' }), /正整数/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_PREFLIGHTS: '0' }), /正整数/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_AUTO_RENEW: 'yes' }), /0 或 1/)
+  assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_UNTIL_REVOKED: 'yes' }), /0 或 1/)
+  assert.throws(
+    () =>
+      loadRuntimeConfig({
+        MANGA_GENERIC_WATCH_AUTO_RENEW: '1',
+        MANGA_GENERIC_WATCH_UNTIL_REVOKED: '1',
+      }),
+    /不能同时启用/,
+  )
   assert.throws(
     () =>
       loadRuntimeConfig({

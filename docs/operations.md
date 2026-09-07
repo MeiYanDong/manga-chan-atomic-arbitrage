@@ -152,8 +152,9 @@ board health never proves the signing watcher is armed or trading.
 ## Generic-v2 staged promotion
 
 Generic-v2 may share the same Linux host as the loopback opportunity board, but not the board's Unix identity, config,
-RPC role or runtime directory. The signing command reads `http://127.0.0.1:8788/api/snapshot`; `manga-board` still has
-no signer access. Generic-v2 must use the same `MANGA_RUN_DIR` as the fixed signer lane so both generations share
+RPC role or runtime directory. The signing command requests the compact execution view at
+`http://127.0.0.1:8788/api/snapshot?view=execution`; `manga-board` still has no signer access. Generic-v2 must use the
+same `MANGA_RUN_DIR` as the fixed signer lane so both generations share
 `wallet.lock`, `audit.jsonl` and the unresolved-mutation barrier.
 
 The board may use the official public RPC. `/etc/manga-chan-arbitrage/live.env` must instead contain a strategy-owned
@@ -197,13 +198,13 @@ sudo systemctl show manga-generic-watcher.service \
   --property=ActiveState,SubState,MainPID,NRestarts
 ```
 
-An arm binds the exact executor and build, current principal cap, screened and exact net floors, Gas reserve, expiry,
-maximum exact preflights, signed attempts, confirmed executions and failed Gas. Starting the service without a valid arm
-stops cleanly and never signs. Read local state without a chain call using:
+An arm binds the exact executor and build, principal policy and hard cap, screened and exact net floors, Gas reserve,
+authorization lifetime, maximum exact preflights, signed attempts, confirmed executions and failed Gas. Starting the
+service without a valid arm stops cleanly and never signs.
 
 For the generic watcher only, `MANGA_GENERIC_WATCH_MAX_EXECUTIONS`, `MANGA_GENERIC_WATCH_MAX_ATTEMPTS` and
 `MANGA_GENERIC_WATCH_MAX_PREFLIGHTS` may be set to the explicit value `unlimited`. This removes terminal count stops
-without changing the arm expiry, failed-Gas budget, ETH reserve, profit floors, principal cap, nonce checks or unknown
+without changing the authorization lifetime, failed-Gas budget, ETH reserve, profit floors, principal cap, nonce checks or unknown
 mutation barrier. Numeric values retain the finite policy; zero is invalid. The fixed-route watcher's
 `MANGA_MAX_ATTEMPTS` remains finite unless its own policy is separately reviewed.
 
@@ -226,6 +227,25 @@ profit floors, deployment, failed-Gas budget or other authorization scope requir
 `generic:watch:status` exposes `autoRenewLease`, `leaseRevision`, `expiresAt`, `renewWindowStartsAt` and any scheduled
 renewal retry. Treat `RUNNING` plus a future expiry as liveness evidence only; receipts and post-state remain the evidence
 for profit.
+
+To authorize operation until an explicit disarm, create a fresh arm with the mutually exclusive mode:
+
+```text
+MANGA_GENERIC_WATCH_AUTO_RENEW=0
+MANGA_GENERIC_WATCH_UNTIL_REVOKED=1
+```
+
+This schema-v3 arm has `authorizationLifetime=UNTIL_REVOKED` and no `expiresAt`. Its immutable hard principal cap is the
+contract's `100 USDG`; its current spendable principal starts at the canonical executor balance and advances only from a
+confirmed execution's `executorUsdgAfterWei`. Thus retained USDG profit compounds automatically while an unrelated
+external top-up cannot silently expand the authorization. The board still chooses the greatest absolute screened-net
+amount from its bounded grid; the strategy does not blindly spend the full balance. Each signed transaction retains its
+independent 45-second on-chain deadline.
+
+Board-only loopback transport failures enter `DEGRADED_BOARD` and retry indefinitely with a capped backoff because they
+cannot sign or spend Gas. Execution-RPC failures retain the configured consecutive-error halt. A `RUNNING` process or
+no-expiry arm is liveness/authority evidence, not profit evidence; only confirmed receipts and post-state update profit
+and compoundable principal.
 
 Disarm writes `generic-watch-revocation.json` before changing the arm or signalling the process. The marker is scoped to
 that authorization ID and remains authoritative if a concurrent stale write temporarily restores `ARMED`; creating a

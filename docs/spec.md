@@ -71,10 +71,13 @@ exact net USDG profit**. It does not optimize ROI and does not force 100 USDG. B
 amount must still be in the board's positive set, nonce and residual/allowance boundaries must still be clean, and a
 fresh exact simulation must satisfy both the gross-retention floor and worst-case gas-adjusted net floor.
 
-Autonomous generic shots additionally require an expiring deployment-bound arm. The watcher processes each board
-generation once, deduplicates by opportunity identity and rejects candidates outside the arm's principal or
+Autonomous generic shots additionally require a deployment-bound arm. Fixed-expiry and rolling-lease arms retain a time
+boundary. An explicit schema-v3 `UNTIL_REVOKED` arm has no time stop and derives its current eligible principal from the
+last confirmed executor USDG post-balance, capped at 100 USDG. The watcher processes each compact fresh-positive board
+generation once, deduplicates by opportunity identity and rejects candidates outside the current principal or
 screened-net floor before making a chain request. Exact preflights, signed attempts, confirmed executions and failed Gas
-have independent arm budgets. The arm and stop signal are checked immediately before and immediately after signing.
+have independent arm budgets. The arm, durable revocation and stop signal are checked immediately before and immediately
+after signing.
 
 The only valid no-action result is `NO_SHOT` with evidence. Quote failure is not the same as an unprofitable quote.
 

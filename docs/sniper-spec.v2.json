@@ -84,10 +84,10 @@
       "enabled": true,
       "question": "Can loopback-board triggering plus a dedicated strategy RPC capture PAIR relative-price discrepancies before they decay while preserving the exact marked-net floor?",
       "max_failed_cost": "0.001",
-      "max_attempts": 5,
-      "expires_at": "2026-09-12T05:13:52.489Z",
-      "sample_isolation": "Treat this bounded live canary separately from the minimum-20 race sample and do not infer win probability from it.",
-      "stop_condition": "Stop at authorization expiry, five signed attempts, five confirmed executions, twenty-four exact preflights, 0.001 ETH failed Gas, UNKNOWN receipt, nonce conflict or any invariant failure."
+      "max_attempts": 20,
+      "expires_at": "2026-10-08T00:00:00.000Z",
+      "sample_isolation": "This bound applies only to the race-evidence experiment. Treat live executions separately and do not infer win probability from an incomplete sample.",
+      "stop_condition": "Stop race inference after twenty observed attempts or experiment expiry. Live execution remains independently governed by explicit revocation, 0.001 ETH cumulative failed Gas, ETH-reserve failure, UNKNOWN receipt, nonce conflict and invariant breakers."
     }
   },
   "race_timeline": {
@@ -218,9 +218,9 @@
       },
       {
         "id": "bounded_autonomous_authorization",
-        "condition": "an unexpired arm matches chain, wallet, executor, source and runtime hashes and remains below principal, exact-preflight, signed-attempt, confirmed-execution and failed-gas budgets at the final signing boundary",
-        "risk_reduced": "unbounded key authority, configuration drift, duplicate signer generations and paid-RPC exhaustion",
-        "false_block_cost": "a valid opportunity is skipped until a fresh explicit arm is issued",
+        "condition": "an active fixed, rolling or until-revoked arm matches chain, wallet, executor, source and runtime hashes and remains below current realized principal, exact-preflight, signed-attempt, confirmed-execution and failed-gas budgets at the final signing boundary",
+        "risk_reduced": "unauthorized key use, configuration drift, duplicate signer generations and paid-RPC exhaustion",
+        "false_block_cost": "a valid opportunity is skipped until the arm is restored or a fresh explicit arm is issued",
         "latency_budget_ms": 10,
         "latency_estimate": {
           "state": "UNKNOWN",
@@ -229,7 +229,7 @@
         "voi_estimate": {
           "state": "KNOWN",
           "expected_loss_reduction": "bounds every autonomous economic and infrastructure spend dimension",
-          "basis": "deployment-bound arm plus independent durable usage counters"
+          "basis": "deployment-bound durable arm, explicit lifetime and principal policies, and independent usage counters"
         },
         "blocking_mode": "block",
         "isolation_scope": "wallet_lane",
@@ -304,8 +304,8 @@
     },
     "authorization": {
       "mode": "AUTO_POLICY",
-      "scope_binding": "the arm binds wallet, executor, source/runtime hashes, principal and spend budgets; each plan additionally binds candidate, nonce, routeHash, amount and economic envelope",
-      "expiry_policy": "the arm has an absolute expiry and every transaction has a separately persisted short contract deadline",
+      "scope_binding": "the arm binds wallet, executor, source/runtime hashes, principal policy and spend budgets; each plan additionally binds candidate, nonce, routeHash, amount and economic envelope",
+      "expiry_policy": "fixed and rolling arms retain lease expiry; an explicit until-revoked arm has no time stop, while every transaction always has a separately persisted short contract deadline",
       "evidence_record": "append-only arm, exact-preflight attempt, mutation intent, plan, exact raw hash, receipt and effect records"
     },
     "nonce_policy": "one shared wallet lane; persist exact raw before first broadcast",

@@ -100,9 +100,10 @@ Atomic settlement removes intermediate-token inventory exposure if the transacti
 - Adaptive probes and a bounded amount grid choose the amount with the greatest absolute screened net profit; the signing preflight then re-ranks up to six typed candidates using exact executor simulation and gas.
 - On-chain gross-profit floor: `0.05 USDG`.
 - Default off-chain net-profit floor after exact gas: `0.10 USDG`, configurable upward.
-- Automated execution requires an explicit deployment-bound arm. It always has a bounded lease and separately caps
-  principal and failed Gas; exact preflight, signed-attempt and confirmed-execution counts may be finite or explicitly
-  `unlimited`. Optional rolling renewal keeps the same authorization/risk epoch and cannot revive an expired lease.
+- Automated execution requires an explicit deployment-bound arm. Fixed-expiry and rolling-lease modes remain the
+  defaults. An opt-in `UNTIL_REVOKED` mode removes only the wall-clock stop and dynamically admits confirmed retained
+  USDG up to the immutable 100 USDG contract cap; it does not remove failed-Gas, ETH-reserve, exact-profit, nonce,
+  unresolved-mutation or manual-revocation breakers. Count limits may independently be finite or `unlimited`.
 - While idle, the generic watcher reads only the local signer-free board. A strategy-owned RPC is touched only after one new candidate clears the board gate; that exact candidate is then simulated twice before signing.
 - No wallet token approvals, Universal Router, or Permit2.
 - Every mutation follows `intent -> immutable plan -> exact raw persisted -> broadcast -> receipt/effect`.
@@ -163,17 +164,17 @@ npm run generic:deploy     # one guarded deployment mutation
 npm run generic:execute    # one guarded, dynamically selected mutation
 npm run generic:reconcile  # converge an UNKNOWN generic mutation
 npm run generic:withdraw   # return all executor USDG to the operator
-npm run generic:watch:arm  # explicit bounded, deployment-bound authorization
+npm run generic:watch:arm  # explicit deployment-bound authorization
 npm run generic:watch      # autonomous loopback-board watcher
 npm run generic:watch:status
 npm run generic:watch:disarm
 ```
 
 No command automatically deploys and trades in one step. Deployment remains a separate one-shot mutation. The generic
-watcher can sign only while an explicit arm is active and inside all arm and exact-net boundaries. With rolling renewal
-disabled, expiry closes the lane; with it enabled, only a still-valid lease may renew after the same cumulative risk and
-state gates pass. Stopping, failed-Gas exhaustion, UNKNOWN receipt, nonce conflict or an invariant failure closes the
-lane in either mode.
+watcher can sign only while an explicit arm is active and inside all arm and exact-net boundaries. A fixed arm expires;
+a rolling arm can renew only while still valid; an until-revoked arm has no time stop but remains bound to durable
+revocation and every economic/state breaker. Failed-Gas exhaustion, ETH-reserve failure, UNKNOWN receipt, nonce conflict
+or an invariant failure closes the lane in every mode.
 
 ## Live opportunity board
 
