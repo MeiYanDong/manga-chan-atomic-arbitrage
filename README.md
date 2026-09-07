@@ -58,10 +58,11 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   exhausted execution RPC is replaced, the previously exposed endpoint credential is rotated and a fresh bounded
   authorization is explicitly approved.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free event board is deployed from verified release `23cdf02d9c3d8c8bd05e04be0549974f70b24a45`
-  (`v0.6.1`). Its SQLite v2 current projections, material-evidence ledger and target-bound source catalog passed the
-  Linux canary below the 384 MiB hard limit. It remains loopback-only, uses the official public RPC and has no signer or
-  broadcast path.
+- The signer-free event board is deployed from verified release `6e6faf52a2de8559aa16b52234b69f047aef989d`
+  (`v0.6.2`). Its SQLite v2 current projections, material-evidence ledger and target-bound source catalog passed the
+  Linux canary below the 384 MiB hard limit. A quote backlog no longer freezes hot-log polling, although the persisted
+  cursor is still catching up to the chain head. The board remains loopback-only, uses the official public RPC and has
+  no signer or broadcast path.
 - The bounded source backfill now renders NINECAT as `LONG_ROUTE / DOPPLER / UNISWAP_V4 / NINECAT-AI`, with zero PAIR
   listings for that address. NINECAT is still `UNQUOTED` and `UNPROVEN`; source coverage remains partial and current
   proxy-positive rows are not executable-profit or receipt evidence.
@@ -83,7 +84,9 @@ See
 [`docs/evidence/2026-09-07-source-aware-dashboard-v0.6.0-canary-rejection.md`](docs/evidence/2026-09-07-source-aware-dashboard-v0.6.0-canary-rejection.md)
 for the rejected 256 MiB canary and signer-safe rollback, and
 [`docs/evidence/2026-09-07-v0.6.1-production-promotion.md`](docs/evidence/2026-09-07-v0.6.1-production-promotion.md)
-for the verified artifact, bounded migration, NINECAT backfill and final production readback.
+for the verified artifact, bounded migration and NINECAT backfill, and
+[`docs/evidence/2026-09-07-v0.6.2-hot-cursor-production-promotion.md`](docs/evidence/2026-09-07-v0.6.2-hot-cursor-production-promotion.md)
+for the backlog scheduler correction, bounded public-RPC canary and remaining current-head lag.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 

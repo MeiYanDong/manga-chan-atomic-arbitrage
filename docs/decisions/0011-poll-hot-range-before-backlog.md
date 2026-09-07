@@ -1,6 +1,6 @@
 # ADR 0011: poll one hot range before draining the quote backlog
 
-- Status: Accepted; production verification pending
+- Status: Accepted and production-verified for bounded cursor progress; current-head convergence pending
 - Date: 2026-09-07
 
 ## Context
