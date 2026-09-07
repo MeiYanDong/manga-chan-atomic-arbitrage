@@ -71,7 +71,7 @@ export function pairPoolKey(pool, targetToken) {
 }
 
 /** @param {Record<string, any>} snapshot */
-function assertBoardIdentity(snapshot) {
+export function assertGenericBoardIdentity(snapshot) {
   if (
     ![2, 3, 4].includes(snapshot?.schemaVersion) ||
     snapshot.service !== 'manga-opportunity-board' ||
@@ -92,7 +92,7 @@ function assertBoardIdentity(snapshot) {
  * @param {{nowMs?: number, maxAgeMs?: number}} [options]
  */
 export function buildGenericExecutionCandidate(snapshot, options = {}) {
-  const boardSchemaVersion = assertBoardIdentity(snapshot)
+  const boardSchemaVersion = assertGenericBoardIdentity(snapshot)
   const nowMs = options.nowMs ?? Date.now()
   const maxAgeMs = options.maxAgeMs ?? 30_000
   const selectedId = snapshot?.selection?.id
@@ -109,7 +109,7 @@ export function buildGenericExecutionCandidate(snapshot, options = {}) {
  * @param {{nowMs?: number, maxAgeMs?: number, limit?: number}} [options]
  */
 export function buildGenericExecutionCandidates(snapshot, options = {}) {
-  const boardSchemaVersion = assertBoardIdentity(snapshot)
+  const boardSchemaVersion = assertGenericBoardIdentity(snapshot)
   const nowMs = options.nowMs ?? Date.now()
   const maxAgeMs = options.maxAgeMs ?? 30_000
   const limit = options.limit ?? 6

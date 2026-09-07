@@ -25,7 +25,12 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
 import { deriveExecutionEconomics } from '../src/execution-economics.mjs'
-import { GENERIC_USDG, GENERIC_WETH, buildGenericExecutionCandidates } from '../src/generic-plan.mjs'
+import {
+  GENERIC_USDG,
+  GENERIC_WETH,
+  assertGenericBoardIdentity,
+  buildGenericExecutionCandidates,
+} from '../src/generic-plan.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw, stableStringify } from '../src/journal.mjs'
 import {
   classifyReconciliation,
@@ -2256,14 +2261,7 @@ async function genericRuntimeVerify() {
     loadBoardSnapshot(),
   ])
   if (wallet.nonceLatest !== wallet.noncePending) throw new Error('wallet latest and pending nonce have not converged')
-  if (
-    ![2, 3].includes(board?.schemaVersion) ||
-    board.service !== 'manga-opportunity-board' ||
-    board.mode !== 'READ_ONLY_NO_SIGNING_NO_BROADCAST' ||
-    board.selection?.executionAuthorized !== false
-  ) {
-    throw new Error('loopback opportunity board identity or read-only boundary is invalid')
-  }
+  assertGenericBoardIdentity(board)
   const arm = readJson(GENERIC_WATCH_ARM_PATH)
   const output = {
     status: 'RUNTIME_VERIFIED_READY_FOR_GENERIC_ARM',

@@ -90,6 +90,7 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   const plannerSource = fs.readFileSync(path.join(root, 'src', 'generic-plan.mjs'), 'utf8')
   assert.match(source, /MANGA_GENERIC_BOARD_URL|genericBoardUrl/)
   assert.match(source, /buildGenericExecutionCandidates/)
+  assert.match(source, /assertGenericBoardIdentity\(board\)/)
   assert.match(plannerSource, /READ_ONLY_NO_SIGNING_NO_BROADCAST/)
   assert.match(source, /watch-arm\.json/)
   assert.match(source, /watch\.lock/)
