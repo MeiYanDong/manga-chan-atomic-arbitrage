@@ -5,6 +5,9 @@
 - Accept the deployed signer-free board's additive schema-v4 snapshot through one shared generic execution/runtime
   identity gate while retaining the existing service identity, read-only mode, authorization flag and same-block
   pool-attestation checks.
+- Raise only the signer-free board's cgroup headroom to `MemoryHigh=448M` and `MemoryMax=512M` after sustained live
+  scanning at the prior pressure threshold starved its loopback snapshot API; signer limits and execution authority are
+  unchanged.
 
 ## 0.6.2 — 2026-09-07
 

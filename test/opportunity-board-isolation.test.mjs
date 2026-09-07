@@ -60,8 +60,8 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(unit, /^EnvironmentFile=\/etc\/manga-opportunity-board\/live\.env$/m)
   assert.match(unit, /^ProtectSystem=strict$/m)
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-opportunity-board$/m)
-  assert.match(unit, /^MemoryHigh=320M$/m)
-  assert.match(unit, /^MemoryMax=384M$/m)
+  assert.match(unit, /^MemoryHigh=448M$/m)
+  assert.match(unit, /^MemoryMax=512M$/m)
   assert.doesNotMatch(unit, /LoadCredential|manga-private-key|MANGA_PRIVATE_KEY/)
 
   const example = fs.readFileSync(path.join(root, 'deploy', 'opportunity-board.env.example'), 'utf8')
