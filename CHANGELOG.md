@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.5.1 — 2026-09-07
+
+- Treat an identity-only viem `UnknownRpcError` as incomplete transport evidence after EVM-revert identity has been
+  excluded, so a missing batch item cannot collapse into a false no-route business result.
+- Retry all bounded chain reads consistently and fail over once from batched JSON-RPC to independent requests when the
+  provider returns a malformed or incomplete batch response; expose the active mode and fallback evidence in metrics.
+
+## 0.5.0 — 2026-09-07
+
 - Replace repeated hot full-board scans with bounded public-HTTP PoolManager/V3 event wakeups plus a slower coverage
   reconciliation; persist canonical cursors, deduplicate logs and rewind on a block-hash mismatch.
 - Merge stable 1,000-row PAIR API pagination with incremental PoolManager `Initialize` backfill, while reporting chain

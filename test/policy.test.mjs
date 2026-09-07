@@ -15,6 +15,7 @@ import {
   fixedSignerLaneConflict,
   genericSignerLaneConflict,
   isGenericOpportunityMiss,
+  isMalformedRpcBatchResponse,
   latestUnresolvedMutation,
   selectGenericWatchCandidate,
 } from '../src/policy.mjs'
@@ -37,6 +38,18 @@ test('classifies an identity-only unknown RPC wrapper as incomplete network evid
   const outer = new Error('contract call failed')
   outer.cause = inner
   assert.equal(classifyRpcError(outer), RpcErrorClass.NETWORK)
+})
+
+test('detects a missing JSON-RPC batch item without confusing an EVM revert', () => {
+  const malformed = new Error("Cannot read properties of undefined (reading 'error')")
+  malformed.name = 'UnknownRpcError'
+  const wrapper = new Error('An unknown RPC error occurred.')
+  wrapper.cause = malformed
+  assert.equal(isMalformedRpcBatchResponse(wrapper), true)
+
+  const reverted = new Error('execution reverted: SPL')
+  reverted.name = 'ExecutionRevertedError'
+  assert.equal(isMalformedRpcBatchResponse(reverted), false)
 })
 
 test('keeps an EVM quote revert distinct from its lower RPC transport wrapper', () => {

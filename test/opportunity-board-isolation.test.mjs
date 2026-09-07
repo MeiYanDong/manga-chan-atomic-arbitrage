@@ -23,6 +23,8 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /eth_getLogs/)
   assert.match(source, /waitForEventWake/)
   assert.match(source, /advanceChainCatalog/)
+  assert.match(source, /INDIVIDUAL_FALLBACK/)
+  assert.match(source, /activateUnbatchedTransport/)
 })
 
 test('systemd unit keeps the board in a separate loopback-only identity without credentials', () => {

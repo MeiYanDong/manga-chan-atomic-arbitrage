@@ -54,7 +54,7 @@ import {
   refinementAmounts,
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
-import { classifyRpcError, errorText, RpcErrorClass } from '../src/policy.mjs'
+import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
 
 const CHAIN_ID = ROBINHOOD_CHAIN_ID
 const PAIR_TOKENS_API = 'https://pair.fund/api/tokens'
@@ -307,12 +307,7 @@ function observationFromItem(item) {
 
 /** @param {unknown} error */
 function quoteTransportIsIncomplete(error) {
-  const classification = classifyRpcError(error)
-  if ([RpcErrorClass.STATE_NOT_READY, RpcErrorClass.THROTTLED].includes(classification)) return true
-  if (classification !== RpcErrorClass.NETWORK) return false
-  return /\b429\b|too many requests|rate.?limit|quota|timeout|timed out|econn|fetch failed|network|socket|websocket|http request failed/i.test(
-    errorText(error),
-  )
+  return isTransientRpcError(error)
 }
 
 /** @param {string} message @param {unknown} cause */
@@ -405,6 +400,7 @@ class OpportunityBoard {
       v3ShortlistDiscoveries: 0,
       v3ShortlistHits: 0,
       v4QuoterCalls: 0,
+      rpcBatchFallbacks: 0,
     }
     this.catalogRefreshRequested = false
     this.rpcHttpGate = new AsyncConcurrencyGate(config.rpcHttpConcurrency)
@@ -422,6 +418,10 @@ class OpportunityBoard {
     this.sleepTimer = null
     this.sleepResolve = null
     this.client = null
+    this.unbatchedClient = null
+    this.rpcTransportMode = config.rpcBatchSize > 1 ? 'BATCH' : 'INDIVIDUAL'
+    this.rpcBatchFallbackAt = null
+    this.rpcBatchFallbackReason = null
     if (config.rpcUrl) {
       const chain = defineChain({
         id: CHAIN_ID,
@@ -429,23 +429,27 @@ class OpportunityBoard {
         nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
         rpcUrls: { default: { http: [config.rpcUrl] } },
       })
-      this.client = createPublicClient({
-        chain,
-        transport: http(config.rpcUrl, {
-          batch: { batchSize: config.rpcBatchSize, wait: config.rpcBatchWaitMs },
-          fetchFn: (...args) =>
-            this.rpcHttpGate.run(async () => {
-              this.quoteRpcMetrics.rpcHttpPosts += 1
-              this.quoteRpcMetrics.rpcHttpPeakConcurrency = Math.max(
-                this.quoteRpcMetrics.rpcHttpPeakConcurrency,
-                this.rpcHttpGate.active,
-              )
-              return fetch(...args)
-            }),
-          timeout: 20_000,
-          retryCount: 1,
-        }),
+      const transportOptions = (useBatch) => ({
+        ...(useBatch ? { batch: { batchSize: config.rpcBatchSize, wait: config.rpcBatchWaitMs } } : {}),
+        fetchFn: (...args) =>
+          this.rpcHttpGate.run(async () => {
+            this.quoteRpcMetrics.rpcHttpPosts += 1
+            this.quoteRpcMetrics.rpcHttpPeakConcurrency = Math.max(
+              this.quoteRpcMetrics.rpcHttpPeakConcurrency,
+              this.rpcHttpGate.active,
+            )
+            return fetch(...args)
+          }),
+        timeout: 20_000,
+        retryCount: 1,
       })
+      const rpcClient = (useBatch) =>
+        createPublicClient({
+          chain,
+          transport: http(config.rpcUrl, transportOptions(useBatch)),
+        })
+      this.unbatchedClient = rpcClient(false)
+      this.client = config.rpcBatchSize > 1 ? rpcClient(true) : this.unbatchedClient
     }
   }
 
@@ -469,6 +473,9 @@ class OpportunityBoard {
           batchSize: this.config.rpcBatchSize,
           batchWaitMs: this.config.rpcBatchWaitMs,
           maxHttpConcurrency: this.config.rpcHttpConcurrency,
+          activeMode: this.rpcTransportMode,
+          fallbackAt: this.rpcBatchFallbackAt,
+          fallbackReason: this.rpcBatchFallbackReason,
           metricCaveat: 'rpcHttpPosts are transport requests, not provider billing units',
         },
         pendingCandidates: this.eventQueue.size,
@@ -604,11 +611,13 @@ class OpportunityBoard {
 
   /** @param {Record<string, any>} filter */
   async rpcLogs(filter) {
-    const logs = await this.client.request(
-      /** @type {any} */ ({
-        method: 'eth_getLogs',
-        params: [filter],
-      }),
+    const logs = await this.retryRpc(() =>
+      this.client.request(
+        /** @type {any} */ ({
+          method: 'eth_getLogs',
+          params: [filter],
+        }),
+      ),
     )
     if (!Array.isArray(logs)) throw new Error('eth_getLogs did not return an array')
     return logs
@@ -726,7 +735,7 @@ class OpportunityBoard {
 
   async pollHotEvents() {
     const observedAtMs = Date.now()
-    const head = await this.client.getBlockNumber()
+    const head = await this.retryRpc(() => this.client.getBlockNumber())
     this.eventMetrics.lastError = null
     this.eventMetrics.consecutiveErrors = 0
     let nextBlock = this.hotCursor.nextBlock === null ? null : BigInt(this.hotCursor.nextBlock)
@@ -751,7 +760,9 @@ class OpportunityBoard {
     }
 
     if (this.hotCursor.lastProcessedBlock) {
-      const anchorBlock = await this.client.getBlock({ blockNumber: BigInt(this.hotCursor.lastProcessedBlock) })
+      const anchorBlock = await this.retryRpc(() =>
+        this.client.getBlock({ blockNumber: BigInt(this.hotCursor.lastProcessedBlock) }),
+      )
       const reconciled = reconcileHotCursorAnchor(this.hotCursor, anchorBlock.hash, {
         startBlock: this.config.chainCatalogStartBlock,
         reorgLookback: this.config.eventReorgLookback,
@@ -825,7 +836,7 @@ class OpportunityBoard {
       candidateWakes += offered.candidateCount
       this.poolMirror = applyPoolMirrorEvent(this.poolMirror, event)
     }
-    const anchor = await this.client.getBlock({ blockNumber: toBlock })
+    const anchor = await this.retryRpc(() => this.client.getBlock({ blockNumber: toBlock }))
     this.hotCursor = {
       ...this.hotCursor,
       nextBlock: (toBlock + 1n).toString(),
@@ -939,10 +950,22 @@ class OpportunityBoard {
       attempts: this.config.rpcLogicalAttempts,
       delayMs: this.config.rpcRetryDelayMs,
       shouldRetry,
-      onRetry: () => {
+      onRetry: (error) => {
         this.quoteRpcMetrics.rpcLogicalRetries += 1
+        this.activateUnbatchedTransport(error)
       },
     })
+  }
+
+  /** @param {unknown} error */
+  activateUnbatchedTransport(error) {
+    if (this.rpcTransportMode !== 'BATCH' || !isMalformedRpcBatchResponse(error)) return false
+    this.client = this.unbatchedClient
+    this.rpcTransportMode = 'INDIVIDUAL_FALLBACK'
+    this.rpcBatchFallbackAt = new Date().toISOString()
+    this.rpcBatchFallbackReason = publicError(error)
+    this.quoteRpcMetrics.rpcBatchFallbacks += 1
+    return true
   }
 
   /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
@@ -1382,11 +1405,14 @@ class OpportunityBoard {
   }
 
   async fixedBlock() {
-    const chainId = await this.client.getChainId()
+    const chainId = await this.retryRpc(() => this.client.getChainId())
     if (chainId !== CHAIN_ID) throw new Error(`wrong chain id ${chainId}`)
-    const head = await this.client.getBlockNumber()
+    const head = await this.retryRpc(() => this.client.getBlockNumber())
     const blockNumber = head > this.config.blockLag ? head - this.config.blockLag : head
-    const [block, gasPrice] = await Promise.all([this.client.getBlock({ blockNumber }), this.client.getGasPrice()])
+    const [block, gasPrice] = await Promise.all([
+      this.retryRpc(() => this.client.getBlock({ blockNumber })),
+      this.retryRpc(() => this.client.getGasPrice()),
+    ])
     const nativeMarkIn = parseEther('0.004')
     const nativeMark = await this.quoteBestV3(WETH, USDG, nativeMarkIn, blockNumber)
     return { blockNumber, block, gasPrice, nativeMarkIn, nativeMark }

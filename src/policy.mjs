@@ -94,6 +94,20 @@ export function isTransientRpcError(error) {
   return classifyRpcError(error) !== RpcErrorClass.INVARIANT
 }
 
+/**
+ * Detect the viem error shape produced when a JSON-RPC batch response omits
+ * an entry. This is transport evidence, not an EVM revert, and is safe to
+ * retry through an independent request transport.
+ *
+ * @param {unknown} error
+ */
+export function isMalformedRpcBatchResponse(error) {
+  if (classifyRpcError(error) !== RpcErrorClass.NETWORK) return false
+  return /cannot read properties of undefined \(reading ['"]error['"]\)|malformed (?:json-?rpc )?batch response|missing (?:json-?rpc )?batch response/i.test(
+    errorText(error),
+  )
+}
+
 /** @param {string} leg @param {unknown} error */
 export function quoteFailure(leg, error) {
   return { leg, class: classifyRpcError(error), message: errorText(error) }
