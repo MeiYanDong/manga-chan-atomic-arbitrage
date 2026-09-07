@@ -195,3 +195,16 @@ Acceptance:
 Status: implementation, deterministic tests and signer-free production promotion are complete. Production exercised
 the malformed-batch fallback and non-starvable periodic deadline; steady-state latency and RPC-reduction targets remain
 unproven.
+
+## S17 — Hot-cursor progress under quote backlog
+
+Acceptance:
+
+- every event cycle attempts one bounded hot-log poll before consuming an existing candidate backlog;
+- the poll can coalesce a fresher revision, but no cycle selects more than the configured four candidates for quoting;
+- a public-RPC poll failure remains visible without discarding or indefinitely blocking already-observed wakes;
+- a reorg-created replacement queue cannot leak stale pre-reorg wakes through the fallback drain;
+- production readback shows both `lastPollAt` and the hot cursor advancing while `pendingCandidates` remains nonzero.
+
+Status: implemented and deterministically tested in v0.6.2; Linux artifact and signer-free production readback remain
+promotion gates.

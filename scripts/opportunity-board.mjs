@@ -11,6 +11,7 @@ import {
   buildShadowDependencyIndex,
   capEventWaitForReconciliation,
   planHotLogRange,
+  pollBeforeDrainingWakeQueue,
   reconcileHotCursorAnchor,
   retryReadOnly,
   rotatingSlice,
@@ -1440,23 +1441,18 @@ class OpportunityBoard {
   async waitForEventWake(timeoutMs) {
     const deadline = Date.now() + timeoutMs
     while (!this.stopping && Date.now() < deadline) {
-      try {
-        if (this.eventQueue.size > 0) {
-          const pending = this.eventQueue.take(this.config.eventWakeMaxCandidates)
-          return { ...pending, observedAtMs: pending.oldestObservedAtMs, catalogRefresh: false }
-        }
-        const result = await this.pollHotEvents()
-        if (result.catalogRefresh) this.catalogRefreshRequested = true
-        if (result.candidateIds.length > 0) {
-          return {
-            ...result,
-            observedAtMs: result.oldestObservedAtMs,
-          }
-        }
-      } catch (error) {
-        this.eventMetrics.lastError = publicError(error)
+      const { pollResult, pollError, wake } = await pollBeforeDrainingWakeQueue({
+        poll: () => this.pollHotEvents(),
+        getQueue: () => this.eventQueue,
+        limit: this.config.eventWakeMaxCandidates,
+      })
+      if (pollResult?.catalogRefresh) this.catalogRefreshRequested = true
+      if (pollError) {
+        this.eventMetrics.lastError = publicError(pollError)
         this.eventMetrics.consecutiveErrors += 1
       }
+      if (wake) return { ...wake, observedAtMs: wake.oldestObservedAtMs }
+
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
       const errorMultiplier = 2 ** Math.min(this.eventMetrics.consecutiveErrors, 4)

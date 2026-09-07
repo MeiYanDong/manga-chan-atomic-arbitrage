@@ -1,8 +1,8 @@
 # Source-aware dashboard stories
 
 - Plan status: accepted
-- Implementation status: SD1–SD6 complete locally in v0.6.0; SD7 production readback pending
-- Deployment status: not deployed
+- Implementation status: SD1–SD7 complete; v0.6.1 production readback accepted
+- Deployment status: v0.6.1 board-only service deployed; v0.6.2 hot-cursor correction pending promotion
 
 Each story is independently reviewable and must preserve the signer-free boundary.
 
