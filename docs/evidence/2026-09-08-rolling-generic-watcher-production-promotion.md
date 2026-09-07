@@ -123,6 +123,10 @@ too small and temporally clustered to infer hourly opportunity frequency or futu
 
 - No production lease revision has occurred yet. Unit tests prove boundary behavior; the first real renewal and its
   persisted audit event require later readback.
+- During the first 14 minutes after startup, the audit ledger recorded eight isolated five-second loopback-board request
+  timeouts. Every incident remained at one consecutive error and recovered without a restart, signature or unresolved
+  mutation; the current counter returned to zero. This does not threaten nonce safety, but it can delay candidate
+  observation and remains an open board-responsiveness issue.
 - Rolling authorization is continuous operating authority within the fixed risk epoch. Failed-Gas exhaustion, ETH
   reserve failure, nonce conflict, UNKNOWN mutation, invariant failure and explicit disarm still stop it.
 - The principal cap is fixed at `33.021814 USDG`. Later retained profit cannot silently increase order size; a higher cap
