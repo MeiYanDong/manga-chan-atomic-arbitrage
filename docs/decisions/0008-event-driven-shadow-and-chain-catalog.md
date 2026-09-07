@@ -63,6 +63,8 @@ circuit.
 
 Historical Initialize-log backfill runs only after the current opportunity quote batch succeeds. Backfill remains
 durable and bounded, but it cannot consume the public provider budget ahead of the latency-sensitive shadow decision.
+The event wait is capped by a mandatory periodic deadline, so a continuously busy event stream can delay that slower
+reconciliation by at most the one event cycle that was already dequeued before the deadline; it cannot starve it.
 
 Within one fixed block, the first amount for each V3 direction evaluates the complete allowed route set and retains the
 top three successful paths. Later amounts are quoted exactly against that shortlist. This bounds amount-grid expansion

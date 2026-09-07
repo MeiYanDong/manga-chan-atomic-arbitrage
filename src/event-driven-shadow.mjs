@@ -66,6 +66,25 @@ export function rotatingSlice(values, offset, limit) {
 }
 
 /**
+ * Bound event waiting by the next mandatory reconciliation deadline. Event
+ * wakes may run before the deadline, but an always-busy event stream cannot
+ * postpone the periodic coverage/backfill cycle indefinitely.
+ *
+ * @param {number} waitMs
+ * @param {number} nowMs
+ * @param {number} reconciliationAtMs
+ */
+export function capEventWaitForReconciliation(waitMs, nowMs, reconciliationAtMs) {
+  if (![waitMs, nowMs, reconciliationAtMs].every(Number.isSafeInteger)) {
+    throw new Error('event wait timing values must be safe integers')
+  }
+  if (waitMs < 0 || nowMs < 0 || reconciliationAtMs < 0) {
+    throw new Error('event wait timing values must be non-negative')
+  }
+  return Math.min(waitMs, Math.max(0, reconciliationAtMs - nowMs))
+}
+
+/**
  * Retry only failures explicitly classified as transient by the caller. This
  * helper has no default retry policy, so an EVM/business revert cannot be
  * retried accidentally.

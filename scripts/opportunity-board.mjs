@@ -9,6 +9,7 @@ import {
   FixedBlockPromiseCache,
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
+  capEventWaitForReconciliation,
   planHotLogRange,
   reconcileHotCursorAnchor,
   retryReadOnly,
@@ -386,6 +387,8 @@ class OpportunityBoard {
       lastCycleTrigger: null,
       lastCycleCandidateCount: 0,
       lastCycleQuoterCalls: 0,
+      lastPeriodicCycleAt: null,
+      nextPeriodicCycleAt: null,
       eventDrivenQuoterCalls: 0,
       reconciliationQuoterCalls: 0,
     }
@@ -1540,6 +1543,7 @@ class OpportunityBoard {
       }
       this.lastCycleAt = new Date().toISOString()
       this.lastQuoteAt = this.lastCycleAt
+      if (!eventWake) this.eventMetrics.lastPeriodicCycleAt = this.lastCycleAt
       this.cycleNumber += 1
       this.consecutiveErrors = 0
       this.lastError = null
@@ -1642,8 +1646,10 @@ class OpportunityBoard {
       }),
     )
     let eventWake = null
+    let nextPeriodicAtMs = 0
     while (!this.stopping) {
       const started = Date.now()
+      const periodicCycle = eventWake === null
       const result = await this.cycle({ forceCatalog: this.catalog.length === 0, eventWake })
       if (result) {
         console.log(
@@ -1664,7 +1670,10 @@ class OpportunityBoard {
         cycleDurationMs: Date.now() - started,
         minimumPauseMs: this.config.minimumCyclePauseMs,
       })
-      eventWake = remaining > 0 ? await this.waitForEventWake(remaining) : null
+      if (periodicCycle) nextPeriodicAtMs = Date.now() + remaining
+      this.eventMetrics.nextPeriodicCycleAt = new Date(nextPeriodicAtMs).toISOString()
+      const eventWaitMs = capEventWaitForReconciliation(remaining, Date.now(), nextPeriodicAtMs)
+      eventWake = eventWaitMs > 0 ? await this.waitForEventWake(eventWaitMs) : null
     }
   }
 
