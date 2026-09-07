@@ -10,7 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const script = path.join(root, 'scripts', 'generic-arb.mjs')
 const fixture = path.join(root, 'test', 'fixtures', 'generic-sigma-54406832.json')
 
-function run(command, runDir) {
+function run(command, runDir, overrides = {}) {
   return spawnSync(process.execPath, [script, command], {
     cwd: root,
     encoding: 'utf8',
@@ -21,9 +21,24 @@ function run(command, runDir) {
       MANGA_RPC_URL: 'https://strategy-rpc.invalid',
       MANGA_RUN_DIR: runDir,
       MANGA_GENERIC_BOARD_SNAPSHOT: fixture,
+      ...overrides,
     },
   })
 }
+
+test('generic snapshot reader rejects a group-writable execution feed', (context) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-unsafe-feed-'))
+  context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const unsafeFeed = path.join(runDir, 'execution-snapshot.json')
+  fs.copyFileSync(fixture, unsafeFeed)
+  fs.chmodSync(unsafeFeed, 0o660)
+
+  const result = run('watch-status', runDir, { MANGA_GENERIC_BOARD_SNAPSHOT: unsafeFeed })
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.equal(output.board.status, 'NO_FRESH_ELIGIBLE_BOARD_SCREEN')
+  assert.match(output.board.error, /must not be group- or world-writable/)
+})
 
 test('generic watcher exits cleanly without an explicit arm and makes no startup RPC request', (context) => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-watch-'))

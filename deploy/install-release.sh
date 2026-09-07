@@ -33,10 +33,13 @@ getent group "${service_group}" >/dev/null || groupadd --system "${service_group
 id "${service_user}" >/dev/null 2>&1 || useradd --system --gid "${service_group}" --home-dir "${runtime_dir}" --shell /usr/sbin/nologin "${service_user}"
 getent group "${board_group}" >/dev/null || groupadd --system "${board_group}"
 id "${board_user}" >/dev/null 2>&1 || useradd --system --gid "${board_group}" --home-dir "${board_runtime_dir}" --shell /usr/sbin/nologin "${board_user}"
+usermod --append --groups "${board_group}" "${service_user}"
 install -d -o root -g root -m 0755 "${prefix}/releases"
 install -d -o "${service_user}" -g "${service_group}" -m 0700 "${runtime_dir}"
 install -d -o root -g "${service_group}" -m 0750 "${config_dir}"
 install -d -o "${board_user}" -g "${board_group}" -m 0750 "${board_runtime_dir}"
+chown "${board_user}:${board_group}" "${board_runtime_dir}"
+chmod 0750 "${board_runtime_dir}"
 install -d -o root -g "${board_group}" -m 0750 "${board_config_dir}"
 install -d -o root -g root -m 0700 "${credential_dir}"
 

@@ -247,6 +247,13 @@ cannot sign or spend Gas. Execution-RPC failures retain the configured consecuti
 no-expiry arm is liveness/authority evidence, not profit evidence; only confirmed receipts and post-state update profit
 and compoundable principal.
 
+The supplied Linux units avoid the board's single HTTP event loop on this path. The board atomically replaces
+`/var/lib/manga-opportunity-board/execution-snapshot.json` with mode `0640`; the signer account receives read-only
+membership in `manga-board`, while the board receives no access to `/var/lib/manga-chan-arbitrage` or the signing
+credential. The watcher caches an unchanged file generation, rejects symlinks and group/world-writable files, enforces a
+16 MiB input limit, then applies the same board identity, freshness, route and exact-preflight gates. Loopback HTTP
+remains the development fallback when `MANGA_GENERIC_BOARD_SNAPSHOT` is unset.
+
 Disarm writes `generic-watch-revocation.json` before changing the arm or signalling the process. The marker is scoped to
 that authorization ID and remains authoritative if a concurrent stale write temporarily restores `ARMED`; creating a
 new arm produces a new authorization ID.

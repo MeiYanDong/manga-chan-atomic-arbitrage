@@ -38,6 +38,9 @@ screened-positive rows. The watcher retries board-only transport failures indefi
 existing finite consecutive-error halt remains for execution-RPC failures. Durable disarm, UNKNOWN mutation, nonce,
 deployment, invariant, exact-net, failed-Gas and ETH-reserve stops are unchanged.
 
+Production later showed that the smaller HTTP response did not prevent scanner work from blocking the shared event
+loop. [ADR 0016](0016-persisted-execution-feed.md) supersedes only this transport detail.
+
 ## Consequences
 
 - The Linux watcher is the only continuous loop; no seven-day task, timer or Codex heartbeat is required.
