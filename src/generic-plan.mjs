@@ -73,7 +73,7 @@ export function pairPoolKey(pool, targetToken) {
 /** @param {Record<string, any>} snapshot */
 function assertBoardIdentity(snapshot) {
   if (
-    ![2, 3].includes(snapshot?.schemaVersion) ||
+    ![2, 3, 4].includes(snapshot?.schemaVersion) ||
     snapshot.service !== 'manga-opportunity-board' ||
     snapshot.mode !== 'READ_ONLY_NO_SIGNING_NO_BROADCAST' ||
     snapshot.selection?.executionAuthorized !== false
