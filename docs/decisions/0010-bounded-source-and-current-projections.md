@@ -1,6 +1,6 @@
 # ADR 0010: bound source retention and separate current projection from audit evidence
 
-- Status: Accepted for v0.6.1; production promotion pending
+- Status: Accepted and production-verified for the signer-free v0.6.1 board
 - Date: 2026-09-07
 
 ## Context
