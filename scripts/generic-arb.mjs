@@ -39,12 +39,15 @@ import {
   evaluateExpiredMutationAbandonment,
   evaluateGenericArmBudget,
   evaluateGenericArmBudgetAtBroadcast,
+  evaluateGenericRollingLease,
   evaluateRawReplayDeadline,
   fixedSignerLaneConflict,
+  genericWatchAuthorizationCommitment,
   genericSignerLaneConflict,
   isGenericOpportunityMiss,
   isTransientRpcError,
   latestUnresolvedMutation,
+  renewGenericRollingLease,
   selectGenericWatchCandidate,
 } from '../src/policy.mjs'
 import { compileGenericContract } from './generic-contract-compile.mjs'
@@ -62,6 +65,7 @@ const MINIMUM_GROSS_PROFIT = 50_000n
 const MAXIMUM_AMOUNT_IN = 100_000_000n
 const DEADLINE_SECONDS = 45n
 const NATIVE_MARK_INPUT = parseEther('0.004')
+const LEASE_RENEWAL_RETRY_MS = 5 * 60 * 1_000
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUNTIME_CONFIG = loadRuntimeConfig()
@@ -74,6 +78,7 @@ const FIXED_WATCH_LOCK_PATH = path.join(RUN_DIR, 'watch.lock')
 const FIXED_WATCH_ARM_PATH = path.join(RUN_DIR, 'watch-arm.json')
 const GENERIC_WATCH_LOCK_PATH = path.join(RUN_DIR, 'generic-watch.lock')
 const GENERIC_WATCH_ARM_PATH = path.join(RUN_DIR, 'generic-watch-arm.json')
+const GENERIC_WATCH_REVOCATION_PATH = path.join(RUN_DIR, 'generic-watch-revocation.json')
 const GENERIC_WATCH_STATE_PATH = path.join(RUN_DIR, 'generic-watch-state.json')
 const SIGNED_TX_DIR = path.join(RUN_DIR, 'signed')
 
@@ -1543,6 +1548,11 @@ function displayCountLimit(value) {
   return value === null ? 'UNLIMITED' : value
 }
 
+function genericWatchRevocation(authorizationId) {
+  const revocation = readJson(GENERIC_WATCH_REVOCATION_PATH)
+  return revocation?.authorizationId === authorizationId ? revocation : null
+}
+
 function currentGenericWatchUsageStateFields() {
   try {
     const arm = readJson(GENERIC_WATCH_ARM_PATH)
@@ -1551,39 +1561,6 @@ function currentGenericWatchUsageStateFields() {
     return genericWatchUsageStateFields(genericWatchUsage(arm, deploymentState))
   } catch {
     return {}
-  }
-}
-
-function genericWatchAuthorizationCommitment(arm) {
-  return {
-    schemaVersion: arm.schemaVersion,
-    mode: arm.mode,
-    policyVersion: arm.policyVersion,
-    issuedAt: arm.issuedAt,
-    expiresAt: arm.expiresAt,
-    chainId: arm.chainId,
-    wallet: arm.wallet,
-    executor: arm.executor,
-    sourceHash: arm.sourceHash,
-    runtimeCodeHash: arm.runtimeCodeHash,
-    maxPrincipalUsdgWei: arm.maxPrincipalUsdgWei,
-    minimumGrossProfitUsdgWei: arm.minimumGrossProfitUsdgWei,
-    minimumNetProfitUsdgWei: arm.minimumNetProfitUsdgWei,
-    minimumScreenedNetProfitUsdgWei: arm.minimumScreenedNetProfitUsdgWei,
-    profitRetentionBps: arm.profitRetentionBps,
-    walletEthReserveWei: arm.walletEthReserveWei,
-    maxConfirmedExecutions: arm.maxConfirmedExecutions,
-    maxAttempts: arm.maxAttempts,
-    maxExactPreflights: arm.maxExactPreflights,
-    maxFailedGasWei: arm.maxFailedGasWei,
-    baselineNonce: arm.baselineNonce,
-    baselineExecutionCount: arm.baselineExecutionCount,
-    pollIntervalMs: arm.pollIntervalMs,
-    idleRpcBehavior: arm.idleRpcBehavior,
-    escalationRpcBehavior: arm.escalationRpcBehavior,
-    rpcSource: arm.rpcSource,
-    principalUsdgWeiAtArm: arm.principalUsdgWeiAtArm,
-    walletEthWeiAtArm: arm.walletEthWeiAtArm,
   }
 }
 
@@ -1596,14 +1573,17 @@ function assertGenericWatchArm(
   deploymentState,
   { allowCurrentExactPreflight = false, currentSignedAttempt = null } = {},
 ) {
-  if (!arm || arm.status !== 'ARMED') stopForPolicy('not armed')
-  if (
-    arm.schemaVersion !== 1 ||
-    arm.mode !== 'AUTO_POLICY' ||
-    arm.policyVersion !== 'generic-v2-loopback-escalation-v1'
-  ) {
+  if (!arm) stopForPolicy('not armed')
+  if (genericWatchRevocation(arm.authorizationId)) stopForPolicy('disarmed')
+  if (arm.status !== 'ARMED') stopForPolicy('not armed')
+  const legacyPolicy = arm.schemaVersion === 1 && arm.policyVersion === 'generic-v2-loopback-escalation-v1'
+  const rollingPolicy = arm.schemaVersion === 2 && arm.policyVersion === 'generic-v2-loopback-escalation-v2'
+  if (arm.mode !== 'AUTO_POLICY' || (!legacyPolicy && !rollingPolicy)) {
     throw new Error('generic watch authorization policy version mismatch')
   }
+  const lease = evaluateGenericRollingLease(arm)
+  if (!lease.allowed && lease.reason === 'expired') stopForPolicy('expired')
+  if (!lease.allowed) throw new Error(`generic watch authorization ${lease.reason}`)
   if (genericWatchAuthorizationId(arm) !== arm.authorizationId) {
     throw new Error('generic watch authorization commitment mismatch')
   }
@@ -1628,6 +1608,17 @@ function assertGenericWatchArm(
     Number(arm.profitRetentionBps) !== RUNTIME_CONFIG.genericProfitRetentionBps
   ) {
     throw new Error('generic watcher runtime economics differ from the signed authorization scope')
+  }
+  if (
+    rollingPolicy &&
+    (!RUNTIME_CONFIG.genericWatchAutoRenew ||
+      Number(arm.leaseDurationHours) !== RUNTIME_CONFIG.genericWatchArmHours ||
+      Number(arm.renewBeforeHours) !== RUNTIME_CONFIG.genericWatchRenewBeforeHours)
+  ) {
+    throw new Error('generic watcher rolling-lease runtime differs from the authorization scope')
+  }
+  if (legacyPolicy && RUNTIME_CONFIG.genericWatchAutoRenew) {
+    throw new Error('generic watcher requires a schema-v2 arm before rolling renewal can run')
   }
   if (
     BigInt(arm.maxPrincipalUsdgWei) <= 0n ||
@@ -1697,8 +1688,9 @@ async function armGenericWatcher() {
     const maxPrincipal = principal < MAXIMUM_AMOUNT_IN ? principal : MAXIMUM_AMOUNT_IN
     const issuedAt = new Date()
     const expiresAt = new Date(issuedAt.getTime() + RUNTIME_CONFIG.genericWatchArmHours * 60 * 60 * 1_000)
+    const rollingLease = RUNTIME_CONFIG.genericWatchAutoRenew
     const scope = {
-      policyVersion: 'generic-v2-loopback-escalation-v1',
+      policyVersion: rollingLease ? 'generic-v2-loopback-escalation-v2' : 'generic-v2-loopback-escalation-v1',
       chainId: CHAIN_ID,
       wallet: WALLET,
       executor,
@@ -1714,13 +1706,20 @@ async function armGenericWatcher() {
       maxAttempts: RUNTIME_CONFIG.genericWatchMaxAttempts,
       maxExactPreflights: RUNTIME_CONFIG.genericWatchMaxPreflights,
       maxFailedGasWei: RUNTIME_CONFIG.maxFailedGasWei.toString(),
-      expiresAt: expiresAt.toISOString(),
     }
     const authorization = {
-      schemaVersion: 1,
+      schemaVersion: rollingLease ? 2 : 1,
       mode: 'AUTO_POLICY',
       issuedAt: issuedAt.toISOString(),
       ...scope,
+      ...(rollingLease
+        ? {
+            initialExpiresAt: expiresAt.toISOString(),
+            autoRenewLease: true,
+            leaseDurationHours: RUNTIME_CONFIG.genericWatchArmHours,
+            renewBeforeHours: RUNTIME_CONFIG.genericWatchRenewBeforeHours,
+          }
+        : { expiresAt: expiresAt.toISOString() }),
       baselineNonce: wallet.nonceLatest,
       baselineExecutionCount: (deploymentState.executions || []).length,
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
@@ -1732,9 +1731,19 @@ async function armGenericWatcher() {
     }
     const arm = {
       ...authorization,
+      ...(rollingLease
+        ? {
+            expiresAt: expiresAt.toISOString(),
+            lastRenewedAt: issuedAt.toISOString(),
+            leaseRevision: 0,
+          }
+        : {}),
       authorizationId: genericWatchAuthorizationId(authorization),
       status: 'ARMED',
       reason: 'user explicitly approved autonomous generic-v2 live execution in the current Codex task',
+    }
+    if (genericWatchRevocation(arm.authorizationId)) {
+      throw new Error('refusing to reuse a revoked generic watcher authorization ID')
     }
     writeProtectedJson(GENERIC_WATCH_ARM_PATH, arm)
     const watchState = {
@@ -1757,6 +1766,9 @@ async function armGenericWatcher() {
       maxAttempts: arm.maxAttempts,
       maxExactPreflights: arm.maxExactPreflights,
       maxFailedGasWei: arm.maxFailedGasWei,
+      autoRenewLease: arm.autoRenewLease === true,
+      leaseRevision: arm.leaseRevision ?? null,
+      renewBeforeHours: arm.renewBeforeHours ?? null,
       baselineNonce: arm.baselineNonce,
       baselineExecutionCount: arm.baselineExecutionCount,
     })
@@ -1773,6 +1785,9 @@ async function armGenericWatcher() {
         maxSignedAttempts: displayCountLimit(arm.maxAttempts),
         maxExactPreflights: displayCountLimit(arm.maxExactPreflights),
         maxFailedGasWei: arm.maxFailedGasWei,
+        autoRenewLease: arm.autoRenewLease === true,
+        leaseRevision: arm.leaseRevision ?? null,
+        renewBeforeHours: arm.renewBeforeHours ?? null,
         idleRpcBehavior: arm.idleRpcBehavior,
       }),
     )
@@ -1781,6 +1796,87 @@ async function armGenericWatcher() {
     releaseWallet()
     releaseWatch()
   }
+}
+
+async function maybeRenewGenericWatcherLease(arm, deploymentState, usage, now = Date.now()) {
+  const evaluation = evaluateGenericRollingLease(arm, now)
+  if (!evaluation.allowed) {
+    if (evaluation.reason === 'expired') stopForPolicy('expired')
+    throw new Error(`generic watch authorization ${evaluation.reason}`)
+  }
+  if (!evaluation.renewalDue) return { arm, renewed: false }
+  if (latestUnresolved()) throw new Error('cannot renew generic watcher lease with an unresolved mutation')
+
+  await assertCanonicalBase()
+  const compiled = compileGenericContract()
+  const executor = await assertGenericDeployment(deploymentState, compiled)
+  const [wallet, principal] = await Promise.all([
+    walletSnapshot(),
+    publicClient.readContract({
+      address: GENERIC_USDG,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [executor],
+    }),
+  ])
+  const expectedNonce = Number(arm.baselineNonce) + usage.confirmedExecutions
+  if (wallet.nonceLatest !== wallet.noncePending || wallet.nonceLatest !== expectedNonce) {
+    throw new Error(
+      `generic watcher lease renewal nonce mismatch: latest/pending/expected=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}`,
+    )
+  }
+  if (principal <= 0n) throw new Error('generic watcher lease renewal found no executor USDG principal')
+  const walletEthReserve = BigInt(arm.walletEthReserveWei)
+  if (wallet.ethBalance <= walletEthReserve) {
+    throw new Error('generic watcher lease renewal found wallet ETH at or below the authorized reserve')
+  }
+
+  const result = renewGenericRollingLease(arm, now)
+  if (!result.allowed || !result.arm) throw new Error(`generic watcher lease renewal failed: ${result.reason}`)
+  if (genericWatchAuthorizationId(result.arm) !== arm.authorizationId) {
+    throw new Error('generic watcher lease renewal changed the immutable authorization commitment')
+  }
+  const currentArm = readJson(GENERIC_WATCH_ARM_PATH)
+  if (
+    !currentArm ||
+    currentArm.status !== 'ARMED' ||
+    currentArm.authorizationId !== arm.authorizationId ||
+    currentArm.leaseRevision !== arm.leaseRevision ||
+    currentArm.expiresAt !== arm.expiresAt ||
+    genericWatchRevocation(arm.authorizationId)
+  ) {
+    stopForPolicy('authorization changed during lease renewal')
+  }
+  writeProtectedJson(GENERIC_WATCH_ARM_PATH, result.arm)
+  const revocation = genericWatchRevocation(arm.authorizationId)
+  if (revocation) {
+    writeProtectedJson(GENERIC_WATCH_ARM_PATH, {
+      ...result.arm,
+      status: 'DISARMED',
+      disarmedAt: revocation.revokedAt,
+    })
+    stopForPolicy('disarmed during lease renewal')
+  }
+  appendAudit('generic_watch_lease_renewed', {
+    authorizationId: result.arm.authorizationId,
+    leaseRevision: result.arm.leaseRevision,
+    previousExpiresAt: arm.expiresAt,
+    expiresAt: result.arm.expiresAt,
+    confirmedExecutions: usage.confirmedExecutions,
+    failedGasWei: usage.failedGasWei,
+    walletEthWei: wallet.ethBalance,
+    executorUsdgWei: principal,
+  })
+  console.log(
+    stringify({
+      status: 'GENERIC_WATCH_LEASE_RENEWED',
+      authorizationId: result.arm.authorizationId,
+      leaseRevision: result.arm.leaseRevision,
+      expiresAt: result.arm.expiresAt,
+      cumulativeFailedGasWei: usage.failedGasWei,
+    }),
+  )
+  return { arm: result.arm, renewed: true }
 }
 
 function boardTransportFailure(error) {
@@ -1836,9 +1932,13 @@ async function watchGeneric() {
       triggerMode: 'LOOPBACK_BOARD_THEN_TARGETED_EXACT_PREFLIGHT',
       idleRpcBehavior: 'NONE',
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
+      autoRenewLease: arm.autoRenewLease === true,
+      leaseRevision: arm.leaseRevision ?? null,
+      authorizationExpiresAt: arm.expiresAt,
       processedBoardGenerations: 0,
       consecutiveBoardErrors: 0,
       consecutiveExecutionRpcErrors: 0,
+      consecutiveLeaseRenewalErrors: 0,
       completedExecutionsThisArm: usage.confirmedExecutions,
       exactPreflightsThisArm: usage.exactPreflights,
       signedAttemptsThisArm: usage.attempts,
@@ -1860,20 +1960,46 @@ async function watchGeneric() {
         pid: process.pid,
         executor,
         expiresAt: arm.expiresAt,
+        autoRenewLease: arm.autoRenewLease === true,
+        leaseRevision: arm.leaseRevision ?? null,
         idleRpcBehavior: watchState.idleRpcBehavior,
       }),
     )
 
     let lastBoardGeneratedAt = null
+    let nextLeaseRenewalAttemptAt = 0
     while (!stopRequested) {
       const loopStartedAt = Date.now()
       let phase = 'BOARD'
       try {
-        const currentArm = readJson(GENERIC_WATCH_ARM_PATH)
+        let currentArm = readJson(GENERIC_WATCH_ARM_PATH)
         const currentDeploymentState = readJson(STATE_PATH)
-        const currentUsage = assertGenericWatchArm(currentArm, currentDeploymentState)
+        let currentUsage = assertGenericWatchArm(currentArm, currentDeploymentState)
         const unresolvedNow = latestUnresolved()
         if (unresolvedNow) throw new Error(`unresolved ${unresolvedNow.kind} mutation ${unresolvedNow.hash}`)
+        if (Date.now() >= nextLeaseRenewalAttemptAt) {
+          phase = 'RENEWAL'
+          const renewal = await maybeRenewGenericWatcherLease(currentArm, currentDeploymentState, currentUsage)
+          currentArm = renewal.arm
+          if (renewal.renewed) {
+            currentUsage = assertGenericWatchArm(currentArm, currentDeploymentState)
+            nextLeaseRenewalAttemptAt = 0
+            watchState = {
+              ...watchState,
+              autoRenewLease: true,
+              leaseRevision: currentArm.leaseRevision,
+              authorizationExpiresAt: currentArm.expiresAt,
+              consecutiveLeaseRenewalErrors: 0,
+              nextLeaseRenewalAttemptAt: null,
+              lastLeaseRenewedAt: currentArm.lastRenewedAt,
+              lastDecision: 'LEASE_RENEWED',
+              reason: null,
+              updatedAt: new Date().toISOString(),
+            }
+            writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          }
+        }
+        phase = 'BOARD'
 
         const snapshot = await loadBoardSnapshot()
         if (!snapshot?.generatedAt || !Number.isFinite(Date.parse(snapshot.generatedAt))) {
@@ -2038,6 +2164,26 @@ async function watchGeneric() {
             opportunityId: watchState.lastCandidate?.opportunityId || null,
             reason: errorText(error),
           })
+        } else if (phase === 'RENEWAL' && boardTransportFailure(error)) {
+          const consecutiveErrors = Number(watchState?.consecutiveLeaseRenewalErrors || 0) + 1
+          nextLeaseRenewalAttemptAt = Date.now() + LEASE_RENEWAL_RETRY_MS
+          watchState = {
+            ...watchState,
+            ...usageStateFields,
+            status: 'RUNNING',
+            updatedAt: new Date().toISOString(),
+            consecutiveLeaseRenewalErrors: consecutiveErrors,
+            nextLeaseRenewalAttemptAt: new Date(nextLeaseRenewalAttemptAt).toISOString(),
+            lastDecision: 'LEASE_RENEWAL_RETRY_SCHEDULED',
+            reason: errorText(error),
+          }
+          writeProtectedJson(GENERIC_WATCH_STATE_PATH, watchState)
+          appendAudit('generic_watch_lease_renewal_degraded', {
+            authorizationId: watchState.authorizationId,
+            consecutiveErrors,
+            retryAt: watchState.nextLeaseRenewalAttemptAt,
+            reason: errorText(error),
+          })
         } else if (boardTransportFailure(error)) {
           const counter = phase === 'BOARD' ? 'consecutiveBoardErrors' : 'consecutiveExecutionRpcErrors'
           const consecutiveErrors = Number(watchState?.[counter] || 0) + 1
@@ -2171,11 +2317,20 @@ async function genericWatchStatus() {
   let authorization = null
   if (arm) {
     try {
+      const lease = evaluateGenericRollingLease(arm)
+      const revocation = genericWatchRevocation(arm.authorizationId)
       authorization = {
         id: arm.authorizationId,
         status: arm.status,
         issuedAt: arm.issuedAt,
         expiresAt: arm.expiresAt,
+        autoRenewLease: arm.autoRenewLease === true,
+        leaseRevision: arm.leaseRevision ?? null,
+        renewBeforeHours: arm.renewBeforeHours ?? null,
+        renewWindowStartsAt: lease.renewWindowStartsAt ?? null,
+        leaseAllowed: lease.allowed && !revocation,
+        leaseReason: revocation ? 'disarmed' : lease.reason,
+        revokedAt: revocation?.revokedAt ?? null,
         maxPrincipalUsdg: formatUnits(BigInt(arm.maxPrincipalUsdgWei), 6),
         minimumNetProfitUsdg: formatUnits(BigInt(arm.minimumNetProfitUsdgWei), 6),
         minimumScreenedNetProfitUsdg: formatUnits(BigInt(arm.minimumScreenedNetProfitUsdgWei), 6),
@@ -2218,8 +2373,14 @@ async function genericWatchStatus() {
 async function disarmGenericWatcher() {
   const arm = readJson(GENERIC_WATCH_ARM_PATH)
   if (!arm) throw new Error('no generic watcher authorization exists')
+  const revokedAt = new Date().toISOString()
+  writeProtectedJson(GENERIC_WATCH_REVOCATION_PATH, {
+    schemaVersion: 1,
+    authorizationId: arm.authorizationId,
+    revokedAt,
+  })
   arm.status = 'DISARMED'
-  arm.disarmedAt = new Date().toISOString()
+  arm.disarmedAt = revokedAt
   writeProtectedJson(GENERIC_WATCH_ARM_PATH, arm)
   const holder = genericWatchLockHolder()
   const runtime = readJson(GENERIC_WATCH_STATE_PATH)

@@ -24,6 +24,8 @@ const CONFIG_KEYS = new Set([
   'MANGA_GENERIC_PREFLIGHT_CANDIDATES',
   'MANGA_GENERIC_WATCH_POLL_MS',
   'MANGA_GENERIC_WATCH_ARM_HOURS',
+  'MANGA_GENERIC_WATCH_AUTO_RENEW',
+  'MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS',
   'MANGA_GENERIC_WATCH_MAX_ATTEMPTS',
   'MANGA_GENERIC_WATCH_MAX_EXECUTIONS',
   'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS',
@@ -56,6 +58,12 @@ export function loadRuntimeConfig(environment = process.env) {
   const wsUrl = value('MANGA_WS_URL')
   const readRpcUrl = value('MANGA_READ_RPC_URL')
   const maxAttempts = positiveInteger(value('MANGA_MAX_ATTEMPTS'), 5)
+  const genericWatchArmHours = boundedPositiveInteger(value('MANGA_GENERIC_WATCH_ARM_HOURS'), 24, 168)
+  const genericWatchAutoRenew = strictBoolean(value('MANGA_GENERIC_WATCH_AUTO_RENEW'), false)
+  const genericWatchRenewBeforeHours = boundedPositiveInteger(value('MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS'), 6, 167)
+  if (genericWatchAutoRenew && genericWatchRenewBeforeHours >= genericWatchArmHours) {
+    throw new Error('MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS 必须小于 MANGA_GENERIC_WATCH_ARM_HOURS')
+  }
 
   return {
     configPath,
@@ -79,7 +87,9 @@ export function loadRuntimeConfig(environment = process.env) {
     genericProfitRetentionBps: boundedBps(value('MANGA_GENERIC_PROFIT_RETENTION_BPS'), 9_500),
     genericPreflightCandidates: boundedPositiveInteger(value('MANGA_GENERIC_PREFLIGHT_CANDIDATES'), 6, 32),
     genericWatchPollMs: boundedInteger(value('MANGA_GENERIC_WATCH_POLL_MS'), 1_000, 250, 60_000),
-    genericWatchArmHours: boundedPositiveInteger(value('MANGA_GENERIC_WATCH_ARM_HOURS'), 24, 168),
+    genericWatchArmHours,
+    genericWatchAutoRenew,
+    genericWatchRenewBeforeHours,
     genericWatchMaxAttempts: positiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_ATTEMPTS'), maxAttempts),
     genericWatchMaxExecutions: boundedPositiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_EXECUTIONS'), 5, 20),
     genericWatchMaxPreflights: boundedPositiveIntegerOrUnlimited(
@@ -148,6 +158,14 @@ function boundedBps(value, fallback) {
   const parsed = positiveInteger(value, fallback)
   if (parsed > 10_000) throw new Error(`配置值必须在 1..10000 bps：${value}`)
   return parsed
+}
+
+/** @param {string | null} value @param {boolean} fallback */
+function strictBoolean(value, fallback) {
+  if (value === null) return fallback
+  if (value === '1') return true
+  if (value === '0') return false
+  throw new Error(`配置值必须是 0 或 1：${value}`)
 }
 
 /**

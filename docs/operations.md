@@ -207,6 +207,30 @@ without changing the arm expiry, failed-Gas budget, ETH reserve, profit floors, 
 mutation barrier. Numeric values retain the finite policy; zero is invalid. The fixed-route watcher's
 `MANGA_MAX_ATTEMPTS` remains finite unless its own policy is separately reviewed.
 
+Rolling renewal is disabled by default. To authorize uninterrupted service while retaining a bounded liveness check,
+set all three values before creating a fresh arm:
+
+```text
+MANGA_GENERIC_WATCH_ARM_HOURS=168
+MANGA_GENERIC_WATCH_AUTO_RENEW=1
+MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS=24
+```
+
+The already-running watcher attempts renewal during the final 24 hours; no systemd timer, local scheduled task or Codex
+heartbeat is required. Renewal advances only `expiresAt`, `lastRenewedAt` and `leaseRevision` under the same
+authorization ID. Therefore failed Gas and all usage are cumulative across renewals. It first revalidates the canonical
+deployment, clean mutation state, exact nonce, positive executor principal and wallet ETH reserve. Transient provider
+failure is retried every five minutes until expiry; an expired lease cannot self-renew. Any change to the principal cap,
+profit floors, deployment, failed-Gas budget or other authorization scope requires disarm and a new arm.
+
+`generic:watch:status` exposes `autoRenewLease`, `leaseRevision`, `expiresAt`, `renewWindowStartsAt` and any scheduled
+renewal retry. Treat `RUNNING` plus a future expiry as liveness evidence only; receipts and post-state remain the evidence
+for profit.
+
+Disarm writes `generic-watch-revocation.json` before changing the arm or signalling the process. The marker is scoped to
+that authorization ID and remains authoritative if a concurrent stale write temporarily restores `ARMED`; creating a
+new arm produces a new authorization ID.
+
 ```bash
 cd /opt/manga-chan-arbitrage/current
 sudo -u manga-chan-arb env \

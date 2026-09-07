@@ -260,6 +260,131 @@ export function evaluateRawReplayDeadline(plan, observations) {
   return { allowed: true, reason: null }
 }
 
+const HOUR_MS = 60 * 60 * 1_000
+
+/**
+ * Return the immutable authorization/risk-epoch fields. Schema v1 commits its
+ * single expiry; schema v2 instead commits the rolling-lease policy and keeps
+ * the current lease revision/timestamps outside the authorization ID.
+ *
+ * @param {Record<string, any>} arm
+ * @returns {Record<string, any>}
+ */
+export function genericWatchAuthorizationCommitment(arm) {
+  return {
+    schemaVersion: arm.schemaVersion,
+    mode: arm.mode,
+    policyVersion: arm.policyVersion,
+    issuedAt: arm.issuedAt,
+    ...(arm.schemaVersion === 2
+      ? {
+          initialExpiresAt: arm.initialExpiresAt,
+          autoRenewLease: arm.autoRenewLease,
+          leaseDurationHours: arm.leaseDurationHours,
+          renewBeforeHours: arm.renewBeforeHours,
+        }
+      : { expiresAt: arm.expiresAt }),
+    chainId: arm.chainId,
+    wallet: arm.wallet,
+    executor: arm.executor,
+    sourceHash: arm.sourceHash,
+    runtimeCodeHash: arm.runtimeCodeHash,
+    maxPrincipalUsdgWei: arm.maxPrincipalUsdgWei,
+    minimumGrossProfitUsdgWei: arm.minimumGrossProfitUsdgWei,
+    minimumNetProfitUsdgWei: arm.minimumNetProfitUsdgWei,
+    minimumScreenedNetProfitUsdgWei: arm.minimumScreenedNetProfitUsdgWei,
+    profitRetentionBps: arm.profitRetentionBps,
+    walletEthReserveWei: arm.walletEthReserveWei,
+    maxConfirmedExecutions: arm.maxConfirmedExecutions,
+    maxAttempts: arm.maxAttempts,
+    maxExactPreflights: arm.maxExactPreflights,
+    maxFailedGasWei: arm.maxFailedGasWei,
+    baselineNonce: arm.baselineNonce,
+    baselineExecutionCount: arm.baselineExecutionCount,
+    pollIntervalMs: arm.pollIntervalMs,
+    idleRpcBehavior: arm.idleRpcBehavior,
+    escalationRpcBehavior: arm.escalationRpcBehavior,
+    rpcSource: arm.rpcSource,
+    principalUsdgWeiAtArm: arm.principalUsdgWeiAtArm,
+    walletEthWeiAtArm: arm.walletEthWeiAtArm,
+  }
+}
+
+/**
+ * Schema-v2 authorizations keep one immutable authorization/risk epoch while
+ * advancing only a bounded liveness lease. A lease can be renewed before it
+ * expires, but an expired lease cannot revive itself.
+ *
+ * @param {Record<string, any>} arm
+ * @param {number} [now]
+ */
+export function evaluateGenericRollingLease(arm, now = Date.now()) {
+  if (arm?.schemaVersion !== 2) {
+    return { allowed: true, reason: null, autoRenew: false, renewalDue: false }
+  }
+  const leaseDurationHours = Number(arm.leaseDurationHours)
+  const renewBeforeHours = Number(arm.renewBeforeHours)
+  const leaseRevision = Number(arm.leaseRevision)
+  const issuedAt = Date.parse(arm.issuedAt)
+  const initialExpiresAt = Date.parse(arm.initialExpiresAt)
+  const lastRenewedAt = Date.parse(arm.lastRenewedAt)
+  const expiresAt = Date.parse(arm.expiresAt)
+  if (
+    arm.autoRenewLease !== true ||
+    !Number.isSafeInteger(leaseDurationHours) ||
+    leaseDurationHours <= 1 ||
+    leaseDurationHours > 168 ||
+    !Number.isSafeInteger(renewBeforeHours) ||
+    renewBeforeHours <= 0 ||
+    renewBeforeHours >= leaseDurationHours ||
+    !Number.isSafeInteger(leaseRevision) ||
+    leaseRevision < 0 ||
+    !Number.isFinite(issuedAt) ||
+    !Number.isFinite(initialExpiresAt) ||
+    !Number.isFinite(lastRenewedAt) ||
+    !Number.isFinite(expiresAt) ||
+    !Number.isFinite(now) ||
+    initialExpiresAt !== issuedAt + leaseDurationHours * HOUR_MS ||
+    expiresAt !== lastRenewedAt + leaseDurationHours * HOUR_MS ||
+    lastRenewedAt < issuedAt ||
+    lastRenewedAt > now ||
+    (leaseRevision === 0 && (lastRenewedAt !== issuedAt || expiresAt !== initialExpiresAt)) ||
+    (leaseRevision > 0 && lastRenewedAt === issuedAt)
+  ) {
+    return { allowed: false, reason: 'invalid-rolling-lease', autoRenew: true, renewalDue: false }
+  }
+  if (now >= expiresAt) return { allowed: false, reason: 'expired', autoRenew: true, renewalDue: false }
+  return {
+    allowed: true,
+    reason: null,
+    autoRenew: true,
+    renewalDue: now >= expiresAt - renewBeforeHours * HOUR_MS,
+    renewWindowStartsAt: new Date(expiresAt - renewBeforeHours * HOUR_MS).toISOString(),
+    expiresAt: new Date(expiresAt).toISOString(),
+  }
+}
+
+/**
+ * @param {Record<string, any>} arm
+ * @param {number} [now]
+ */
+export function renewGenericRollingLease(arm, now = Date.now()) {
+  const evaluation = evaluateGenericRollingLease(arm, now)
+  if (!evaluation.allowed) return { allowed: false, reason: evaluation.reason, arm: null }
+  if (!evaluation.renewalDue) return { allowed: false, reason: 'renewal-not-due', arm: null }
+  const lastRenewedAt = new Date(now).toISOString()
+  return {
+    allowed: true,
+    reason: null,
+    arm: {
+      ...arm,
+      leaseRevision: Number(arm.leaseRevision) + 1,
+      lastRenewedAt,
+      expiresAt: new Date(now + Number(arm.leaseDurationHours) * HOUR_MS).toISOString(),
+    },
+  }
+}
+
 /**
  * @param {{maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, expiresAt: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, now?: number}} usage

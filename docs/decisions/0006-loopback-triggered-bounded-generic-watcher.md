@@ -40,6 +40,7 @@ explicit and prevents a service restart or configuration edit from silently wide
 - The local heartbeat may audit receipts and failures, but it is not an execution dependency.
 - A public-board screen remains noncanonical and cannot authorize a signature by itself.
 - Provider usage becomes event-driven and bounded, not zero; every promoted candidate still needs exact chain evidence.
-- An expiring arm must be renewed explicitly. Budget exhaustion and policy expiry stop cleanly; UNKNOWN and invariant
-  failures stop as incidents.
+- Manual renewal remains the default. ADR 0014 adds an explicitly configured rolling-lease mode that renews only the
+  liveness window inside the same authorization/risk epoch; budget exhaustion and policy expiry still stop cleanly,
+  while UNKNOWN and invariant failures stop as incidents.
 - Mainnet deployment, arm activation and realized profit remain unproven until their own canonical evidence is recorded.
