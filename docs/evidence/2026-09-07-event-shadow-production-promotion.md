@@ -16,13 +16,21 @@ The fixed and generic signing watchers remained inactive and disabled throughout
   fallback and merged as `0b3c5911a4503a1be31fa94f739fa5ff3ead1113`.
 - [PR 34](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/34) made periodic reconciliation
   non-starvable and merged as `1a49b15ec5cbddd74536b913eaecfb7bf46619ea`.
-- [Release v0.5.2](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/releases/tag/v0.5.2) is the accepted
+- [Release v0.5.2](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/releases/tag/v0.5.2) was the first accepted
+  event-driven production foundation.
+- [PR 36](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/36) corrected the execution-evidence wording and
+  merged as `cbc92c71e2dbbf18e97abf72ddbaf4a5d5266551`. Its v0.5.3 production readback exposed a persisted-state migration
+  gap rather than a trading-safety defect.
+- [PR 37](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/37) normalized the legacy state and merged as
+  `ea1374841ce5a35757786c33f7e06d19b5b9905e`.
+- [Release v0.5.4](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/releases/tag/v0.5.4) is the accepted current
   production release. Its commit-addressed archive and `SHA256SUMS` were downloaded from GitHub Actions and verified
-  before transfer.
+  before transfer; the archive digest is `8efef8254b3322982f2924e99dd0bd0c0e0462a31f4a826f73e558f72086cdfc`.
 
-Every PR CI and tagged release workflow ran `npm run check`. The final Linux install repeated formatting, JavaScript and
-Solidity lint, shell syntax, `systemd-analyze verify`, checked-JS types, both Solidity compiles, `77/77` unit tests, both
-deterministic contract suites and the secret scan over 91 files. Fixed and generic Solidity source hashes remained
+Every PR CI and tagged release workflow ran `npm run check`. The v0.5.2 Linux install repeated `77/77` unit tests and a
+91-file secret scan. The final v0.5.4 Linux install repeated formatting, JavaScript and Solidity lint, shell syntax,
+`systemd-analyze verify`, checked-JS types, both Solidity compiles, `78/78` unit tests, both deterministic contract suites
+and the secret scan over 92 files. Fixed and generic Solidity source hashes remained
 `0x0a085f1ecd1af15b6007b5c9450cc73dc3a2e84a738094e5789d80a7c0fc8755` and
 `0x5b03b1f117600d2e241f67eaa5026adc80082172daaa28b7cf84dfc3f26da78e`. Linux emitted only the pre-existing Alibaba
 Cloud Monitor unit warnings; no repository unit failed verification.
@@ -89,6 +97,33 @@ block `56,580,086`. Both selected PAIR pools had matching PoolKeys, the document
 Quoter attestations, but API depth was unknown. The route therefore remained `SHADOW_ONLY_DEPTH_UNKNOWN`, the global
 selection kept `executionAuthorized=false`, and no exact executor preflight, signature or broadcast occurred. This is a
 timestamped observation, not a claim that the opportunity remained available later.
+
+## Accepted v0.5.4 runtime readback
+
+v0.5.3 started at `2026-09-07T05:32:48.897Z` and emitted the corrected
+`NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED` value on new quotes. A full snapshot audit nevertheless found ten stale rows
+whose v0.5.2 value still claimed that the generic executor was undeployed. The service stayed healthy and signer-free;
+v0.5.4 was cut specifically to normalize that persisted evidence at load and snapshot construction.
+
+The v0.5.4 restart preserved all 2,326 event records present at its boundary. At the final readback:
+
+- `/healthz` returned HTTP 200, systemd was active/running with zero restarts and used approximately 139 MB;
+- both fixed and generic signing watchers were inactive and disabled, and `signerLoaded=false`;
+- all 943 snapshot rows used only `NOT_RUN` or `NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED`; the obsolete label count was
+  zero;
+- the public RPC produced another incomplete batch at `2026-09-07T05:43:16.698Z`, changed exactly once to
+  `INDIVIDUAL_FALLBACK`, recovered without a last error and kept one HTTP request in flight at a time;
+- with a pending event queue, the next mandatory periodic reconciliation completed at `2026-09-07T05:45:33.289Z`, so
+  event traffic still did not starve reconciliation after fallback;
+- chain backfill advanced to `nextBlock=45,700,000`, attributed five pools in the scanned range and remained explicitly
+  `BACKFILL_PARTIAL`.
+
+At `2026-09-07T05:45:59.320Z`, 561 of 943 candidates had retained quotes and 22 were fresh. Two fresh rows screened net
+positive: RETARDIO at 10 USDG on `AMC -> RETARDIO -> TSLA` (`+0.543042` gross, `0.427131` Gas proxy, `+0.115911` net),
+and Equititty at 10 USDG on `SPY -> Equititty -> SGOV` (`+0.536802` gross, `0.436425` Gas proxy, `+0.100377` net). Both
+used fixed-block Quoter and PoolKey evidence, but both selected pools remained `SHADOW_ONLY_DEPTH_UNKNOWN`. Global
+`executionAuthorized` was false and `receiptEvidence` was `NONE`; there was no exact executor preflight, signature,
+broadcast or realized profit.
 
 ## Still open
 
