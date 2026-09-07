@@ -163,7 +163,7 @@ Acceptance:
 - entry, material change and exit records preserve gross, Gas proxy, net, block and evidence fields;
 - a durable epoch marker distinguishes legacy biased history.
 
-Status: implemented and covered by deterministic unit tests; production epoch readback pending.
+Status: implemented, deterministically tested and promoted with a preserved production epoch/history readback.
 
 ## S15 — Pool identity and chain catalog
 
@@ -175,8 +175,8 @@ Acceptance:
 - bounded PoolManager `Initialize` backfill persists a cursor and lists multi-pool, singleton and ambiguous groups;
 - completeness is reported only from the configured start block.
 
-Status: implemented and locally smoke-tested against the public RPC; historical backfill completion and production
-readback pending.
+Status: implemented and production-observed against the public RPC. The durable cursor advanced under event load;
+historical backfill remains partial and no earlier-than-configured-start completeness is claimed.
 
 ## S16 — Event-driven shadow wake
 
@@ -192,5 +192,6 @@ Acceptance:
   circuit instead of being cached as pool absence or retried across every candidate amount.
 - a mandatory periodic deadline prevents continuous event traffic from starving coverage rotation and chain backfill.
 
-Status: implementation, deterministic tests and one successful public-RPC local cycle are complete; deployed latency
-and RPC-reduction targets remain unproven.
+Status: implementation, deterministic tests and signer-free production promotion are complete. Production exercised
+the malformed-batch fallback and non-starvable periodic deadline; steady-state latency and RPC-reduction targets remain
+unproven.
