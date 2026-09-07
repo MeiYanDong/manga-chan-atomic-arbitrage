@@ -52,10 +52,11 @@ wallet, signer or broadcast path.
   exhausted execution RPC is replaced, the previously exposed endpoint credential is rotated and a fresh bounded
   authorization is explicitly approved.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free event board is deployed from release `1a49b15ec5cbddd74536b913eaecfb7bf46619ea`. Production
+- The signer-free event board is deployed from release `ea1374841ce5a35757786c33f7e06d19b5b9905e` (`v0.5.4`). Production
   readback exercised its one-time fallback from malformed public-RPC batches to bounded individual requests, retained
-  HTTP 200 health and proved a mandatory reconciliation/backfill cycle under continuous event traffic. Backfill
-  completeness, steady-state latency, opportunity frequency and race outcomes remain unproven.
+  HTTP 200 health, proved a mandatory reconciliation/backfill cycle under continuous event traffic and normalized all
+  persisted execution-evidence labels. Backfill completeness, steady-state latency, opportunity frequency and race
+  outcomes remain unproven.
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
@@ -66,7 +67,7 @@ See
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
 See
 [`docs/evidence/2026-09-07-event-shadow-production-promotion.md`](docs/evidence/2026-09-07-event-shadow-production-promotion.md)
-for the failed v0.5.0 promotion, rollback, public-RPC fallback and accepted v0.5.2 runtime readback.
+for the failed v0.5.0 promotion, rollback, public-RPC fallback and accepted v0.5.4 runtime readback.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 
