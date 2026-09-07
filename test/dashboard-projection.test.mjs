@@ -1,0 +1,200 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import {
+  buildDashboardModel,
+  filterDashboardOpportunities,
+  projectDashboardOpportunities,
+  routeDashboardApi,
+} from '../src/dashboard-projection.mjs'
+import { stablePayloadHash } from '../src/source-provenance.mjs'
+
+const NINECAT = '0x7D3f54f19038D5B819e8730606D048DE9D0d1e18'
+const AI = '0x2e8c31162B855A2FFa90f6f8634643Ad6F111E18'
+
+function evidence(evidenceId, producer, blockNumber = '45879015') {
+  return {
+    evidenceId,
+    kind: 'RECEIPT_LOG',
+    producer,
+    observedAt: '2026-09-07T00:00:00.000Z',
+    chainId: 4663,
+    blockNumber,
+    blockHash: `0x${'a'.repeat(64)}`,
+    transactionHash: `0x${'b'.repeat(64)}`,
+    payloadHash: `sha256:${'c'.repeat(64)}`,
+    status: 'OBSERVED',
+    payload: {},
+  }
+}
+
+function runtimeFixture() {
+  const longEvidence = evidence('long:ninecat', 'LONG_LAUNCHER_LOG_ADAPTER')
+  const dopplerEvidence = evidence('doppler:ninecat', 'DOPPLER_CREATE_LOG_ADAPTER')
+  const poolEvidence = evidence('pool:ninecat-ai', 'UNISWAP_V4_POOL_MANAGER_ADAPTER')
+  const pairEvidence = {
+    ...evidence('pair:ninecat', 'PAIR_CATALOG_API', null),
+    kind: 'SOURCE_RESPONSE',
+  }
+  const registryPayload = { addresses: [] }
+  const registryEvidence = {
+    evidenceId: 'rh:test',
+    kind: 'REGISTRY_SNAPSHOT',
+    producer: 'ROBINHOOD_ASSETS_API',
+    observedAt: '2026-09-07T00:00:00.000Z',
+    chainId: 4663,
+    blockNumber: null,
+    blockHash: null,
+    transactionHash: null,
+    payloadHash: stablePayloadHash(registryPayload),
+    status: 'OBSERVED',
+    payload: registryPayload,
+  }
+  return {
+    snapshot: {
+      schemaVersion: 4,
+      generatedAt: '2026-09-07T00:01:00.000Z',
+      health: { status: 'RUNNING', signerLoaded: false },
+      coverage: { candidateTokens: 0, counts: {} },
+      items: [],
+    },
+    sourceCatalog: {
+      schemaVersion: 4,
+      registryVersion: 'test',
+      adapters: {},
+      evidence: [pairEvidence, registryEvidence],
+      pairListings: [
+        {
+          adapterId: 'pair.catalog.v1',
+          targetAddress: NINECAT,
+          platformId: 'PAIR',
+          symbol: 'NINECAT',
+          name: 'Nine Cat',
+          evidenceIds: [pairEvidence.evidenceId],
+        },
+      ],
+      assetRegistry: { addresses: [], evidenceIds: ['rh:test'] },
+      longLaunches: [
+        {
+          asset: NINECAT,
+          numeraire: AI,
+          normalizedTicker: 'NINECAT',
+          entryContract: '0x22e99278308B393ea1260859B181AD7E78f5eeED',
+          evidence: longEvidence,
+        },
+      ],
+      dopplerLaunches: [{ asset: NINECAT, numeraire: AI, evidence: dopplerEvidence }],
+      pools: [
+        {
+          poolId: `0x${'d'.repeat(64)}`,
+          currency0: AI,
+          currency1: NINECAT,
+          evidence: poolEvidence,
+        },
+      ],
+    },
+  }
+}
+
+test('source-only NINECAT reads LONG route / Doppler / Uniswap v4 / custom NINECAT-AI', () => {
+  const opportunities = projectDashboardOpportunities(runtimeFixture())
+  assert.equal(opportunities.length, 1)
+  const item = opportunities[0]
+  assert.equal(item.target.symbol, 'NINECAT')
+  assert.equal(item.quoteAssets[0].symbol, 'AI')
+  assert.equal(item.quoteAssets.length, 1)
+  assert.equal(item.pairClass, 'CUSTOM_TOKEN/CUSTOM_TOKEN')
+  assert.equal(item.provenance.platformAttribution.platformId, 'LONG_ROUTE')
+  assert.equal(item.provenance.platformAttribution.status, 'CHAIN_ATTESTED')
+  assert.equal(item.provenance.launchFrontend.status, 'UNKNOWN')
+  assert.equal(item.provenance.launchProtocol.protocolId, 'DOPPLER')
+  assert.equal(item.provenance.liquidityVenue.venueId, 'UNISWAP_V4')
+  assert.equal(item.axes.quote, 'UNQUOTED')
+  assert.equal(item.axes.execution, 'NONE')
+})
+
+test('PAIR listing is visible but cannot overwrite a LONG route', () => {
+  const [item] = projectDashboardOpportunities(runtimeFixture())
+  assert.equal(item.provenance.listings[0].platformId, 'PAIR')
+  assert.equal(item.provenance.platformAttribution.platformId, 'LONG_ROUTE')
+})
+
+test('native zero-address liquidity is a route leg, never a standalone opportunity target', () => {
+  const fixture = runtimeFixture()
+  fixture.sourceCatalog.pools.push({
+    poolId: `0x${'e'.repeat(64)}`,
+    currency0: '0x0000000000000000000000000000000000000000',
+    currency1: AI,
+    evidence: evidence('pool:ai-native', 'UNISWAP_V4_POOL_MANAGER_ADAPTER'),
+  })
+  const opportunities = projectDashboardOpportunities(fixture)
+  assert.equal(
+    opportunities.some((item) => item.target.address.toLowerCase() === '0x0000000000000000000000000000000000000000'),
+    false,
+  )
+})
+
+test('filters expose explicit attribution and economic axes', () => {
+  const opportunities = projectDashboardOpportunities(runtimeFixture())
+  assert.equal(filterDashboardOpportunities(opportunities, { platform: 'LONG_ROUTE' }).length, 1)
+  assert.equal(filterDashboardOpportunities(opportunities, { platform: 'PAIR' }).length, 0)
+  assert.equal(filterDashboardOpportunities(opportunities, { attribution: 'CHAIN_ATTESTED' }).length, 1)
+  assert.equal(filterDashboardOpportunities(opportunities, { query: 'artificial' }).length, 0)
+  assert.equal(filterDashboardOpportunities(opportunities, { query: AI.slice(0, 8) }).length, 1)
+})
+
+test('overview never merges proxy screens, exact-ready, receipts and realized net', () => {
+  const fixture = runtimeFixture()
+  fixture.snapshot.items = [
+    {
+      id: NINECAT.toLowerCase(),
+      tokenAddress: NINECAT,
+      symbol: 'NINECAT',
+      status: 'SCREENED_NET_POSITIVE',
+      fresh: true,
+      quotedAt: fixture.snapshot.generatedAt,
+      screenedNetUsdg: '0.25',
+      amountInUsdg: '25',
+      pools: [],
+    },
+  ]
+  const model = buildDashboardModel({
+    ...fixture,
+    executions: [
+      { executionId: 'one', state: 'CONFIRMED', economicsState: 'RECEIPT_ONLY' },
+      { executionId: 'two', state: 'CONFIRMED', economicsState: 'REALIZED_NET_VERIFIED', realizedNetUsdg: '0.5' },
+    ],
+  })
+  assert.equal(model.overview.screenedPositive, 1)
+  assert.equal(model.overview.exactReady, 0)
+  assert.equal(model.overview.confirmed, 2)
+  assert.equal(model.overview.realizedNetUsdg, '0.500000')
+})
+
+test('read-only API router exposes all v1 projections and rejects malformed detail ids', () => {
+  const fixture = runtimeFixture()
+  const model = buildDashboardModel(fixture)
+  const query = routeDashboardApi('/api/v1/opportunities', new URLSearchParams({ platform: 'LONG_ROUTE' }), model)
+  assert.equal(query.status, 200)
+  assert.equal(query.payload.count, 1)
+  assert.equal(query.payload.view, 'SUMMARY')
+  assert.equal(query.payload.items[0].evidenceTimeline, undefined)
+  const detail = routeDashboardApi(
+    `/api/v1/opportunities/${encodeURIComponent(query.payload.items[0].opportunityId)}`,
+    new URLSearchParams(),
+    model,
+  )
+  assert.equal(detail.status, 200)
+  assert.equal(detail.payload.evidenceTimeline.length, 4)
+  assert.equal(
+    detail.payload.evidenceTimeline.some((item) => item.claimType === 'PLATFORM_ROUTE'),
+    true,
+  )
+  assert.equal(routeDashboardApi('/api/v1/overview', new URLSearchParams(), model).status, 200)
+  assert.equal(routeDashboardApi('/api/v1/sources', new URLSearchParams(), model).status, 200)
+  assert.equal(routeDashboardApi('/api/v1/episodes', new URLSearchParams(), model).status, 200)
+  assert.equal(routeDashboardApi('/api/v1/executions', new URLSearchParams(), model).status, 200)
+  assert.equal(routeDashboardApi('/api/v1/system', new URLSearchParams(), model).status, 200)
+  assert.equal(routeDashboardApi('/api/v1/opportunities/%E0%A4%A', new URLSearchParams(), model).status, 400)
+  assert.equal(routeDashboardApi('/api/v1/unknown', new URLSearchParams(), model).status, 404)
+  assert.equal(routeDashboardApi('/api/v1/overview', new URLSearchParams(), null).status, 503)
+})

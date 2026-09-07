@@ -1,0 +1,172 @@
+{
+  "chainId": 4663,
+  "opportunityId": "rh:4663:0x7d3f54f19038d5b819e8730606d048de9d0d1e18:historical-route",
+  "target": {
+    "address": "0x7d3f54f19038d5b819e8730606d048de9d0d1e18",
+    "symbol": "NINECAT",
+    "name": "Nine Cat"
+  },
+  "quoteAsset": {
+    "address": "0x2e8c31162b855a2ffa90f6f8634643ad6f111e18",
+    "symbol": "AI",
+    "name": "Artificial Inu"
+  },
+  "evidence": [
+    {
+      "evidenceId": "rh:4663:tx:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69",
+      "kind": "TRANSACTION",
+      "producer": "ROBINHOOD_PUBLIC_RPC",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "chainId": 4663,
+      "blockNumber": "45879015",
+      "blockHash": "0x352ddaae6aa0e0d8afb49a58f309a1e2771add4e589d5135ca87945028edeaf0",
+      "transactionHash": "0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69",
+      "status": "OBSERVED",
+      "payload": {
+        "from": "0x43831cfaa6c05289ac91361fc930b511eefdbddb",
+        "to": "0x22e99278308b393ea1260859b181ad7e78f5eeed",
+        "selector": "0x882db707"
+      }
+    },
+    {
+      "evidenceId": "rh:4663:log:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69:87",
+      "kind": "RECEIPT_LOG",
+      "producer": "ROBINHOOD_PUBLIC_RPC",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "chainId": 4663,
+      "blockNumber": "45879015",
+      "blockHash": "0x352ddaae6aa0e0d8afb49a58f309a1e2771add4e589d5135ca87945028edeaf0",
+      "transactionHash": "0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69",
+      "status": "OBSERVED",
+      "payload": {
+        "address": "0x22e99278308b393ea1260859b181ad7e78f5eeed",
+        "topic0": "0xadc6f1f726f7c710f77ec06adc75f3bb964e5be19581b072c67f7b9b4039267b",
+        "asset": "0x7d3f54f19038d5b819e8730606d048de9d0d1e18",
+        "numeraire": "0x2e8c31162b855a2ffa90f6f8634643ad6f111e18"
+      }
+    },
+    {
+      "evidenceId": "rh:4663:log:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69:86",
+      "kind": "RECEIPT_LOG",
+      "producer": "ROBINHOOD_PUBLIC_RPC",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "chainId": 4663,
+      "blockNumber": "45879015",
+      "blockHash": "0x352ddaae6aa0e0d8afb49a58f309a1e2771add4e589d5135ca87945028edeaf0",
+      "transactionHash": "0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69",
+      "status": "OBSERVED",
+      "payload": {
+        "address": "0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862",
+        "topic0": "0x68ff1cfcdcf76864161555fc0de1878d8f83ec6949bf351df74d8a4a1a2679ab",
+        "asset": "0x7d3f54f19038d5b819e8730606d048de9d0d1e18"
+      }
+    },
+    {
+      "evidenceId": "rh:4663:log:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69:76",
+      "kind": "RECEIPT_LOG",
+      "producer": "ROBINHOOD_PUBLIC_RPC",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "chainId": 4663,
+      "blockNumber": "45879015",
+      "blockHash": "0x352ddaae6aa0e0d8afb49a58f309a1e2771add4e589d5135ca87945028edeaf0",
+      "transactionHash": "0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69",
+      "status": "OBSERVED",
+      "payload": {
+        "address": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+        "topic0": "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438",
+        "poolId": "0xee0963d99bcafb54879728c57df60df3e652095d3bc24890004d06c87d3ccd26",
+        "currency0": "0x2e8c31162b855a2ffa90f6f8634643ad6f111e18",
+        "currency1": "0x7d3f54f19038d5b819e8730606d048de9d0d1e18"
+      }
+    },
+    {
+      "evidenceId": "rh-assets:2026-09-07",
+      "kind": "REGISTRY_SNAPSHOT",
+      "producer": "ROBINHOOD_ASSETS_API",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "chainId": 4663,
+      "blockNumber": null,
+      "blockHash": null,
+      "transactionHash": null,
+      "status": "OBSERVED",
+      "payload": {
+        "coverage": "CHECKED_ADDRESSES",
+        "checkedAddresses": [
+          "0x7d3f54f19038d5b819e8730606d048de9d0d1e18",
+          "0x2e8c31162b855a2ffa90f6f8634643ad6f111e18"
+        ],
+        "matches": []
+      }
+    },
+    {
+      "evidenceId": "user-reference:0xc15567e1b563abeb56014ec318264f84014bff8a1cdf0f44902973aa226aba2f",
+      "kind": "TRANSACTION",
+      "producer": "USER_REFERENCE_PLUS_ROBINHOOD_PUBLIC_RPC",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "chainId": 4663,
+      "blockNumber": "52739968",
+      "blockHash": "0xc0be239d6cfbd781e9c32a5991d5d9a4cd2cd5cc41db5ce5126c74c88dbc5601",
+      "transactionHash": "0xc15567e1b563abeb56014ec318264f84014bff8a1cdf0f44902973aa226aba2f",
+      "status": "OBSERVED",
+      "payload": {
+        "poolIds": [
+          "0xee0963d99bcafb54879728c57df60df3e652095d3bc24890004d06c87d3ccd26",
+          "0x6d6fde80b9914214c7a4e7c22c5e28f9d18881d92dd275301bcd728d65465edd"
+        ]
+      }
+    }
+  ],
+  "discovery": [
+    {
+      "adapterId": "USER_REFERENCE",
+      "claim": "REFERENCE_TRANSACTION",
+      "observedAt": "2026-09-07T00:00:00.000Z",
+      "evidenceIds": ["user-reference:0xc15567e1b563abeb56014ec318264f84014bff8a1cdf0f44902973aa226aba2f"]
+    }
+  ],
+  "listings": [],
+  "launchObservations": [
+    {
+      "entryContract": "0x22e99278308b393ea1260859b181ad7e78f5eeed",
+      "eventContract": "0x22e99278308b393ea1260859b181ad7e78f5eeed",
+      "eventTopic": "0xadc6f1f726f7c710f77ec06adc75f3bb964e5be19581b072c67f7b9b4039267b",
+      "evidenceIds": [
+        "rh:4663:tx:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69",
+        "rh:4663:log:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69:87"
+      ]
+    }
+  ],
+  "protocolObservations": [
+    {
+      "address": "0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862",
+      "evidenceIds": ["rh:4663:log:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69:86"]
+    }
+  ],
+  "liquidityPools": [
+    {
+      "poolManager": "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+      "poolId": "0xee0963d99bcafb54879728c57df60df3e652095d3bc24890004d06c87d3ccd26",
+      "baseAsset": "NINECAT",
+      "quoteAsset": "AI",
+      "evidenceIds": ["rh:4663:log:0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69:76"]
+    }
+  ],
+  "robinhoodAssetRegistry": {
+    "evidenceId": "rh-assets:2026-09-07",
+    "addresses": []
+  },
+  "route": {
+    "inputAsset": "HISTORICAL_REFERENCE_ONLY",
+    "legs": [],
+    "historicalReference": {
+      "state": "HISTORICAL_ROUTE_ONLY",
+      "transactionHash": "0xc15567e1b563abeb56014ec318264f84014bff8a1cdf0f44902973aa226aba2f",
+      "path": ["NINECAT", "AI", "ETH"],
+      "poolIds": [
+        "0xee0963d99bcafb54879728c57df60df3e652095d3bc24890004d06c87d3ccd26",
+        "0x6d6fde80b9914214c7a4e7c22c5e28f9d18881d92dd275301bcd728d65465edd"
+      ],
+      "evidenceIds": ["user-reference:0xc15567e1b563abeb56014ec318264f84014bff8a1cdf0f44902973aa226aba2f"]
+    }
+  }
+}

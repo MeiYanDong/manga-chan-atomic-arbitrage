@@ -3,6 +3,9 @@ runs/
 artifacts/
 cache/
 coverage/
+output/playwright/
+.playwright-cli/
+public/dashboard/
 .env
 .env.*
 !.env.example

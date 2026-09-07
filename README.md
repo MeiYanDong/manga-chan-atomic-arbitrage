@@ -19,8 +19,8 @@ USDG -> quote A (V3 direct or one WETH bridge) -> target (PAIR V4)
 
 The edge is stale relative pricing across the two MANGA quote pools and their USDG conversion pools. It does not depend on MSFT or NVDA being stock tokens; the same mechanism can exist when the quote assets are AI or meme tokens.
 
-This repository also contains a separate read-only opportunity board. It merges PAIR API discovery with bounded
-PoolManager `Initialize`-log backfill, quotes the best observed
+This repository also contains a separate read-only opportunity board. It combines independent PAIR-listing,
+LongLauncher, Doppler, PoolManager and Robinhood-asset adapters, quotes the best observed
 `USDG -> quote A -> token -> quote B -> USDG` loop at one fixed block, subtracts a gas proxy and records continuous
 economic opportunity episodes. Pool events wake affected candidates between slower coverage sweeps. The board has no
 wallet, signer or broadcast path.
@@ -63,6 +63,8 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   HTTP 200 health, proved a mandatory reconciliation/backfill cycle under continuous event traffic and normalized all
   persisted execution-evidence labels. Backfill completeness, steady-state latency, opportunity frequency and race
   outcomes remain unproven.
+- The source-aware v0.6.0 console is implemented and locally validated but is not included in that v0.5.4 deployment.
+  Until a current host readback records otherwise, its production status is pending.
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
@@ -74,6 +76,9 @@ for the signer-free public-RPC optimization trials and final local schema-v3 rea
 See
 [`docs/evidence/2026-09-07-event-shadow-production-promotion.md`](docs/evidence/2026-09-07-event-shadow-production-promotion.md)
 for the failed v0.5.0 promotion, rollback, public-RPC fallback and accepted v0.5.4 runtime readback.
+See
+[`docs/evidence/2026-09-07-source-aware-dashboard-local-validation.md`](docs/evidence/2026-09-07-source-aware-dashboard-local-validation.md)
+for v0.6.0's deterministic, browser and temporary public-RPC validation; it is not production evidence.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 
@@ -107,7 +112,9 @@ npm ci --no-audit --no-fund
 npm run check
 ```
 
-`npm run check` executes formatting, JavaScript/Solidity lint, checked-JS type analysis, Solidity compilation, unit tests, deterministic Cancun EVM contract tests, and a repository secret/privacy scan.
+`npm run check` executes formatting, JavaScript/Solidity/shell lint, Linux systemd verification where available,
+checked-JS type analysis, the Vite production build, Solidity compilation, unit tests, deterministic Cancun EVM
+contract tests, and a repository secret/privacy scan.
 
 The deterministic contract test asserts the exact business result, intermediate-token residuals, operator boundary, amount cap, profit floor, expiry and callback authorization. It does not require a live RPC or signer.
 
@@ -178,6 +185,24 @@ V4 history is not claimed as covered.
 The hot path uses bounded public-HTTP `eth_getLogs` ranges for PoolManager and previously quoted V3 pools. Events only
 choose what to requote; they never substitute a local price calculation for the fixed-block Quoter result. Runtime
 evidence is available at `/api/event-metrics` and `/api/chain-catalog` through the same loopback-only SSH tunnel.
+
+The private source-aware console and read-only API are served on the same loopback listener. The Radar list uses a
+lightweight summary projection and loads full claim evidence only when a row is opened:
+
+```text
+GET /api/v1/overview
+GET /api/v1/opportunities
+GET /api/v1/opportunities/:id
+GET /api/v1/sources
+GET /api/v1/episodes
+GET /api/v1/executions
+GET /api/v1/system
+```
+
+`POST`, wallet actions and arbitrary RPC proxying are not part of this surface. SQLite is the default current read
+model, JSONL remains the append-only evidence ledger, and `MANGA_BOARD_READ_MODEL=legacy` is the non-destructive canary
+rollback. NINECAT is rendered as LONG route / Doppler / Uniswap v4 / NINECAT-AI; that attribution is not a current
+quote or execution claim.
 
 Use a dedicated protected configuration based on [`deploy/opportunity-board.env.example`](deploy/opportunity-board.env.example).
 The supported service binds to `127.0.0.1:8788`; open it privately with:

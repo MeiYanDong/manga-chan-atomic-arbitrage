@@ -3,7 +3,7 @@
 - Observation date: 2026-09-07
 - Chain: Robinhood Chain mainnet (`4663`)
 - Correction status: PAIR attribution rejected; LONG route chain-attested
-- Runtime impact: none; this is a chain-research and design correction
+- Runtime impact: implemented in the v0.6.0 source-aware projection; production promotion is separately evidenced
 
 ## Corrected conclusion
 
@@ -88,5 +88,5 @@ The public endpoint is rate-limited and not production-grade. These commands are
 5. **Test gap:** there is no regression asserting that discovery source and launch platform may disagree, and no
    NINECAT fixture that must resolve to LONG route + Doppler + Uniswap v4 + custom AI pair.
 
-ADR 0009 turns these findings into deterministic data and UI rules. Implementation remains pending and must not be
-described as deployed.
+ADR 0009 turns these findings into deterministic data and UI rules. The v0.6.0 implementation includes the NINECAT
+fixture and source-aware read model; this document still does not claim a production deployment or current arbitrage.

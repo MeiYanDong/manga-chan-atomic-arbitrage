@@ -1,7 +1,7 @@
 # Source-aware dashboard stories
 
 - Plan status: accepted
-- Implementation status: not started
+- Implementation status: SD1–SD6 complete locally in v0.6.0; SD7 production readback pending
 - Deployment status: not deployed
 
 Each story is independently reviewable and must preserve the signer-free boundary.
@@ -85,3 +85,14 @@ Acceptance:
 
 SD1 and SD2 establish the semantics before any screen is built. SD3 and SD4 create the evidence-bearing read model.
 The two workspaces can then be implemented without embedding attribution logic in presentation components.
+
+## Verification map
+
+| Story | Primary implementation                                     | Deterministic evidence                                                 |
+| ----- | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
+| SD1–2 | `src/source-provenance.mjs`                                | `test/source-provenance.test.mjs`, `test/fixtures/ninecat-source.json` |
+| SD3   | `src/source-adapters.mjs`, `scripts/opportunity-board.mjs` | `test/source-adapters.test.mjs`                                        |
+| SD4   | `src/board-store.mjs`                                      | `test/board-store.test.mjs`                                            |
+| SD5   | `src/dashboard-projection.mjs`, `ui/`                      | dashboard projection/view-model/static tests and local browser QA      |
+| SD6   | read-only BFF routes and System/Execution pages            | isolation tests plus method-rejection tests                            |
+| SD7   | CI and private Linux canary                                | pending until GitHub and host readback exist                           |

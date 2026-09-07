@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.6.0 — 2026-09-07
+
+- Add independent PAIR-listing, LONG-route, Doppler-protocol, Uniswap-v4 and Robinhood-asset adapters with bounded
+  coverage and claim-level immutable evidence; unknown or conflicting claims fail closed.
+- Correct the NINECAT projection to `LONG_ROUTE / DOPPLER / UNISWAP_V4 / NINECAT-AI` and keep both assets custom unless
+  the canonical Robinhood registry proves otherwise.
+- Materialize current board state in SQLite while retaining an append-only JSONL evidence ledger, replay, parity checks
+  and a non-destructive legacy read-model rollback.
+- Add a signer-free React/Vite private console with Overview, paginated Radar, source coverage, episodes, read-only
+  execution and system-pressure views; full evidence loads only when a row is opened.
+- Keep the dashboard loopback-only and same-origin, reject mutating API methods, omit signer material and preserve the
+  public-RPC observation profile.
+- Override `solc`'s legacy temporary-file helper with compatible `tmp@0.2.7`, closing the current npm audit findings
+  without changing the Solidity compiler.
+
 ## 0.5.4 — 2026-09-07
 
 - Normalize the obsolete executor-deployment estimate when recovering persisted board state, so stale rows cannot retain

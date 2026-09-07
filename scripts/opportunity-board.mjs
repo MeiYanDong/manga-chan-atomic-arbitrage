@@ -57,6 +57,24 @@ import {
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
 import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
+import { BoardStore } from '../src/board-store.mjs'
+import { buildDashboardModel, routeDashboardApi } from '../src/dashboard-projection.mjs'
+import { resolveDashboardAsset } from '../src/dashboard-static.mjs'
+import {
+  AdapterRunStatus,
+  DOPPLER_CREATE_TOPIC,
+  LONG_LAUNCH_CREATED_TOPIC,
+  adaptPoolManagerInitialize,
+  adaptRobinhoodAssets,
+  decodeDopplerCreateLog,
+  decodeLongLauncherLog,
+  markAdapterAttempt,
+  markAdapterError,
+  markAdapterSuccess,
+  mergeSourceFacts,
+  restoreAdapterStates,
+} from '../src/source-adapters.mjs'
+import { SOURCE_CONTRACT_REGISTRY, SOURCE_REGISTRY_VERSION, stablePayloadHash } from '../src/source-provenance.mjs'
 
 const CHAIN_ID = ROBINHOOD_CHAIN_ID
 const PAIR_TOKENS_API = 'https://pair.fund/api/tokens'
@@ -68,6 +86,8 @@ const WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
 const V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
 const V3_QUOTER = getAddress('0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7')
 const POOL_MANAGER = V4_POOL_MANAGER
+const LONG_LAUNCHER = getAddress('0x22e99278308b393ea1260859b181ad7e78f5eeed')
+const DOPPLER_AIRLOCK = getAddress('0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862')
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 const V3_FEES = [100, 500, 3_000, 10_000]
 const INITIAL_PRIORITY = [
@@ -160,12 +180,15 @@ function loadConfig() {
     process.env.MANGA_BOARD_PROBE_AMOUNTS_USDG || legacyProbe,
     DEFAULT_PROBE_AMOUNTS_USDG,
   )
+  const readModel = process.env.MANGA_BOARD_READ_MODEL || 'sqlite'
+  if (!['sqlite', 'legacy'].includes(readModel)) throw new Error('MANGA_BOARD_READ_MODEL must be sqlite or legacy')
   return {
     rpcUrl: process.env.MANGA_BOARD_RPC_URL || null,
     providerLabel: process.env.MANGA_BOARD_PROVIDER_LABEL || 'read-only-provider',
     runDir,
     host,
     port: integer(process.env.MANGA_BOARD_PORT, 8_788),
+    readModel,
     scanIntervalMs: integer(process.env.MANGA_BOARD_SCAN_INTERVAL_MS, 30_000, 5_000),
     minimumCyclePauseMs: integer(process.env.MANGA_BOARD_MIN_CYCLE_PAUSE_MS, 30_000, 0),
     catalogIntervalMs: integer(process.env.MANGA_BOARD_CATALOG_INTERVAL_MS, 300_000, 30_000),
@@ -200,6 +223,9 @@ function loadConfig() {
     chainCatalogStartBlock: BigInt(integer(process.env.MANGA_BOARD_CHAIN_CATALOG_START_BLOCK, 45_000_000, 0)),
     chainCatalogBlockRange: BigInt(integer(process.env.MANGA_BOARD_CHAIN_CATALOG_BLOCK_RANGE, 50_000)),
     chainCatalogBatchesPerCycle: integer(process.env.MANGA_BOARD_CHAIN_CATALOG_BATCHES_PER_CYCLE, 1),
+    sourceCatalogStartBlock: BigInt(integer(process.env.MANGA_BOARD_SOURCE_CATALOG_START_BLOCK, 45_000_000, 0)),
+    sourceCatalogBlockRange: BigInt(integer(process.env.MANGA_BOARD_SOURCE_CATALOG_BLOCK_RANGE, 50_000)),
+    sourceCatalogBatchesPerCycle: integer(process.env.MANGA_BOARD_SOURCE_CATALOG_BATCHES_PER_CYCLE, 1),
   }
 }
 
@@ -328,11 +354,26 @@ class OpportunityBoard {
     this.eventsPath = path.join(config.runDir, 'events.jsonl')
     this.statePath = path.join(config.runDir, 'state.json')
     this.chainCatalogPath = path.join(config.runDir, 'chain-catalog.json')
+    this.sourceCatalogPath = path.join(config.runDir, 'source-catalog.json')
     this.poolMirrorPath = path.join(config.runDir, 'pool-mirror.json')
-    this.html = fs.readFileSync(path.join(ROOT, 'public', 'opportunity-board.html'), 'utf8')
+    this.dashboardRoot = path.join(ROOT, 'public', 'dashboard')
+    const dashboardIndex = path.join(this.dashboardRoot, 'index.html')
+    this.html = fs.readFileSync(
+      fs.existsSync(dashboardIndex) ? dashboardIndex : path.join(ROOT, 'public', 'opportunity-board.html'),
+      'utf8',
+    )
+    this.store = new BoardStore({
+      runDir: config.runDir,
+      legacySnapshotPath: this.snapshotPath,
+      sourceCatalogPath: this.sourceCatalogPath,
+    })
+    this.persistenceState = { ...this.store.health(), lastCommitAt: null, lastError: null, parity: null }
     const persistedState = readJson(this.statePath) || {}
     const persistedChainCatalog = readJson(this.chainCatalogPath) || {}
-    this.previousSnapshot = normalizePersistedBoardSnapshot(readJson(this.snapshotPath))
+    const persistedSourceCatalog = readJson(this.sourceCatalogPath) || {}
+    this.previousSnapshot = normalizePersistedBoardSnapshot(
+      this.store.readCurrentSnapshot() || readJson(this.snapshotPath),
+    )
     this.snapshot = this.previousSnapshot
     this.observations = new Map(
       (this.previousSnapshot?.items || [])
@@ -342,6 +383,9 @@ class OpportunityBoard {
     this.rawTokens = new Map()
     this.catalog = []
     this.stockAddresses = new Set()
+    this.pairStockAddresses = new Set()
+    this.robinhoodStockAddresses = new Set(persistedSourceCatalog.assetRegistry?.addresses || [])
+    this.stockAddresses = new Set(this.robinhoodStockAddresses)
     this.quoteAssets = new Map()
     this.chainPools = Array.isArray(persistedChainCatalog.pools) ? persistedChainCatalog.pools : []
     this.chainAmbiguities = Array.isArray(persistedChainCatalog.ambiguities) ? persistedChainCatalog.ambiguities : []
@@ -354,6 +398,30 @@ class OpportunityBoard {
     this.chainCatalogSafeHead = persistedChainCatalog.coverage?.safeHead || null
     this.chainCatalogComplete = persistedChainCatalog.coverage?.status === 'COMPLETE_FROM_CONFIGURED_START'
     this.chainCatalogLastError = null
+    this.longLaunches = Array.isArray(persistedSourceCatalog.longLaunches) ? persistedSourceCatalog.longLaunches : []
+    this.dopplerLaunches = Array.isArray(persistedSourceCatalog.dopplerLaunches)
+      ? persistedSourceCatalog.dopplerLaunches
+      : []
+    this.genericPools = Array.isArray(persistedSourceCatalog.pools) ? persistedSourceCatalog.pools : []
+    this.pairListings = Array.isArray(persistedSourceCatalog.pairListings) ? persistedSourceCatalog.pairListings : []
+    this.sourceEvidence = Array.isArray(persistedSourceCatalog.evidence) ? persistedSourceCatalog.evidence : []
+    this.sourceAdapterCursors = {
+      'long.launcher.v1': BigInt(
+        persistedState.sourceAdapterCursors?.['long.launcher.v1'] || config.sourceCatalogStartBlock.toString(),
+      ),
+      'doppler.registry.v1': BigInt(
+        persistedState.sourceAdapterCursors?.['doppler.registry.v1'] || config.sourceCatalogStartBlock.toString(),
+      ),
+    }
+    for (const adapterId of Object.keys(this.sourceAdapterCursors)) {
+      if (this.sourceAdapterCursors[adapterId] < config.sourceCatalogStartBlock) {
+        this.sourceAdapterCursors[adapterId] = config.sourceCatalogStartBlock
+      }
+    }
+    this.adapterStates = restoreAdapterStates(persistedSourceCatalog.adapters, {
+      configuredStartBlock: config.sourceCatalogStartBlock,
+    })
+    this.sourceCatalogSafeHead = persistedSourceCatalog.safeHead || null
     this.chainAttestations = new Map()
     this.feeCache = new Map()
     this.v3PoolDiscoveryCache = new FixedBlockPromiseCache()
@@ -419,6 +487,7 @@ class OpportunityBoard {
     this.inCycle = false
     this.stopping = false
     this.server = null
+    this.dashboardCache = null
     this.sleepTimer = null
     this.sleepResolve = null
     this.client = null
@@ -470,6 +539,7 @@ class OpportunityBoard {
       pid: process.pid,
       listen: `${this.config.host}:${this.config.port}`,
       signerLoaded: false,
+      persistence: this.persistenceState,
       eventDrivenShadow: {
         ...this.eventMetrics,
         rpcTransport: {
@@ -485,6 +555,14 @@ class OpportunityBoard {
         pendingCandidates: this.eventQueue.size,
         nextBlock: this.hotCursor.nextBlock,
         reorgCount: Number(this.hotCursor.reorgCount || 0),
+        limits: {
+          eventWakeMaxCandidates: this.config.eventWakeMaxCandidates,
+          quoteConcurrency: this.config.quoteConcurrency,
+          legConcurrency: this.config.legConcurrency,
+          amountQuoteConcurrency: this.config.amountQuoteConcurrency,
+          rpcLogicalAttempts: this.config.rpcLogicalAttempts,
+          rpcRetryDelayMs: this.config.rpcRetryDelayMs,
+        },
         quoteRpcTotals: { ...this.quoteRpcMetrics },
       },
     }
@@ -492,14 +570,31 @@ class OpportunityBoard {
 
   sourceState() {
     return {
-      discovery: 'PAIR_API_PLUS_BOUNDED_POOL_MANAGER_INITIALIZE_BACKFILL',
-      canonicalAssets: 'ROBINHOOD_ASSETS_API_PLUS_PAIR_QUOTE_REGISTRY',
+      schemaVersion: 4,
+      registryVersion: SOURCE_REGISTRY_VERSION,
+      discovery: 'INDEPENDENT_PAIR_LONG_DOPPLER_POOL_MANAGER_AND_ROBINHOOD_ASSET_ADAPTERS',
+      canonicalAssets: 'ROBINHOOD_ASSETS_API_ONLY',
+      quoteAdmissionMetadata: 'PAIR_STOCK_TOKENS_API_PLUS_ROBINHOOD_ASSETS_API',
       quoteRpc: this.config.providerLabel,
       discoveredTokens: this.rawTokens.size,
       catalogComplete: this.catalogComplete ?? false,
       catalogExpectedTokens: this.catalogExpectedTokens ?? null,
       catalogObservedAt: this.lastCatalogAt,
       fullCatalogObservedAt: this.lastFullCatalogAt,
+      adapters: Object.values(this.adapterStates),
+      sourceCatalog: {
+        status:
+          this.adapterStates['long.launcher.v1'].status === AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START &&
+          this.adapterStates['doppler.registry.v1'].status === AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START
+            ? 'COMPLETE_FROM_CONFIGURED_START'
+            : 'BACKFILL_PARTIAL',
+        configuredStartBlock: this.config.sourceCatalogStartBlock.toString(),
+        safeHead: this.sourceCatalogSafeHead,
+        longLaunches: this.longLaunches.length,
+        dopplerLaunches: this.dopplerLaunches.length,
+        genericPools: this.genericPools.length,
+        scopeWarning: 'each adapter reports its own bounded coverage; no cross-adapter completeness promotion',
+      },
       chainCatalog: {
         evidence: 'POOL_MANAGER_INITIALIZE_LOGS',
         configuredStartBlock: this.config.chainCatalogStartBlock.toString(),
@@ -521,29 +616,102 @@ class OpportunityBoard {
       chainCatalogNextBlock: this.chainCatalogNextBlock.toString(),
       hotCursor: this.hotCursor,
       eventLedgerEpoch: this.eventLedgerEpoch,
+      sourceAdapterCursors: Object.fromEntries(
+        Object.entries(this.sourceAdapterCursors).map(([adapterId, cursor]) => [adapterId, cursor.toString()]),
+      ),
       updatedAt,
     })
   }
 
+  writeSourceCatalog(safeHead = this.sourceCatalogSafeHead) {
+    this.sourceCatalogSafeHead = safeHead === null ? null : String(safeHead)
+    writeJsonAtomic(this.sourceCatalogPath, {
+      schemaVersion: 4,
+      registryVersion: SOURCE_CONTRACT_REGISTRY.version,
+      mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
+      generatedAt: new Date().toISOString(),
+      safeHead: this.sourceCatalogSafeHead,
+      summary: {
+        pairListings: this.pairListings.length,
+        longLaunches: this.longLaunches.length,
+        dopplerLaunches: this.dopplerLaunches.length,
+        genericPools: this.genericPools.length,
+      },
+      adapters: this.adapterStates,
+      evidence: this.sourceEvidence,
+      pairListings: this.pairListings,
+      assetRegistry: {
+        adapterId: 'robinhood.assets.v1',
+        addresses: [...this.robinhoodStockAddresses].sort(),
+        evidenceIds: this.sourceEvidence
+          .filter((item) => item.producer === 'ROBINHOOD_ASSETS_API')
+          .map((item) => item.evidenceId),
+      },
+      longLaunches: this.longLaunches,
+      dopplerLaunches: this.dopplerLaunches,
+      pools: this.genericPools,
+    })
+  }
+
   async refreshCatalog({ full }) {
+    const pairAttemptAt = new Date().toISOString()
+    this.adapterStates['pair.catalog.v1'] = markAdapterAttempt(this.adapterStates['pair.catalog.v1'], pairAttemptAt)
+    let pairSupplementError = null
     if (full || this.stockAddresses.size === 0) {
-      const stockPayload = await fetchJson(PAIR_STOCK_TOKENS_API, this.config.requestTimeoutMs)
-      const robinhoodPayload = await fetchJson(ROBINHOOD_ASSETS_API, this.config.requestTimeoutMs)
-      const stockAddresses = new Set(
-        (Array.isArray(stockPayload) ? stockPayload : []).map((item) => item?.address?.toLowerCase()).filter(Boolean),
+      try {
+        const stockPayload = await fetchJson(PAIR_STOCK_TOKENS_API, this.config.requestTimeoutMs)
+        this.pairStockAddresses = new Set(
+          (Array.isArray(stockPayload) ? stockPayload : []).map((item) => item?.address?.toLowerCase()).filter(Boolean),
+        )
+        for (const item of Array.isArray(stockPayload) ? stockPayload : []) {
+          if (item?.address) this.quoteAssets.set(item.address.toLowerCase(), { ...item })
+        }
+      } catch (error) {
+        pairSupplementError = error
+      }
+
+      const robinhoodAttemptAt = new Date().toISOString()
+      this.adapterStates['robinhood.assets.v1'] = markAdapterAttempt(
+        this.adapterStates['robinhood.assets.v1'],
+        robinhoodAttemptAt,
       )
-      const quoteAssets = new Map(
-        (Array.isArray(stockPayload) ? stockPayload : [])
-          .filter((item) => item?.address)
-          .map((item) => [item.address.toLowerCase(), { ...item }]),
-      )
-      for (const asset of robinhoodPayload?.assets || []) {
-        if (asset?.status !== 'ASSET_STATUS_ACTIVE') continue
-        for (const deployment of asset.deployments || []) {
-          if (Number(deployment.chainId) === CHAIN_ID && deployment.contractAddress) {
-            stockAddresses.add(deployment.contractAddress.toLowerCase())
-            if (!quoteAssets.has(deployment.contractAddress.toLowerCase())) {
-              quoteAssets.set(deployment.contractAddress.toLowerCase(), {
+      try {
+        const robinhoodPayload = await fetchJson(ROBINHOOD_ASSETS_API, this.config.requestTimeoutMs)
+        const adapted = adaptRobinhoodAssets(robinhoodPayload, {
+          chainId: CHAIN_ID,
+          evidenceId: `robinhood-assets:${robinhoodAttemptAt}`,
+          observedAt: robinhoodAttemptAt,
+        })
+        this.robinhoodStockAddresses = new Set(adapted.addresses.map((item) => item.toLowerCase()))
+        const registryPayload = {
+          observedAt: robinhoodAttemptAt,
+          coverage: 'ALL_ACTIVE_DEPLOYMENTS_FOR_CHAIN',
+          chainId: CHAIN_ID,
+          addresses: adapted.addresses,
+        }
+        const registryPayloadHash = stablePayloadHash(registryPayload)
+        this.sourceEvidence = [
+          ...this.sourceEvidence.filter((item) => item.producer !== 'ROBINHOOD_ASSETS_API'),
+          {
+            evidenceId: `robinhood-assets:${registryPayloadHash.slice('sha256:'.length)}`,
+            kind: 'REGISTRY_SNAPSHOT',
+            producer: 'ROBINHOOD_ASSETS_API',
+            observedAt: robinhoodAttemptAt,
+            chainId: CHAIN_ID,
+            blockNumber: null,
+            blockHash: null,
+            transactionHash: null,
+            payloadHash: registryPayloadHash,
+            status: 'OBSERVED',
+            payload: registryPayload,
+          },
+        ]
+        for (const asset of robinhoodPayload?.assets || []) {
+          if (asset?.status !== 'ASSET_STATUS_ACTIVE') continue
+          for (const deployment of asset.deployments || []) {
+            if (Number(deployment.chainId) !== CHAIN_ID || !deployment.contractAddress) continue
+            if (!this.quoteAssets.has(deployment.contractAddress.toLowerCase())) {
+              this.quoteAssets.set(deployment.contractAddress.toLowerCase(), {
                 address: deployment.contractAddress,
                 symbol: asset.symbol || asset.ticker || 'ROBINHOOD_ASSET',
                 decimals: 18,
@@ -552,41 +720,104 @@ class OpportunityBoard {
             }
           }
         }
+        this.adapterStates['robinhood.assets.v1'] = markAdapterSuccess(
+          this.adapterStates['robinhood.assets.v1'],
+          { status: AdapterRunStatus.CURRENT, observations: adapted.addresses.length },
+          robinhoodAttemptAt,
+        )
+      } catch (error) {
+        this.adapterStates['robinhood.assets.v1'] = markAdapterError(
+          this.adapterStates['robinhood.assets.v1'],
+          error,
+          robinhoodAttemptAt,
+        )
       }
-      this.stockAddresses = stockAddresses
-      this.quoteAssets = quoteAssets
+      this.stockAddresses = new Set([...this.pairStockAddresses, ...this.robinhoodStockAddresses])
     }
 
-    if (full) {
-      const first = await fetchJson(
-        `${PAIR_TOKENS_API}?page=1&limit=${PAIR_CATALOG_PAGE_SIZE}&sort=newest`,
-        this.config.requestTimeoutMs,
-      )
-      const pages = Math.max(1, Math.ceil(Number(first.total || 0) / Number(first.limit || PAIR_CATALOG_PAGE_SIZE)))
-      const rest = await mapLimit(
-        this.config.catalogConcurrency,
-        Array.from({ length: Math.max(0, pages - 1) }, (_, index) => index + 2),
-        (page) =>
-          fetchJson(
-            `${PAIR_TOKENS_API}?page=${page}&limit=${PAIR_CATALOG_PAGE_SIZE}&sort=newest`,
-            this.config.requestTimeoutMs,
-          ),
-      )
-      this.rawTokens.clear()
-      for (const payload of [first, ...rest]) {
-        for (const token of payload.items || []) {
-          if (token?.address) this.rawTokens.set(token.address.toLowerCase(), token)
+    try {
+      if (full) {
+        const first = await fetchJson(
+          `${PAIR_TOKENS_API}?page=1&limit=${PAIR_CATALOG_PAGE_SIZE}&sort=newest`,
+          this.config.requestTimeoutMs,
+        )
+        const pages = Math.max(1, Math.ceil(Number(first.total || 0) / Number(first.limit || PAIR_CATALOG_PAGE_SIZE)))
+        const rest = await mapLimit(
+          this.config.catalogConcurrency,
+          Array.from({ length: Math.max(0, pages - 1) }, (_, index) => index + 2),
+          (page) =>
+            fetchJson(
+              `${PAIR_TOKENS_API}?page=${page}&limit=${PAIR_CATALOG_PAGE_SIZE}&sort=newest`,
+              this.config.requestTimeoutMs,
+            ),
+        )
+        this.rawTokens.clear()
+        for (const payload of [first, ...rest]) {
+          for (const token of payload.items || []) {
+            if (token?.address) this.rawTokens.set(token.address.toLowerCase(), token)
+          }
         }
+        this.catalogExpectedTokens = Number(first.total || this.rawTokens.size)
+        this.lastFullCatalogAt = new Date().toISOString()
       }
-      this.catalogExpectedTokens = Number(first.total || this.rawTokens.size)
-      this.lastFullCatalogAt = new Date().toISOString()
-    }
 
-    const newest = await fetchJson(`${PAIR_TOKENS_API}?page=1&limit=50&sort=newest`, this.config.requestTimeoutMs)
-    for (const token of newest.items || []) {
-      if (token?.address) this.rawTokens.set(token.address.toLowerCase(), token)
+      const newest = await fetchJson(`${PAIR_TOKENS_API}?page=1&limit=50&sort=newest`, this.config.requestTimeoutMs)
+      for (const token of newest.items || []) {
+        if (token?.address) this.rawTokens.set(token.address.toLowerCase(), token)
+      }
+      if (full) this.catalogComplete = catalogIsComplete(this.rawTokens.size, this.catalogExpectedTokens)
+      this.adapterStates['pair.catalog.v1'] = markAdapterSuccess(
+        this.adapterStates['pair.catalog.v1'],
+        {
+          status: pairSupplementError ? AdapterRunStatus.PARTIAL : AdapterRunStatus.CURRENT,
+          observations: this.rawTokens.size,
+        },
+        pairAttemptAt,
+      )
+      if (pairSupplementError) {
+        this.adapterStates['pair.catalog.v1'].lastError = publicError(pairSupplementError)
+      }
+      const catalogPayload = {
+        observedAt: pairAttemptAt,
+        expectedTokens: this.catalogExpectedTokens || null,
+        addresses: [...this.rawTokens.keys()].sort(),
+      }
+      const catalogPayloadHash = stablePayloadHash(catalogPayload)
+      const catalogEvidenceId = `pair-catalog:${catalogPayloadHash.slice('sha256:'.length)}`
+      this.sourceEvidence = [
+        ...this.sourceEvidence.filter((item) => item.producer !== 'PAIR_CATALOG_API'),
+        {
+          evidenceId: catalogEvidenceId,
+          kind: 'SOURCE_RESPONSE',
+          producer: 'PAIR_CATALOG_API',
+          observedAt: pairAttemptAt,
+          chainId: CHAIN_ID,
+          blockNumber: null,
+          blockHash: null,
+          transactionHash: null,
+          payloadHash: catalogPayloadHash,
+          status: 'OBSERVED',
+          payload: catalogPayload,
+        },
+      ]
+      this.pairListings = [...this.rawTokens.values()].map((token) => ({
+        adapterId: 'pair.catalog.v1',
+        claim: 'LISTED_BY_PAIR_API',
+        platformId: 'PAIR',
+        targetAddress: getAddress(token.address),
+        symbol: String(token.symbol || 'UNKNOWN'),
+        name: String(token.name || token.symbol || 'Unknown token'),
+        observedAt: pairAttemptAt,
+        evidenceIds: [catalogEvidenceId],
+      }))
+    } catch (error) {
+      this.adapterStates['pair.catalog.v1'] = markAdapterError(
+        this.adapterStates['pair.catalog.v1'],
+        error,
+        pairAttemptAt,
+      )
+      if (this.rawTokens.size === 0) throw error
     }
-    if (full) this.catalogComplete = catalogIsComplete(this.rawTokens.size, this.catalogExpectedTokens)
 
     for (const token of this.rawTokens.values()) {
       for (const pair of token.pairs || []) {
@@ -597,6 +828,7 @@ class OpportunityBoard {
     }
     this.rebuildCatalogFromSources()
     this.lastCatalogAt = new Date().toISOString()
+    this.writeSourceCatalog()
   }
 
   rebuildCatalogFromSources() {
@@ -629,6 +861,9 @@ class OpportunityBoard {
 
   /** @param {Record<string, any>[]} initializeEvents */
   ingestInitializeEvents(initializeEvents) {
+    const genericFacts = initializeEvents.map((event) => adaptPoolManagerInitialize(event)).filter(Boolean)
+    const genericBeforeCount = this.genericPools.length
+    this.genericPools = mergeSourceFacts(this.genericPools, genericFacts, (item) => item.poolId.toLowerCase())
     const inferred = inferPairLaunchPools(initializeEvents, new Set(this.quoteAssets.keys()))
     const beforeCount = this.chainPools.length
     this.chainPools = mergeChainPools(this.chainPools, inferred.pools)
@@ -639,7 +874,11 @@ class OpportunityBoard {
       ambiguityMap.set(`${item.launchTxHash}:${item.poolIds.join(',')}`, item)
     }
     this.chainAmbiguities = [...ambiguityMap.values()]
-    return { discoveredPools: this.chainPools.length - beforeCount, ambiguities: inferred.ambiguities.length }
+    return {
+      discoveredPools: this.chainPools.length - beforeCount,
+      discoveredGenericPools: this.genericPools.length - genericBeforeCount,
+      ambiguities: inferred.ambiguities.length,
+    }
   }
 
   writeChainCatalog(safeHead, lastBatch = null) {
@@ -692,6 +931,9 @@ class OpportunityBoard {
 
   /** @param {bigint} safeHead */
   async advanceChainCatalog(safeHead) {
+    const adapterId = 'uniswap-v4.pool-manager.v1'
+    const attemptAt = new Date().toISOString()
+    this.adapterStates[adapterId] = markAdapterAttempt(this.adapterStates[adapterId], attemptAt)
     let batches = 0
     let logsSeen = 0
     let discoveredPools = 0
@@ -728,9 +970,134 @@ class OpportunityBoard {
       toBlock: lastToBlock?.toString() || null,
     }
     this.writeChainCatalog(safeHead, lastBatch)
+    this.adapterStates[adapterId] = markAdapterSuccess(
+      this.adapterStates[adapterId],
+      {
+        status: this.chainCatalogComplete
+          ? AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START
+          : AdapterRunStatus.BACKFILL_PARTIAL,
+        safeHead,
+        scannedThroughBlock:
+          this.chainCatalogNextBlock > this.config.chainCatalogStartBlock ? this.chainCatalogNextBlock - 1n : null,
+        observations: logsSeen,
+      },
+      attemptAt,
+    )
+    this.writeSourceCatalog(safeHead)
     if (discoveredPools > 0) this.rebuildCatalogFromSources()
     this.persistState(lastBatch.at)
     return lastBatch
+  }
+
+  async advanceLaunchSourceCatalog(safeHead) {
+    const definitions = [
+      {
+        adapterId: 'long.launcher.v1',
+        address: LONG_LAUNCHER,
+        topic: LONG_LAUNCH_CREATED_TOPIC,
+        decode: (log) => decodeLongLauncherLog(log),
+        current: () => this.longLaunches,
+        assign: (value) => {
+          this.longLaunches = value
+        },
+      },
+      {
+        adapterId: 'doppler.registry.v1',
+        address: DOPPLER_AIRLOCK,
+        topic: DOPPLER_CREATE_TOPIC,
+        decode: (log) => decodeDopplerCreateLog(log),
+        current: () => this.dopplerLaunches,
+        assign: (value) => {
+          this.dopplerLaunches = value
+        },
+      },
+    ]
+    let rpcLogCalls = 0
+    let logsSeen = 0
+    let observations = 0
+
+    for (let batch = 0; batch < this.config.sourceCatalogBatchesPerCycle; batch += 1) {
+      const active = definitions.filter((definition) => this.sourceAdapterCursors[definition.adapterId] <= safeHead)
+      if (active.length === 0) break
+      const grouped = new Map()
+      for (const definition of active) {
+        const cursor = this.sourceAdapterCursors[definition.adapterId]
+        const key = cursor.toString()
+        if (!grouped.has(key)) grouped.set(key, [])
+        grouped.get(key).push(definition)
+      }
+
+      for (const [cursor, group] of grouped) {
+        const fromBlock = BigInt(cursor)
+        const maximumTo = fromBlock + this.config.sourceCatalogBlockRange - 1n
+        const toBlock = maximumTo < safeHead ? maximumTo : safeHead
+        const attemptAt = new Date().toISOString()
+        for (const definition of group) {
+          this.adapterStates[definition.adapterId] = markAdapterAttempt(
+            this.adapterStates[definition.adapterId],
+            attemptAt,
+          )
+        }
+
+        let logs
+        try {
+          logs = await this.rpcLogs({
+            address: group.length === 1 ? group[0].address : group.map((definition) => definition.address),
+            fromBlock: toHex(fromBlock),
+            toBlock: toHex(toBlock),
+            topics: [group.length === 1 ? group[0].topic : group.map((definition) => definition.topic)],
+          })
+          rpcLogCalls += 1
+          logsSeen += logs.length
+        } catch (error) {
+          for (const definition of group) {
+            this.adapterStates[definition.adapterId] = markAdapterError(
+              this.adapterStates[definition.adapterId],
+              error,
+              attemptAt,
+            )
+          }
+          throw error
+        }
+
+        for (const definition of group) {
+          try {
+            const matching = logs.filter(
+              (log) =>
+                String(log.address).toLowerCase() === definition.address.toLowerCase() &&
+                String(log.topics?.[0] || '').toLowerCase() === definition.topic,
+            )
+            const decoded = matching.map((log) => definition.decode(log))
+            definition.assign(
+              mergeSourceFacts(definition.current(), decoded, (item) => `${item.transactionHash}:${item.logIndex}`),
+            )
+            observations += decoded.length
+            this.sourceAdapterCursors[definition.adapterId] = toBlock + 1n
+            const complete = this.sourceAdapterCursors[definition.adapterId] > safeHead
+            this.adapterStates[definition.adapterId] = markAdapterSuccess(
+              this.adapterStates[definition.adapterId],
+              {
+                status: complete ? AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START : AdapterRunStatus.BACKFILL_PARTIAL,
+                safeHead,
+                scannedThroughBlock: toBlock,
+                observations: decoded.length,
+              },
+              attemptAt,
+            )
+          } catch (error) {
+            this.adapterStates[definition.adapterId] = markAdapterError(
+              this.adapterStates[definition.adapterId],
+              error,
+              attemptAt,
+            )
+          }
+        }
+      }
+    }
+
+    this.writeSourceCatalog(safeHead)
+    this.persistState()
+    return { rpcLogCalls, logsSeen, observations, safeHead: safeHead.toString() }
   }
 
   v3WatchAddresses() {
@@ -826,6 +1193,7 @@ class OpportunityBoard {
         discoveredPools: initializeResult.discoveredPools,
       })
     }
+    if (initializeResult.discoveredGenericPools > 0) this.writeSourceCatalog(planned.safeHead)
 
     let relevantLogs = 0
     let candidateWakes = 0
@@ -1444,8 +1812,30 @@ class OpportunityBoard {
       })
     }
     reconciled.snapshot.eventLedger.epochStartedAt = this.eventLedgerEpoch
+    reconciled.snapshot.health.persistence = this.persistenceState
     writeJsonAtomic(this.snapshotPath, reconciled.snapshot)
     appendEvents(this.eventsPath, reconciled.events)
+    try {
+      const committed = this.store.persistProjection({
+        snapshot: reconciled.snapshot,
+        sourceCatalog: readJson(this.sourceCatalogPath),
+        events: reconciled.events,
+      })
+      this.persistenceState = {
+        ...this.store.health(),
+        lastCommitAt: generatedAt,
+        lastError: null,
+        parity: committed.parity,
+      }
+    } catch (error) {
+      this.persistenceState = {
+        ...this.persistenceState,
+        status: 'DEGRADED',
+        lastCommitAt: this.persistenceState.lastCommitAt,
+        lastError: publicError(error),
+        parity: false,
+      }
+    }
     this.persistState(generatedAt)
     this.previousSnapshot = reconciled.snapshot
     this.snapshot = reconciled.snapshot
@@ -1527,6 +1917,16 @@ class OpportunityBoard {
           this.chainCatalogLastError = null
         } catch (error) {
           this.chainCatalogLastError = publicError(error)
+          this.adapterStates['uniswap-v4.pool-manager.v1'] = markAdapterError(
+            this.adapterStates['uniswap-v4.pool-manager.v1'],
+            error,
+          )
+          this.writeSourceCatalog(fixed.blockNumber)
+        }
+        try {
+          await this.advanceLaunchSourceCatalog(fixed.blockNumber)
+        } catch {
+          this.writeSourceCatalog(fixed.blockNumber)
         }
       }
       this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
@@ -1578,6 +1978,34 @@ class OpportunityBoard {
       .reverse()
   }
 
+  dashboardModel() {
+    const sqlite = this.config.readModel === 'sqlite'
+    const snapshot = sqlite ? this.store.readCurrentSnapshot({ fallback: false }) : this.snapshot
+    if (!snapshot) return null
+    const sourceCatalog = sqlite ? this.store.readSourceCatalog() : readJson(this.sourceCatalogPath)
+    const cacheKey = [
+      this.config.readModel,
+      sqlite ? this.store.currentRevision() : snapshot.generatedAt,
+      sourceCatalog?.generatedAt || 'NO_SOURCE_CATALOG',
+      this.persistenceState.status,
+      this.persistenceState.parity,
+      this.persistenceState.lastError,
+      process.env.MANGA_RELEASE_SHA || 'UNKNOWN_RELEASE',
+    ].join('|')
+    if (this.dashboardCache?.key === cacheKey) return this.dashboardCache.model
+    const model = buildDashboardModel({
+      snapshot,
+      sourceCatalog,
+      episodes: this.store.listEpisodes(),
+      executions: this.store.listExecutions(),
+      persistence: this.persistenceState,
+      release: process.env.MANGA_RELEASE_SHA || null,
+      readModel: this.config.readModel,
+    })
+    this.dashboardCache = { key: cacheKey, model }
+    return model
+  }
+
   respondJson(response, status, payload) {
     response.writeHead(status, {
       'content-type': 'application/json; charset=utf-8',
@@ -1599,14 +2027,28 @@ class OpportunityBoard {
         const catalog = readJson(this.chainCatalogPath)
         return this.respondJson(response, catalog ? 200 : 503, catalog || { status: 'BACKFILL_NOT_STARTED' })
       }
+      if (requestUrl.pathname === '/api/source-catalog') {
+        const catalog = readJson(this.sourceCatalogPath)
+        return this.respondJson(response, catalog ? 200 : 503, catalog || { status: 'BACKFILL_NOT_STARTED' })
+      }
       if (requestUrl.pathname === '/api/event-metrics') {
         return this.respondJson(response, 200, this.serviceState().eventDrivenShadow)
+      }
+      if (requestUrl.pathname.startsWith('/api/v1/')) {
+        const routed = routeDashboardApi(requestUrl.pathname, requestUrl.searchParams, this.dashboardModel())
+        return this.respondJson(response, routed.status, routed.payload)
       }
       if (requestUrl.pathname === '/healthz') {
         const age = this.lastCycleAt ? Date.now() - Date.parse(this.lastCycleAt) : Number.POSITIVE_INFINITY
         const healthyStatus = ['RUNNING', 'SCANNING'].includes(this.snapshot?.health?.status)
+        const persistenceHealthy =
+          this.config.readModel !== 'sqlite' ||
+          (this.persistenceState.status === 'HEALTHY' && this.persistenceState.parity !== false)
         const healthy = Boolean(
-          this.snapshot && healthyStatus && age <= Math.max(this.config.staleMs * 2, this.config.scanIntervalMs * 4),
+          this.snapshot &&
+          healthyStatus &&
+          persistenceHealthy &&
+          age <= Math.max(this.config.staleMs * 2, this.config.scanIntervalMs * 4),
         )
         return this.respondJson(response, healthy ? 200 : 503, {
           status: healthy ? 'HEALTHY' : 'NOT_READY',
@@ -1615,7 +2057,27 @@ class OpportunityBoard {
           screenedPositive: this.snapshot?.coverage?.counts?.[BoardStatus.SCREENED_POSITIVE] ?? 0,
           eventLastPollAt: this.eventMetrics.lastPollAt,
           chainCatalogStatus: this.chainCatalogComplete ? 'COMPLETE_FROM_CONFIGURED_START' : 'BACKFILL_PARTIAL',
+          sourceCatalogStatus: this.sourceState().sourceCatalog.status,
+          readModel: this.config.readModel,
+          persistenceStatus: this.persistenceState.status,
+          persistenceParity: this.persistenceState.parity,
         })
+      }
+      const dashboardAsset = resolveDashboardAsset(this.dashboardRoot, requestUrl.pathname)
+      if (dashboardAsset?.status === 200) {
+        response.writeHead(200, {
+          'content-type': dashboardAsset.contentType,
+          'cache-control': dashboardAsset.cacheControl,
+          'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'",
+          'x-content-type-options': 'nosniff',
+          'x-frame-options': 'DENY',
+          'referrer-policy': 'no-referrer',
+        })
+        response.end(fs.readFileSync(dashboardAsset.path))
+        return
+      }
+      if (dashboardAsset && requestUrl.pathname !== '/') {
+        return this.respondJson(response, dashboardAsset.status, { error: dashboardAsset.error })
       }
       if (requestUrl.pathname !== '/') return this.respondJson(response, 404, { error: 'not found' })
       response.writeHead(200, {
@@ -1683,6 +2145,7 @@ class OpportunityBoard {
     if (this.sleepTimer) clearTimeout(this.sleepTimer)
     if (this.sleepResolve) this.sleepResolve()
     if (this.server) await new Promise((resolve) => this.server.close(resolve))
+    this.store.close()
   }
 }
 

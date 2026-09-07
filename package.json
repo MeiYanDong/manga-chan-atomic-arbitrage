@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "Bounded MANGA atomic-arbitrage executor and read-only multi-pool opportunity board on Robinhood Chain",
   "license": "MIT",
   "private": false,
@@ -14,7 +14,7 @@
   "homepage": "https://github.com/MeiYanDong/manga-chan-atomic-arbitrage#readme",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "files": [
     ".env.example",
@@ -37,7 +37,9 @@
     "scripts",
     "src",
     "test",
-    "tsconfig.json"
+    "tsconfig.json",
+    "ui",
+    "vite.config.mjs"
   ],
   "scripts": {
     "compile": "node scripts/manga-chan-arb.mjs compile && node scripts/generic-contract-compile.mjs",
@@ -53,7 +55,9 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "secret:scan": "node scripts/secret-scan.mjs",
-    "check": "npm run format:check && npm run lint && npm run verify:systemd && npm run typecheck && npm run compile && npm test && npm run test:contract && npm run secret:scan",
+    "ui:dev": "vite --config vite.config.mjs",
+    "ui:build": "vite build --config vite.config.mjs",
+    "check": "npm run format:check && npm run lint && npm run verify:systemd && npm run typecheck && npm run ui:build && npm run compile && npm test && npm run test:contract && npm run secret:scan",
     "status": "node scripts/manga-chan-arb.mjs status",
     "runtime:verify": "node scripts/manga-chan-arb.mjs runtime-verify",
     "rpc:benchmark": "node scripts/benchmark-rpc.mjs",
@@ -86,15 +90,24 @@
     "board:status": "node scripts/opportunity-board.mjs status"
   },
   "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "solc": "0.8.26",
     "viem": "2.56.3"
   },
+  "overrides": {
+    "tmp": "0.2.7"
+  },
   "devDependencies": {
     "@types/node": "22.20.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "6.1.1",
     "eslint": "10.9.1",
     "hardhat": "3.15.0",
     "prettier": "3.9.6",
     "solhint": "6.2.4",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
   }
 }
