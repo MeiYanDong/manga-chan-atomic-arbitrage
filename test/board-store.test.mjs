@@ -73,6 +73,47 @@ test('content-addressed ingestion is idempotent', () => {
   store.close()
 })
 
+test('snapshot commits can reference an independently persisted source-catalog hash without copying its payload', () => {
+  const runDir = temporaryRunDir()
+  const store = new BoardStore({ runDir })
+  const originalSource = sourceCatalog()
+  store.persistProjection({ snapshot: snapshot(), sourceCatalog: originalSource })
+  const sourceCatalogHash = stablePayloadHash({ very: 'large-independent-atomic-file' })
+  const next = store.persistProjection({
+    snapshot: snapshot('2026-09-07T01:01:00.000Z'),
+    sourceCatalog: null,
+    sourceCatalogHash,
+  })
+
+  assert.equal(next.sourceCatalogPersisted, false)
+  assert.deepEqual(store.readSourceCatalog(), originalSource)
+  const checkpoints = fs
+    .readFileSync(path.join(runDir, 'evidence.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+    .filter((record) => record.kind === 'BOARD_CHECKPOINT')
+  assert.equal(checkpoints.at(-1).payload.sourceCatalogHash, sourceCatalogHash)
+  assert.throws(
+    () =>
+      store.persistProjection({
+        snapshot: snapshot('2026-09-07T01:02:00.000Z'),
+        sourceCatalogHash: 'not-a-digest',
+      }),
+    /source catalog hash must be a sha256 digest/,
+  )
+  assert.throws(
+    () =>
+      store.persistProjection({
+        snapshot: snapshot('2026-09-07T01:03:00.000Z'),
+        sourceCatalog: sourceCatalog(),
+        sourceCatalogHash,
+      }),
+    /source catalog payload does not match its supplied hash/,
+  )
+  store.close()
+})
+
 test('an existing v1 database adopts its already-committed ledger tail without a full replay', () => {
   const runDir = temporaryRunDir()
   const store = new BoardStore({ runDir })

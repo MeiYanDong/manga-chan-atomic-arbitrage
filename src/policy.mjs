@@ -95,6 +95,26 @@ export function isTransientRpcError(error) {
 }
 
 /**
+ * A systemd runtime directory can briefly disappear while its signer-free
+ * producer restarts. Missing/stale feed handles are availability failures;
+ * permission, type and content violations remain hard invariants.
+ *
+ * @param {unknown} error
+ */
+export function isBoardSnapshotTransportFailure(error) {
+  const visited = new Set()
+  let current = error
+  for (let depth = 0; current && depth < 8 && !visited.has(current); depth += 1) {
+    visited.add(current)
+    if (typeof current !== 'object') break
+    const object = /** @type {Record<string, any>} */ (current)
+    if (['ENOENT', 'ESTALE'].includes(String(object.code || ''))) return true
+    current = object.cause
+  }
+  return isTransientRpcError(error) || /board snapshot HTTP (?:429|5\d\d)/i.test(errorText(error))
+}
+
+/**
  * Detect the viem error shape produced when a JSON-RPC batch response omits
  * an entry. This is transport evidence, not an EVM revert, and is safe to
  * retry through an independent request transport.

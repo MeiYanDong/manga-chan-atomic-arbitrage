@@ -3,6 +3,10 @@
 - Status: Accepted and production-verified for the signer-free v0.6.1 board
 - Date: 2026-09-07
 
+> ADR 0018 supersedes the current-source-catalog SQLite copy after the catalog grew enough that duplicate whole-document
+> serialization exhausted the V8 heap. Its atomic hashed file is now the exact current source projection; the SQLite
+> economic snapshot and append-only material-evidence index remain authoritative for their respective scopes.
+
 ## Context
 
 The first v0.6.0 production canary correctly preserved source provenance, but its storage shape was not sustainable. A

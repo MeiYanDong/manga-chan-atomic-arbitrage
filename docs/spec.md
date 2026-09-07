@@ -193,6 +193,12 @@ Candidate concurrency and within-candidate leg concurrency are separate controls
 quotes one candidate at a time, while independent legs may share an HTTP batch; this reduces request bursts without
 allowing multiple candidate grids to expand simultaneously.
 
+The signer consumes only a compact atomically replaced execution feed from a dedicated read-only runtime directory.
+Board restarts preserve its last complete generation; a transient missing or stale file handle is a board-only retry,
+while unsafe permissions, file type, size or JSON content remain terminal invariants. The growing exact source catalog
+is a separately hashed atomic file written through a bounded buffer. SQLite continues to hold the exact current
+economic projection and material-evidence index without copying the entire source catalog into every snapshot commit.
+
 The public-RPC profile rotates a bounded subset of historical priority rows and adds one bounded catalog batch. Every
 candidate starts with 5/10 USDG probes. A gross-positive probe or a previously actionable row expands to the full amount
 grid; no-edge priority status alone does not authorize a large quote fan-out. This is discovery scheduling, not execution

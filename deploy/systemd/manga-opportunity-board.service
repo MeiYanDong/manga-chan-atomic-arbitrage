@@ -24,6 +24,7 @@ StateDirectory=manga-opportunity-board
 StateDirectoryMode=0750
 RuntimeDirectory=manga-opportunity-board-feed
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
 MemoryHigh=448M
 MemoryMax=512M
 TasksMax=48

@@ -48,9 +48,9 @@ import {
   genericWatchSpendablePrincipal,
   genericWatchTransportFailurePolicy,
   genericSignerLaneConflict,
+  isBoardSnapshotTransportFailure,
   isGenericWatchUntilRevoked,
   isGenericOpportunityMiss,
-  isTransientRpcError,
   latestUnresolvedMutation,
   renewGenericRollingLease,
   selectGenericWatchCandidate,
@@ -1940,7 +1940,7 @@ async function maybeRenewGenericWatcherLease(arm, deploymentState, usage, now = 
 }
 
 function boardTransportFailure(error) {
-  return isTransientRpcError(error) || /board snapshot HTTP (?:429|5\d\d)/i.test(errorText(error))
+  return isBoardSnapshotTransportFailure(error)
 }
 
 async function watchGeneric() {

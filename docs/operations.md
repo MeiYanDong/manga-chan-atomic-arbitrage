@@ -121,6 +121,12 @@ are complete only from their recorded configured start blocks. The mirror contai
 execution instruction. Keep the directory when rolling between SQLite and the legacy reader; the rollback flag never
 deletes the append-only ledger.
 
+The exact current source catalog is the private atomically replaced `source-catalog.json` projection. It is written as
+canonical JSON through a bounded buffer and linked from economic checkpoints by SHA-256; routine snapshot commits do
+not copy the growing catalog into SQLite. Existing SQLite source-catalog rows remain historical rollback material and
+are not current-source evidence. The SQLite economic snapshot and opportunity projection retain their independent
+parity check.
+
 Read the evidence surfaces separately:
 
 ```bash
@@ -258,6 +264,11 @@ mode `0700` and the board receives no access to `/var/lib/manga-chan-arbitrage` 
 caches an unchanged file generation, rejects symlinks and group/world-writable files, enforces a 16 MiB input limit,
 then applies the same board identity, freshness, route and exact-preflight gates. Loopback HTTP remains the development
 fallback when `MANGA_GENERIC_BOARD_SNAPSHOT` is unset.
+
+Systemd preserves the last complete runtime feed across an automatic board restart. If the feed is briefly absent or a
+reader observes `ESTALE`, the watcher enters board-only degradation and retries without execution RPC or signer work.
+Permission, file-type, size and JSON-integrity failures remain terminal invariants. A stale preserved feed cannot
+authorize execution because quote freshness is checked before exact preflight.
 
 Disarm writes `generic-watch-revocation.json` before changing the arm or signalling the process. The marker is scoped to
 that authorization ID and remains authoritative if a concurrent stale write temporarily restores `ARMED`; creating a

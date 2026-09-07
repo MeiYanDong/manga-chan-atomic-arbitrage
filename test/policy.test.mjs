@@ -18,6 +18,7 @@ import {
   genericWatchSpendablePrincipal,
   genericWatchTransportFailurePolicy,
   genericSignerLaneConflict,
+  isBoardSnapshotTransportFailure,
   isGenericOpportunityMiss,
   isMalformedRpcBatchResponse,
   latestUnresolvedMutation,
@@ -35,6 +36,21 @@ test('keeps a business invariant distinct from transport failures', () => {
   assert.equal(classifyRpcError(new Error('operator mismatch')), RpcErrorClass.INVARIANT)
   assert.equal(classifyRpcError(new Error('HTTP request timed out')), RpcErrorClass.NETWORK)
   assert.equal(classifyRpcError(new Error('429 Too Many Requests')), RpcErrorClass.THROTTLED)
+})
+
+test('treats only transient execution-feed absence as a board availability failure', () => {
+  const missing = Object.assign(
+    new Error("ENOENT: no such file or directory, lstat '/run/feed/execution-snapshot.json'"),
+    { code: 'ENOENT' },
+  )
+  const stale = Object.assign(new Error('stale file handle'), { code: 'ESTALE' })
+  const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+
+  assert.equal(isBoardSnapshotTransportFailure(missing), true)
+  assert.equal(isBoardSnapshotTransportFailure(stale), true)
+  assert.equal(isBoardSnapshotTransportFailure(new Error('board snapshot HTTP 503')), true)
+  assert.equal(isBoardSnapshotTransportFailure(denied), false)
+  assert.equal(isBoardSnapshotTransportFailure(new SyntaxError('Unexpected token')), false)
 })
 
 test('classifies an identity-only unknown RPC wrapper as incomplete network evidence', () => {
