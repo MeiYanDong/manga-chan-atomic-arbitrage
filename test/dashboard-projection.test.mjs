@@ -60,6 +60,7 @@ function runtimeFixture() {
     sourceCatalog: {
       schemaVersion: 4,
       registryVersion: 'test',
+      summary: { pairListings: 1, longLaunches: 1, dopplerLaunches: 1, dopplerTargetsDiscovered: 1, genericPools: 1 },
       adapters: {},
       evidence: [pairEvidence, registryEvidence],
       pairListings: [
@@ -116,6 +117,22 @@ test('PAIR listing is visible but cannot overwrite a LONG route', () => {
   const [item] = projectDashboardOpportunities(runtimeFixture())
   assert.equal(item.provenance.listings[0].platformId, 'PAIR')
   assert.equal(item.provenance.platformAttribution.platformId, 'LONG_ROUTE')
+})
+
+test('compact runtime facts retain evidence timelines without embedding duplicate payloads', () => {
+  const fixture = runtimeFixture()
+  for (const collection of ['longLaunches', 'dopplerLaunches', 'pools']) {
+    fixture.sourceCatalog[collection] = fixture.sourceCatalog[collection].map((fact) => {
+      const evidenceId = fact.evidence.evidenceId
+      const compact = { ...fact }
+      delete compact.evidence
+      return { ...compact, evidenceId }
+    })
+  }
+  const [item] = projectDashboardOpportunities(fixture)
+  assert.equal(item.provenance.platformAttribution.evidenceIds[0], 'long:ninecat')
+  assert.equal(item.provenance.launchProtocol.evidenceIds[0], 'doppler:ninecat')
+  assert.equal(item.evidenceTimeline.length, 4)
 })
 
 test('native zero-address liquidity is a route leg, never a standalone opportunity target', () => {
@@ -190,7 +207,9 @@ test('read-only API router exposes all v1 projections and rejects malformed deta
     true,
   )
   assert.equal(routeDashboardApi('/api/v1/overview', new URLSearchParams(), model).status, 200)
-  assert.equal(routeDashboardApi('/api/v1/sources', new URLSearchParams(), model).status, 200)
+  const sources = routeDashboardApi('/api/v1/sources', new URLSearchParams(), model)
+  assert.equal(sources.status, 200)
+  assert.equal(sources.payload.summary.dopplerTargetsDiscovered, 1)
   assert.equal(routeDashboardApi('/api/v1/episodes', new URLSearchParams(), model).status, 200)
   assert.equal(routeDashboardApi('/api/v1/executions', new URLSearchParams(), model).status, 200)
   assert.equal(routeDashboardApi('/api/v1/system', new URLSearchParams(), model).status, 200)

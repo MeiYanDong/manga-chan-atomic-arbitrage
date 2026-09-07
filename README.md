@@ -199,8 +199,9 @@ GET /api/v1/executions
 GET /api/v1/system
 ```
 
-`POST`, wallet actions and arbitrary RPC proxying are not part of this surface. SQLite is the default current read
-model, JSONL remains the append-only evidence ledger, and `MANGA_BOARD_READ_MODEL=legacy` is the non-destructive canary
+`POST`, wallet actions and arbitrary RPC proxying are not part of this surface. SQLite is the default bounded current
+read model; JSONL retains append-only source facts, economic events, material positive observations and checkpoint
+hashes rather than duplicating every negative scan. `MANGA_BOARD_READ_MODEL=legacy` is the non-destructive canary
 rollback. NINECAT is rendered as LONG route / Doppler / Uniswap v4 / NINECAT-AI; that attribution is not a current
 quote or execution claim.
 

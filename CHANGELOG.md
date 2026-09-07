@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.6.1 — 2026-09-07
+
+- Reject the v0.6.0 production canary after its first source projection reached the 256 MiB cgroup ceiling; roll back
+  without starting either signer or changing the wallet nonce.
+- Retain PoolManager facts only when a currency is an independently discovered PAIR, LONG or Doppler target, and give
+  the generic pool scan its own cursor instead of inheriting PAIR chain-catalog coverage.
+- Keep a compact Doppler target index so later pools remain discoverable, while exposing only PAIR-, LONG-, multi-pool-
+  or pending-scan rows and persisting full immutable log evidence before compaction.
+- Replace repeated full-snapshot/source-catalog ledger records with bounded singleton SQLite current projections plus
+  append-only source evidence, economic events, material positive observations and compact integrity checkpoints.
+- Add crash-safe JSONL byte offsets and streaming legacy replay; preserve the v0.6.0 database and ledger without
+  deleting or rewriting historical evidence.
+- Set the board-only memory pressure boundary to 320 MiB and its hard cgroup ceiling to 384 MiB after a migration test;
+  signer services remain disabled and isolated.
+
 ## 0.6.0 — 2026-09-07
 
 - Add independent PAIR-listing, LONG-route, Doppler-protocol, Uniswap-v4 and Robinhood-asset adapters with bounded

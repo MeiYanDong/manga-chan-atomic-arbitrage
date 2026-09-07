@@ -8,12 +8,19 @@ import {
   SOURCE_ADAPTER_MANIFESTS,
   adaptPairCatalogToken,
   adaptRobinhoodAssets,
+  boundSourceCatalogPools,
+  compactSourceFact,
   createAdapterStates,
   decodeDopplerCreateLog,
   decodeLongLauncherLog,
   markAdapterError,
   markAdapterSuccess,
+  mergeDopplerTargetFacts,
+  planSourceTargetPoolRange,
+  retainPoolsForSourceTargets,
+  selectVisibleDopplerLaunches,
   sourceFactsByAsset,
+  sourceTargetAddresses,
 } from '../src/source-adapters.mjs'
 
 const TX = '0xd9bd6b7d5cef0e8cc97838cb8d471b9f323ee6e6ac7aacd7e0146710e1a51a69'
@@ -145,4 +152,141 @@ test('source facts remain independently queryable by asset', () => {
   assert.equal(result.longLaunches.length, 1)
   assert.equal(result.dopplerLaunches.length, 1)
   assert.equal(result.pools.length, 1)
+})
+
+test('pool retention admits only currencies discovered as source targets', () => {
+  const OTHER = getAddress('0x3333333333333333333333333333333333333333')
+  const targets = sourceTargetAddresses({
+    pairListings: [{ targetAddress: OTHER }],
+    longLaunches: [{ asset: NINECAT }],
+    dopplerLaunches: [{ asset: NINECAT }],
+  })
+  const retained = retainPoolsForSourceTargets(
+    [
+      { poolId: 'ninecat-ai', currency0: NINECAT, currency1: AI },
+      { poolId: 'listed-ai', currency0: OTHER, currency1: AI },
+      {
+        poolId: 'unrelated',
+        currency0: getAddress('0x4444444444444444444444444444444444444444'),
+        currency1: getAddress('0x5555555555555555555555555555555555555555'),
+      },
+    ],
+    targets,
+  )
+  assert.deepEqual(
+    retained.map((pool) => pool.poolId),
+    ['ninecat-ai', 'listed-ai'],
+  )
+  assert.equal(targets.has(AI.toLowerCase()), false, 'a quote currency must not recursively expand the target set')
+})
+
+test('startup catalog migration records the bounded retention decision', () => {
+  const migrated = boundSourceCatalogPools(
+    {
+      generatedAt: '2026-09-07T00:00:00.000Z',
+      pairListings: [],
+      longLaunches: [{ asset: NINECAT }],
+      dopplerLaunches: [],
+      pools: [
+        { poolId: 'ninecat-ai', currency0: NINECAT, currency1: AI },
+        {
+          poolId: 'unrelated',
+          currency0: getAddress('0x4444444444444444444444444444444444444444'),
+          currency1: getAddress('0x5555555555555555555555555555555555555555'),
+        },
+      ],
+    },
+    { observedAt: '2026-09-07T01:00:00.000Z' },
+  )
+  assert.equal(migrated.changed, true)
+  assert.equal(migrated.sourceCatalog.pools.length, 1)
+  assert.equal(migrated.retention.prunedPools, 1)
+  assert.equal(migrated.sourceCatalog.summary.poolRetention.policy, 'SOURCE_TARGET_CURRENCY_ONLY')
+})
+
+test('compact source facts keep provenance identity without duplicating evidence payloads', () => {
+  const decoded = {
+    adapterId: 'doppler.registry.v1',
+    asset: NINECAT,
+    numeraire: AI,
+    blockNumber: '45879015',
+    evidence: { evidenceId: `rh:4663:log:${TX}:86`, payload: { duplicated: true } },
+  }
+  const compact = compactSourceFact(decoded)
+  assert.equal(compact.evidenceId, decoded.evidence.evidenceId)
+  assert.equal(Object.hasOwn(compact, 'evidence'), false)
+  const index = mergeDopplerTargetFacts([], [decoded])
+  const targets = sourceTargetAddresses({ dopplerTargetIndex: index })
+  assert.equal(targets.has(NINECAT.toLowerCase()), true)
+})
+
+test('a compact Doppler target index keeps later pools discoverable after launch details are pruned', () => {
+  const catalog = {
+    pairListings: [],
+    longLaunches: [],
+    dopplerLaunches: [],
+    dopplerTargetIndex: [{ asset: NINECAT, numeraire: AI, blockNumber: '45879015', evidenceId: 'doppler:ninecat' }],
+    pools: [
+      { poolId: 'ninecat-ai', currency0: NINECAT, currency1: AI },
+      {
+        poolId: 'unrelated',
+        currency0: getAddress('0x4444444444444444444444444444444444444444'),
+        currency1: getAddress('0x5555555555555555555555555555555555555555'),
+      },
+    ],
+  }
+  const bounded = boundSourceCatalogPools(catalog)
+  assert.deepEqual(
+    bounded.sourceCatalog.pools.map((pool) => pool.poolId),
+    ['ninecat-ai'],
+  )
+})
+
+test('Doppler rows retain only explicit, multi-pool or not-yet-scanned targets', () => {
+  const MULTI = getAddress('0x6666666666666666666666666666666666666666')
+  const SINGLE = getAddress('0x7777777777777777777777777777777777777777')
+  const PENDING = getAddress('0x8888888888888888888888888888888888888888')
+  const target = (asset, blockNumber) => ({ asset, numeraire: AI, blockNumber, evidenceId: `target:${asset}` })
+  const visible = selectVisibleDopplerLaunches({
+    dopplerTargetIndex: [target(NINECAT, '100'), target(MULTI, '101'), target(SINGLE, '102'), target(PENDING, '200')],
+    pools: [
+      { currency0: NINECAT, currency1: AI },
+      { currency0: MULTI, currency1: AI },
+      { currency0: MULTI, currency1: NINECAT },
+      { currency0: SINGLE, currency1: AI },
+    ],
+    longLaunches: [{ asset: NINECAT }],
+    poolCursor: 150n,
+  })
+  assert.deepEqual(
+    visible.map((item) => item.asset),
+    [NINECAT, MULTI, PENDING],
+  )
+})
+
+test('pool backfill never outruns either launch adapter', () => {
+  assert.equal(
+    planSourceTargetPoolRange({
+      cursor: 45_000_000n,
+      longCursor: 45_050_000n,
+      dopplerCursor: 45_000_000n,
+      safeHead: 56_000_000n,
+      blockRange: 50_000n,
+    }),
+    null,
+  )
+  assert.deepEqual(
+    planSourceTargetPoolRange({
+      cursor: 45_000_000n,
+      longCursor: 45_050_000n,
+      dopplerCursor: 45_050_000n,
+      safeHead: 56_000_000n,
+      blockRange: 50_000n,
+    }),
+    {
+      fromBlock: 45_000_000n,
+      toBlock: 45_049_999n,
+      poolSafeHead: 45_049_999n,
+    },
+  )
 })

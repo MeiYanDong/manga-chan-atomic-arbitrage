@@ -1,5 +1,6 @@
 import { getAddress } from 'viem'
 import { BoardStatus } from './opportunity-board.mjs'
+import { sourceFactEvidenceId } from './source-adapters.mjs'
 import { AttributionStatus, PlatformId, ProtocolId, VenueId, stablePayloadHash } from './source-provenance.mjs'
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
@@ -114,7 +115,29 @@ function quoteState(item) {
 function evidenceTimeline({ listings, longLaunches, dopplerLaunches, pools, sourceEvidence }) {
   const envelopes = new Map((sourceEvidence || []).map((item) => [item.evidenceId, item]))
   for (const fact of [...longLaunches, ...dopplerLaunches, ...pools]) {
-    if (fact?.evidence) envelopes.set(fact.evidence.evidenceId, fact.evidence)
+    const evidenceId = sourceFactEvidenceId(fact)
+    if (!evidenceId) continue
+    if (fact?.evidence) {
+      envelopes.set(evidenceId, fact.evidence)
+      continue
+    }
+    const transactionHash = /^rh:\d+:log:(0x[0-9a-f]{64}):\d+$/i.exec(evidenceId)?.[1] || fact.transactionHash || null
+    const producer =
+      fact.adapterId === 'long.launcher.v1'
+        ? 'LONG_LAUNCHER_LOG_ADAPTER'
+        : fact.adapterId === 'doppler.registry.v1'
+          ? 'DOPPLER_CREATE_LOG_ADAPTER'
+          : fact.adapterId === 'uniswap-v4.pool-manager.v1'
+            ? 'UNISWAP_V4_POOL_MANAGER_ADAPTER'
+            : null
+    envelopes.set(evidenceId, {
+      evidenceId,
+      observedAt: fact.observedAt || null,
+      blockNumber: fact.blockNumber || null,
+      blockHash: fact.blockHash || null,
+      transactionHash,
+      producer,
+    })
   }
   const timeline = []
   const add = (claimType, label, status, evidenceIds) => {
@@ -135,13 +158,13 @@ function evidenceTimeline({ listings, longLaunches, dopplerLaunches, pools, sour
   }
   for (const listing of listings) add('LISTING', 'PAIR catalog listing', 'OBSERVED', listing.evidenceIds)
   for (const launch of longLaunches) {
-    add('PLATFORM_ROUTE', 'LONG route', AttributionStatus.CHAIN_ATTESTED, [launch.evidence?.evidenceId])
+    add('PLATFORM_ROUTE', 'LONG route', AttributionStatus.CHAIN_ATTESTED, [sourceFactEvidenceId(launch)])
   }
   for (const launch of dopplerLaunches) {
-    add('LAUNCH_PROTOCOL', 'Doppler', AttributionStatus.CHAIN_ATTESTED, [launch.evidence?.evidenceId])
+    add('LAUNCH_PROTOCOL', 'Doppler', AttributionStatus.CHAIN_ATTESTED, [sourceFactEvidenceId(launch)])
   }
   for (const pool of pools) {
-    add('LIQUIDITY_VENUE', 'Uniswap v4', AttributionStatus.CHAIN_ATTESTED, [pool.evidence?.evidenceId])
+    add('LIQUIDITY_VENUE', 'Uniswap v4', AttributionStatus.CHAIN_ATTESTED, [sourceFactEvidenceId(pool)])
   }
   return timeline
     .filter((item) => item.evidenceId)
@@ -230,7 +253,7 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
             platformId: PlatformId.LONG_ROUTE,
             status: AttributionStatus.CHAIN_ATTESTED,
             entryContract: facts.longLaunches[0].entryContract,
-            evidenceIds: facts.longLaunches.map((launch) => launch.evidence?.evidenceId).filter(Boolean),
+            evidenceIds: facts.longLaunches.map((launch) => sourceFactEvidenceId(launch)).filter(Boolean),
           }
         : {
             platformId: facts.pools.length > 0 ? PlatformId.UNATTRIBUTED_CHAIN : null,
@@ -243,7 +266,7 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
         ? {
             protocolId: ProtocolId.DOPPLER,
             status: AttributionStatus.CHAIN_ATTESTED,
-            evidenceIds: facts.dopplerLaunches.map((launch) => launch.evidence?.evidenceId).filter(Boolean),
+            evidenceIds: facts.dopplerLaunches.map((launch) => sourceFactEvidenceId(launch)).filter(Boolean),
           }
         : { protocolId: ProtocolId.UNKNOWN, status: AttributionStatus.UNKNOWN, evidenceIds: [] }
     const venue = facts.pools.length > 0 || item?.pools?.length > 0 ? VenueId.UNISWAP_V4 : VenueId.UNKNOWN
@@ -273,7 +296,7 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
         liquidityVenue: {
           venueId: venue,
           status: venue === VenueId.UNKNOWN ? AttributionStatus.UNKNOWN : AttributionStatus.CHAIN_ATTESTED,
-          evidenceIds: facts.pools.map((pool) => pool.evidence?.evidenceId).filter(Boolean),
+          evidenceIds: facts.pools.map((pool) => sourceFactEvidenceId(pool)).filter(Boolean),
         },
       },
       axes: {
@@ -512,7 +535,12 @@ export function routeDashboardApi(pathname, searchParams, model) {
   if (pathname === '/api/v1/sources') {
     return {
       status: 200,
-      payload: { schemaVersion: model.schemaVersion, generatedAt: model.generatedAt, items: model.sources },
+      payload: {
+        schemaVersion: model.schemaVersion,
+        generatedAt: model.generatedAt,
+        summary: model.system.sourceSummary,
+        items: model.sources,
+      },
     }
   }
   if (pathname === '/api/v1/episodes') {

@@ -66,13 +66,20 @@ import {
   LONG_LAUNCH_CREATED_TOPIC,
   adaptPoolManagerInitialize,
   adaptRobinhoodAssets,
+  boundSourceCatalogPools,
+  compactSourceFact,
   decodeDopplerCreateLog,
   decodeLongLauncherLog,
   markAdapterAttempt,
   markAdapterError,
   markAdapterSuccess,
+  mergeDopplerTargetFacts,
   mergeSourceFacts,
+  planSourceTargetPoolRange,
+  retainPoolsForSourceTargets,
   restoreAdapterStates,
+  selectVisibleDopplerLaunches,
+  sourceTargetAddresses,
 } from '../src/source-adapters.mjs'
 import { SOURCE_CONTRACT_REGISTRY, SOURCE_REGISTRY_VERSION, stablePayloadHash } from '../src/source-provenance.mjs'
 
@@ -362,15 +369,19 @@ class OpportunityBoard {
       fs.existsSync(dashboardIndex) ? dashboardIndex : path.join(ROOT, 'public', 'opportunity-board.html'),
       'utf8',
     )
+    const persistedState = readJson(this.statePath) || {}
+    const persistedChainCatalog = readJson(this.chainCatalogPath) || {}
+    let persistedSourceCatalog = readJson(this.sourceCatalogPath) || {}
+    const boundedStartupCatalog = boundSourceCatalogPools(persistedSourceCatalog)
+    persistedSourceCatalog = boundedStartupCatalog.sourceCatalog
+    const startupRetention = boundedStartupCatalog.retention
+    if (boundedStartupCatalog.changed) writeJsonAtomic(this.sourceCatalogPath, persistedSourceCatalog)
     this.store = new BoardStore({
       runDir: config.runDir,
       legacySnapshotPath: this.snapshotPath,
       sourceCatalogPath: this.sourceCatalogPath,
     })
     this.persistenceState = { ...this.store.health(), lastCommitAt: null, lastError: null, parity: null }
-    const persistedState = readJson(this.statePath) || {}
-    const persistedChainCatalog = readJson(this.chainCatalogPath) || {}
-    const persistedSourceCatalog = readJson(this.sourceCatalogPath) || {}
     this.previousSnapshot = normalizePersistedBoardSnapshot(
       this.store.readCurrentSnapshot() || readJson(this.snapshotPath),
     )
@@ -398,12 +409,29 @@ class OpportunityBoard {
     this.chainCatalogSafeHead = persistedChainCatalog.coverage?.safeHead || null
     this.chainCatalogComplete = persistedChainCatalog.coverage?.status === 'COMPLETE_FROM_CONFIGURED_START'
     this.chainCatalogLastError = null
-    this.longLaunches = Array.isArray(persistedSourceCatalog.longLaunches) ? persistedSourceCatalog.longLaunches : []
-    this.dopplerLaunches = Array.isArray(persistedSourceCatalog.dopplerLaunches)
+    this.longLaunches = Array.isArray(persistedSourceCatalog.longLaunches)
+      ? persistedSourceCatalog.longLaunches.map((launch) => compactSourceFact(launch))
+      : []
+    const persistedDopplerLaunches = Array.isArray(persistedSourceCatalog.dopplerLaunches)
       ? persistedSourceCatalog.dopplerLaunches
       : []
-    this.genericPools = Array.isArray(persistedSourceCatalog.pools) ? persistedSourceCatalog.pools : []
+    this.dopplerTargetIndex = mergeDopplerTargetFacts(
+      persistedSourceCatalog.dopplerTargetIndex,
+      persistedDopplerLaunches,
+    )
+    this.dopplerLaunches = persistedDopplerLaunches.map((launch) => compactSourceFact(launch))
     this.pairListings = Array.isArray(persistedSourceCatalog.pairListings) ? persistedSourceCatalog.pairListings : []
+    const persistedGenericPools = Array.isArray(persistedSourceCatalog.pools) ? persistedSourceCatalog.pools : []
+    this.genericPools = retainPoolsForSourceTargets(
+      persistedGenericPools,
+      sourceTargetAddresses({
+        pairListings: this.pairListings,
+        longLaunches: this.longLaunches,
+        dopplerLaunches: this.dopplerLaunches,
+        dopplerTargetIndex: this.dopplerTargetIndex,
+      }),
+    ).map((pool) => compactSourceFact(pool))
+    this.sourcePoolRetention = startupRetention
     this.sourceEvidence = Array.isArray(persistedSourceCatalog.evidence) ? persistedSourceCatalog.evidence : []
     this.sourceAdapterCursors = {
       'long.launcher.v1': BigInt(
@@ -412,15 +440,43 @@ class OpportunityBoard {
       'doppler.registry.v1': BigInt(
         persistedState.sourceAdapterCursors?.['doppler.registry.v1'] || config.sourceCatalogStartBlock.toString(),
       ),
+      'uniswap-v4.pool-manager.v1': BigInt(
+        persistedState.sourceAdapterCursors?.['uniswap-v4.pool-manager.v1'] ||
+          config.sourceCatalogStartBlock.toString(),
+      ),
     }
     for (const adapterId of Object.keys(this.sourceAdapterCursors)) {
       if (this.sourceAdapterCursors[adapterId] < config.sourceCatalogStartBlock) {
         this.sourceAdapterCursors[adapterId] = config.sourceCatalogStartBlock
       }
     }
-    this.adapterStates = restoreAdapterStates(persistedSourceCatalog.adapters, {
-      configuredStartBlock: config.sourceCatalogStartBlock,
-    })
+    const adapterStateOptions = { configuredStartBlock: config.sourceCatalogStartBlock }
+    const baselineAdapterStates = restoreAdapterStates({}, adapterStateOptions)
+    this.adapterStates = restoreAdapterStates(persistedSourceCatalog.adapters, adapterStateOptions)
+    if (
+      !persistedSourceCatalog.adapters?.['pair.chain-catalog.v1'] &&
+      persistedSourceCatalog.adapters?.['uniswap-v4.pool-manager.v1']
+    ) {
+      this.adapterStates['pair.chain-catalog.v1'] = {
+        ...baselineAdapterStates['pair.chain-catalog.v1'],
+        ...persistedSourceCatalog.adapters['uniswap-v4.pool-manager.v1'],
+        adapterId: baselineAdapterStates['pair.chain-catalog.v1'].adapterId,
+        label: baselineAdapterStates['pair.chain-catalog.v1'].label,
+        claimScope: baselineAdapterStates['pair.chain-catalog.v1'].claimScope,
+        capabilities: baselineAdapterStates['pair.chain-catalog.v1'].capabilities,
+      }
+    }
+    if (!persistedState.sourceAdapterCursors?.['uniswap-v4.pool-manager.v1']) {
+      this.adapterStates['uniswap-v4.pool-manager.v1'] = baselineAdapterStates['uniswap-v4.pool-manager.v1']
+    }
+    const launchCoverageCursor =
+      this.sourceAdapterCursors['long.launcher.v1'] < this.sourceAdapterCursors['doppler.registry.v1']
+        ? this.sourceAdapterCursors['long.launcher.v1']
+        : this.sourceAdapterCursors['doppler.registry.v1']
+    if (this.sourceAdapterCursors['uniswap-v4.pool-manager.v1'] > launchCoverageCursor) {
+      this.sourceAdapterCursors['uniswap-v4.pool-manager.v1'] = launchCoverageCursor
+    }
+    this.pruneDopplerLaunches()
     this.sourceCatalogSafeHead = persistedSourceCatalog.safeHead || null
     this.chainAttestations = new Map()
     this.feeCache = new Map()
@@ -585,14 +641,17 @@ class OpportunityBoard {
       sourceCatalog: {
         status:
           this.adapterStates['long.launcher.v1'].status === AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START &&
-          this.adapterStates['doppler.registry.v1'].status === AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START
+          this.adapterStates['doppler.registry.v1'].status === AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START &&
+          this.adapterStates['uniswap-v4.pool-manager.v1'].status === AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START
             ? 'COMPLETE_FROM_CONFIGURED_START'
             : 'BACKFILL_PARTIAL',
         configuredStartBlock: this.config.sourceCatalogStartBlock.toString(),
         safeHead: this.sourceCatalogSafeHead,
         longLaunches: this.longLaunches.length,
         dopplerLaunches: this.dopplerLaunches.length,
+        dopplerTargetsDiscovered: this.dopplerTargetIndex.length,
         genericPools: this.genericPools.length,
+        poolRetention: this.sourcePoolRetention,
         scopeWarning: 'each adapter reports its own bounded coverage; no cross-adapter completeness promotion',
       },
       chainCatalog: {
@@ -625,7 +684,7 @@ class OpportunityBoard {
 
   writeSourceCatalog(safeHead = this.sourceCatalogSafeHead) {
     this.sourceCatalogSafeHead = safeHead === null ? null : String(safeHead)
-    writeJsonAtomic(this.sourceCatalogPath, {
+    const catalog = {
       schemaVersion: 4,
       registryVersion: SOURCE_CONTRACT_REGISTRY.version,
       mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
@@ -635,7 +694,9 @@ class OpportunityBoard {
         pairListings: this.pairListings.length,
         longLaunches: this.longLaunches.length,
         dopplerLaunches: this.dopplerLaunches.length,
+        dopplerTargetsDiscovered: this.dopplerTargetIndex.length,
         genericPools: this.genericPools.length,
+        poolRetention: this.sourcePoolRetention,
       },
       adapters: this.adapterStates,
       evidence: this.sourceEvidence,
@@ -649,8 +710,12 @@ class OpportunityBoard {
       },
       longLaunches: this.longLaunches,
       dopplerLaunches: this.dopplerLaunches,
+      dopplerTargetIndex: this.dopplerTargetIndex,
       pools: this.genericPools,
-    })
+    }
+    writeJsonAtomic(this.sourceCatalogPath, catalog)
+    this.latestSourceCatalog = catalog
+    return catalog
   }
 
   async refreshCatalog({ full }) {
@@ -826,6 +891,22 @@ class OpportunityBoard {
         }
       }
     }
+    const sourceTargets = sourceTargetAddresses({
+      pairListings: this.pairListings,
+      longLaunches: this.longLaunches,
+      dopplerLaunches: this.dopplerLaunches,
+      dopplerTargetIndex: this.dopplerTargetIndex,
+    })
+    const poolsBeforeRetention = this.genericPools.length
+    this.genericPools = retainPoolsForSourceTargets(this.genericPools, sourceTargets)
+    this.sourcePoolRetention = {
+      policy: 'SOURCE_TARGET_CURRENCY_ONLY',
+      sourceTargets: sourceTargets.size,
+      retainedPools: this.genericPools.length,
+      prunedPools: poolsBeforeRetention - this.genericPools.length,
+      reason: 'PAIR_CATALOG_REFRESH',
+    }
+    this.pruneDopplerLaunches()
     this.rebuildCatalogFromSources()
     this.lastCatalogAt = new Date().toISOString()
     this.writeSourceCatalog()
@@ -845,6 +926,16 @@ class OpportunityBoard {
     this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
   }
 
+  pruneDopplerLaunches() {
+    this.dopplerLaunches = selectVisibleDopplerLaunches({
+      dopplerTargetIndex: this.dopplerTargetIndex,
+      pools: this.genericPools,
+      pairListings: this.pairListings,
+      longLaunches: this.longLaunches,
+      poolCursor: this.sourceAdapterCursors?.['uniswap-v4.pool-manager.v1'] || this.config.sourceCatalogStartBlock,
+    })
+  }
+
   /** @param {Record<string, any>} filter */
   async rpcLogs(filter) {
     const logs = await this.retryRpc(() =>
@@ -861,9 +952,29 @@ class OpportunityBoard {
 
   /** @param {Record<string, any>[]} initializeEvents */
   ingestInitializeEvents(initializeEvents) {
-    const genericFacts = initializeEvents.map((event) => adaptPoolManagerInitialize(event)).filter(Boolean)
+    const allGenericFacts = initializeEvents.map((event) => adaptPoolManagerInitialize(event)).filter(Boolean)
+    const sourceTargets = sourceTargetAddresses({
+      pairListings: this.pairListings,
+      longLaunches: this.longLaunches,
+      dopplerLaunches: this.dopplerLaunches,
+      dopplerTargetIndex: this.dopplerTargetIndex,
+    })
+    const genericFacts = retainPoolsForSourceTargets(allGenericFacts, sourceTargets)
+    if (genericFacts.length > 0) this.store.ingest(genericFacts.map((fact) => fact.evidence))
+    const compactGenericFacts = genericFacts.map((fact) => compactSourceFact(fact))
     const genericBeforeCount = this.genericPools.length
-    this.genericPools = mergeSourceFacts(this.genericPools, genericFacts, (item) => item.poolId.toLowerCase())
+    this.genericPools = retainPoolsForSourceTargets(
+      mergeSourceFacts(this.genericPools, compactGenericFacts, (item) => item.poolId.toLowerCase()),
+      sourceTargets,
+    )
+    this.sourcePoolRetention = {
+      policy: 'SOURCE_TARGET_CURRENCY_ONLY',
+      sourceTargets: sourceTargets.size,
+      scannedInitializeEvents: allGenericFacts.length,
+      retainedInitializeEvents: genericFacts.length,
+      retainedPools: this.genericPools.length,
+      prunedInitializeEvents: allGenericFacts.length - genericFacts.length,
+    }
     const inferred = inferPairLaunchPools(initializeEvents, new Set(this.quoteAssets.keys()))
     const beforeCount = this.chainPools.length
     this.chainPools = mergeChainPools(this.chainPools, inferred.pools)
@@ -877,6 +988,7 @@ class OpportunityBoard {
     return {
       discoveredPools: this.chainPools.length - beforeCount,
       discoveredGenericPools: this.genericPools.length - genericBeforeCount,
+      retainedGenericPoolObservations: genericFacts.length,
       ambiguities: inferred.ambiguities.length,
     }
   }
@@ -931,7 +1043,7 @@ class OpportunityBoard {
 
   /** @param {bigint} safeHead */
   async advanceChainCatalog(safeHead) {
-    const adapterId = 'uniswap-v4.pool-manager.v1'
+    const adapterId = 'pair.chain-catalog.v1'
     const attemptAt = new Date().toISOString()
     this.adapterStates[adapterId] = markAdapterAttempt(this.adapterStates[adapterId], attemptAt)
     let batches = 0
@@ -1017,7 +1129,14 @@ class OpportunityBoard {
     let observations = 0
 
     for (let batch = 0; batch < this.config.sourceCatalogBatchesPerCycle; batch += 1) {
-      const active = definitions.filter((definition) => this.sourceAdapterCursors[definition.adapterId] <= safeHead)
+      const maximumLaunchCursor =
+        this.sourceAdapterCursors['uniswap-v4.pool-manager.v1'] +
+        this.config.sourceCatalogBlockRange * BigInt(this.config.sourceCatalogBatchesPerCycle)
+      const active = definitions.filter(
+        (definition) =>
+          this.sourceAdapterCursors[definition.adapterId] <= safeHead &&
+          this.sourceAdapterCursors[definition.adapterId] < maximumLaunchCursor,
+      )
       if (active.length === 0) break
       const grouped = new Map()
       for (const definition of active) {
@@ -1067,9 +1186,18 @@ class OpportunityBoard {
                 String(log.address).toLowerCase() === definition.address.toLowerCase() &&
                 String(log.topics?.[0] || '').toLowerCase() === definition.topic,
             )
-            const decoded = matching.map((log) => definition.decode(log))
+            const decoded = matching.map((log) => definition.decode(log)).filter(Boolean)
+            if (decoded.length > 0) this.store.ingest(decoded.map((fact) => fact.evidence))
+            if (definition.adapterId === 'doppler.registry.v1') {
+              this.dopplerTargetIndex = mergeDopplerTargetFacts(this.dopplerTargetIndex, decoded)
+            }
+            const compactDecoded = decoded.map((fact) => compactSourceFact(fact))
             definition.assign(
-              mergeSourceFacts(definition.current(), decoded, (item) => `${item.transactionHash}:${item.logIndex}`),
+              mergeSourceFacts(
+                definition.current(),
+                compactDecoded,
+                (item) => `${item.transactionHash || item.evidenceId}:${item.logIndex || 0}`,
+              ),
             )
             observations += decoded.length
             this.sourceAdapterCursors[definition.adapterId] = toBlock + 1n
@@ -1098,6 +1226,81 @@ class OpportunityBoard {
     this.writeSourceCatalog(safeHead)
     this.persistState()
     return { rpcLogCalls, logsSeen, observations, safeHead: safeHead.toString() }
+  }
+
+  /** @param {bigint} safeHead */
+  async advanceSourcePoolCatalog(safeHead) {
+    const adapterId = 'uniswap-v4.pool-manager.v1'
+    let rpcLogCalls = 0
+    let logsSeen = 0
+    let retainedObservations = 0
+    let discoveredPools = 0
+    let lastFromBlock = null
+    let lastToBlock = null
+
+    for (let batch = 0; batch < this.config.sourceCatalogBatchesPerCycle; batch += 1) {
+      const planned = planSourceTargetPoolRange({
+        cursor: this.sourceAdapterCursors[adapterId],
+        longCursor: this.sourceAdapterCursors['long.launcher.v1'],
+        dopplerCursor: this.sourceAdapterCursors['doppler.registry.v1'],
+        safeHead,
+        blockRange: this.config.sourceCatalogBlockRange,
+      })
+      if (!planned) break
+      const { fromBlock, toBlock } = planned
+      const attemptAt = new Date().toISOString()
+      this.adapterStates[adapterId] = markAdapterAttempt(this.adapterStates[adapterId], attemptAt)
+
+      let logs
+      try {
+        logs = await this.rpcLogs({
+          address: POOL_MANAGER,
+          fromBlock: toHex(fromBlock),
+          toBlock: toHex(toBlock),
+          topics: [V4_INITIALIZE_TOPIC],
+        })
+      } catch (error) {
+        this.adapterStates[adapterId] = markAdapterError(this.adapterStates[adapterId], error, attemptAt)
+        throw error
+      }
+
+      const initializeEvents = logs.map((log) => decodePoolManagerLog(log))
+      const ingested = this.ingestInitializeEvents(initializeEvents)
+      rpcLogCalls += 1
+      logsSeen += logs.length
+      retainedObservations += ingested.retainedGenericPoolObservations
+      discoveredPools += ingested.discoveredGenericPools
+      lastFromBlock = fromBlock
+      lastToBlock = toBlock
+      this.sourceAdapterCursors[adapterId] = toBlock + 1n
+      const complete = this.sourceAdapterCursors[adapterId] > safeHead
+      this.adapterStates[adapterId] = markAdapterSuccess(
+        this.adapterStates[adapterId],
+        {
+          status: complete ? AdapterRunStatus.COMPLETE_FROM_CONFIGURED_START : AdapterRunStatus.BACKFILL_PARTIAL,
+          safeHead,
+          scannedThroughBlock: toBlock,
+          observations: ingested.retainedGenericPoolObservations,
+        },
+        attemptAt,
+      )
+    }
+
+    const result = {
+      rpcLogCalls,
+      logsSeen,
+      retainedObservations,
+      discoveredPools,
+      fromBlock: lastFromBlock?.toString() || null,
+      toBlock: lastToBlock?.toString() || null,
+      nextBlock: this.sourceAdapterCursors[adapterId].toString(),
+      safeHead: safeHead.toString(),
+    }
+    this.pruneDopplerLaunches()
+    this.writeSourceCatalog(safeHead)
+    if (discoveredPools > 0) this.rebuildCatalogFromSources()
+    this.persistState()
+    return result
   }
 
   v3WatchAddresses() {
@@ -1193,7 +1396,10 @@ class OpportunityBoard {
         discoveredPools: initializeResult.discoveredPools,
       })
     }
-    if (initializeResult.discoveredGenericPools > 0) this.writeSourceCatalog(planned.safeHead)
+    if (initializeResult.discoveredGenericPools > 0) {
+      this.pruneDopplerLaunches()
+      this.writeSourceCatalog(planned.safeHead)
+    }
 
     let relevantLogs = 0
     let candidateWakes = 0
@@ -1818,7 +2024,7 @@ class OpportunityBoard {
     try {
       const committed = this.store.persistProjection({
         snapshot: reconciled.snapshot,
-        sourceCatalog: readJson(this.sourceCatalogPath),
+        sourceCatalog: this.latestSourceCatalog || readJson(this.sourceCatalogPath),
         events: reconciled.events,
       })
       this.persistenceState = {
@@ -1913,19 +2119,24 @@ class OpportunityBoard {
       if (this.cycleRpcFailure) throw this.cycleRpcFailure
       if (!eventWake) {
         try {
+          await this.advanceLaunchSourceCatalog(fixed.blockNumber)
+        } catch {
+          this.writeSourceCatalog(fixed.blockNumber)
+        }
+        try {
+          await this.advanceSourcePoolCatalog(fixed.blockNumber)
+        } catch {
+          this.writeSourceCatalog(fixed.blockNumber)
+        }
+        try {
           await this.advanceChainCatalog(fixed.blockNumber)
           this.chainCatalogLastError = null
         } catch (error) {
           this.chainCatalogLastError = publicError(error)
-          this.adapterStates['uniswap-v4.pool-manager.v1'] = markAdapterError(
-            this.adapterStates['uniswap-v4.pool-manager.v1'],
+          this.adapterStates['pair.chain-catalog.v1'] = markAdapterError(
+            this.adapterStates['pair.chain-catalog.v1'],
             error,
           )
-          this.writeSourceCatalog(fixed.blockNumber)
-        }
-        try {
-          await this.advanceLaunchSourceCatalog(fixed.blockNumber)
-        } catch {
           this.writeSourceCatalog(fixed.blockNumber)
         }
       }
