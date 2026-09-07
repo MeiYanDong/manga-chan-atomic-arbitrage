@@ -31,6 +31,7 @@ import {
   reconcileOpportunityEpisodes,
   screenRoundTrip,
   usdg,
+  writeExecutionBoardSnapshot,
   writeJsonAtomic,
 } from '../src/opportunity-board.mjs'
 import {
@@ -360,6 +361,7 @@ class OpportunityBoard {
     this.config = config
     this.startedAt = new Date().toISOString()
     this.snapshotPath = path.join(config.runDir, 'snapshot.json')
+    this.executionSnapshotPath = path.join(config.runDir, 'execution-snapshot.json')
     this.eventsPath = path.join(config.runDir, 'events.jsonl')
     this.statePath = path.join(config.runDir, 'state.json')
     this.chainCatalogPath = path.join(config.runDir, 'chain-catalog.json')
@@ -2017,6 +2019,7 @@ class OpportunityBoard {
     reconciled.snapshot.eventLedger.epochStartedAt = this.eventLedgerEpoch
     reconciled.snapshot.health.persistence = this.persistenceState
     writeJsonAtomic(this.snapshotPath, reconciled.snapshot)
+    writeExecutionBoardSnapshot(this.executionSnapshotPath, reconciled.snapshot)
     appendEvents(this.eventsPath, reconciled.events)
     try {
       const committed = this.store.persistProjection({
@@ -2312,6 +2315,7 @@ class OpportunityBoard {
   async watch() {
     if (!this.client) throw new Error('MANGA_BOARD_RPC_URL is required for watch mode')
     fs.mkdirSync(this.config.runDir, { recursive: true, mode: 0o700 })
+    if (this.snapshot) writeExecutionBoardSnapshot(this.executionSnapshotPath, this.snapshot)
     await this.startHttp()
     console.log(
       JSON.stringify({

@@ -17,6 +17,7 @@ import {
   reconcileOpportunityEpisodes,
   screenRoundTrip,
   writeJsonAtomic,
+  writeExecutionBoardSnapshot,
 } from '../src/opportunity-board.mjs'
 import { canonicalPoolKey, pairPoolId } from '../src/pair-catalog.mjs'
 
@@ -46,6 +47,33 @@ test('execution snapshot keeps only fresh positive rows without mutating the ful
   assert.deepEqual(compact.items, [positive])
   assert.equal(compact.selection, snapshot.selection)
   assert.equal(snapshot.items.length, 3)
+})
+
+test('execution snapshot is atomically persisted as a group-readable non-writable projection', (context) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-execution-snapshot-'))
+  context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const file = path.join(runDir, 'execution-snapshot.json')
+  const snapshot = {
+    schemaVersion: 4,
+    service: 'manga-opportunity-board',
+    mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
+    selection: { executionAuthorized: false },
+    items: [
+      { id: 'positive', status: BoardStatus.SCREENED_POSITIVE, fresh: true },
+      { id: 'negative', status: BoardStatus.NO_EDGE, fresh: true },
+    ],
+  }
+
+  const compact = writeExecutionBoardSnapshot(file, snapshot)
+  const persisted = JSON.parse(fs.readFileSync(file, 'utf8'))
+
+  assert.deepEqual(persisted, compact)
+  assert.deepEqual(
+    persisted.items.map((item) => item.id),
+    ['positive'],
+  )
+  assert.equal(fs.statSync(file).mode & 0o777, 0o640)
+  assert.equal(fs.existsSync(`${file}.${process.pid}.tmp`), false)
 })
 
 const TOKEN = '0x7aad9faa5ee27bdeeb17d5a8c1870278824c4c59'

@@ -33,7 +33,8 @@ service.
 
 Acceptance:
 
-- the watcher requests only fresh screened-positive rows from the loopback snapshot API;
+- the board atomically writes only fresh screened-positive rows to a group-readable, non-writable execution projection;
+- the Linux watcher reads that projection without access to board writes or signer-state access from the board;
 - the full dashboard snapshot remains unchanged for users;
 - board-only transport failures report `DEGRADED_BOARD` and retry with capped backoff regardless of count; and
 - execution-RPC errors retain their finite halt threshold.

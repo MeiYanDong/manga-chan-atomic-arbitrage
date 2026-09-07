@@ -71,6 +71,10 @@ const MAXIMUM_AMOUNT_IN = 100_000_000n
 const DEADLINE_SECONDS = 45n
 const NATIVE_MARK_INPUT = parseEther('0.004')
 const LEASE_RENEWAL_RETRY_MS = 5 * 60 * 1_000
+const MAX_BOARD_SNAPSHOT_BYTES = 16 * 1024 * 1024
+
+/** @type {{key: string, snapshot: Record<string, any>} | null} */
+let boardSnapshotFileCache = null
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUNTIME_CONFIG = loadRuntimeConfig()
@@ -324,7 +328,16 @@ function assertLoopbackBoardUrl(value) {
 
 async function loadBoardSnapshot() {
   if (RUNTIME_CONFIG.genericBoardSnapshot) {
-    return JSON.parse(fs.readFileSync(path.resolve(RUNTIME_CONFIG.genericBoardSnapshot), 'utf8'))
+    const file = path.resolve(RUNTIME_CONFIG.genericBoardSnapshot)
+    const metadata = fs.lstatSync(file)
+    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error('board snapshot must be a regular file')
+    if ((metadata.mode & 0o022) !== 0) throw new Error('board snapshot must not be group- or world-writable')
+    if (metadata.size > MAX_BOARD_SNAPSHOT_BYTES) throw new Error('board snapshot exceeds the 16 MiB safety limit')
+    const key = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}`
+    if (boardSnapshotFileCache?.key === key) return boardSnapshotFileCache.snapshot
+    const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'))
+    boardSnapshotFileCache = { key, snapshot }
+    return snapshot
   }
   const url = assertLoopbackBoardUrl(RUNTIME_CONFIG.genericBoardUrl)
   url.searchParams.set('view', 'execution')

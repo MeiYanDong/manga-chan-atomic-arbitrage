@@ -90,6 +90,8 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   const plannerSource = fs.readFileSync(path.join(root, 'src', 'generic-plan.mjs'), 'utf8')
   assert.match(source, /MANGA_GENERIC_BOARD_URL|genericBoardUrl/)
   assert.match(source, /searchParams\.set\('view', 'execution'\)/)
+  assert.match(source, /genericBoardSnapshot/)
+  assert.match(source, /board snapshot must not be group- or world-writable/)
   assert.match(source, /buildGenericExecutionCandidates/)
   assert.match(source, /assertGenericBoardIdentity\(board\)/)
   assert.match(plannerSource, /READ_ONLY_NO_SIGNING_NO_BROADCAST/)
@@ -106,6 +108,19 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   assert.match(source, /status: 'RUNNING',[\s\S]*consecutiveBoardErrors: 0,[\s\S]*reason: null/)
   assert.match(source, /genericWatchTransportFailurePolicy/)
   assert.match(source, /if \(failurePolicy\.shouldStop\)/)
+
+  for (const unitName of ['manga-generic-watcher.service', 'manga-generic-arm.service']) {
+    const unit = fs.readFileSync(path.join(root, 'deploy', 'systemd', unitName), 'utf8')
+    assert.match(unit, /^SupplementaryGroups=manga-board$/m)
+    assert.match(
+      unit,
+      /^Environment=MANGA_GENERIC_BOARD_SNAPSHOT=\/var\/lib\/manga-opportunity-board\/execution-snapshot\.json$/m,
+    )
+  }
+
+  const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
+  assert.match(installer, /usermod --append --groups "\$\{board_group\}" "\$\{service_user\}"/)
+  assert.match(installer, /chmod 0750 "\$\{board_runtime_dir\}"/)
 })
 
 test('generic systemd services isolate the board and mutually exclude the fixed signer', () => {

@@ -58,6 +58,20 @@ export function compactExecutionBoardSnapshot(snapshot) {
   }
 }
 
+/**
+ * Persist the signer-facing projection independently from the board's HTTP
+ * event loop. Atomic replacement means readers see either the previous complete
+ * generation or the next complete generation, never a partial JSON document.
+ *
+ * @param {string} file
+ * @param {Record<string, any>} snapshot
+ */
+export function writeExecutionBoardSnapshot(file, snapshot) {
+  const compact = compactExecutionBoardSnapshot(snapshot)
+  writeJsonAtomic(file, compact)
+  return compact
+}
+
 /** @param {unknown} value */
 export function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null
