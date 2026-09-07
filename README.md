@@ -43,11 +43,13 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   marked Gas and `7.995039 USDG` marked net execution profit. After the separately marked `2.322841 USDG` one-time
   deployment Gas, the combined marked result is `+5.672198 USDG`, excluding seed-conversion impact. This small sample
   does not establish an opportunity frequency or race-win probability.
-- The server generic watcher is active from release `dc8b392abc17f9472ec1458284d9c6fc6fa80019` under schema-v3
+- The server generic watcher is active from release `a34afd1cde38ec05eb722d44491a4159b8de227d` under schema-v3
   authorization `0x7e580b5ff19c2db13f25439c4b9b751a7db29e48e2d050f05e179462a0de0b21`. Its lifetime is
   `UNTIL_REVOKED`, with no seven-day expiry or renewal task. Confirmed retained USDG automatically increases eligible
-  principal up to the immutable `100 USDG` contract cap; at the 2026-09-08 promotion readback the eligible principal was
-  `33.021814 USDG`, with zero new-arm attempts, zero failed Gas, no unresolved mutation and zero service restarts.
+  principal up to the immutable `100 USDG` contract cap; at the 2026-09-08 recovery readback the eligible principal was
+  `33.021814 USDG`, with zero new-arm attempts, zero failed Gas, no unresolved mutation and zero service restarts. A
+  compact execution projection is published atomically through a dedicated read-only runtime directory, so signer
+  liveness no longer depends on the board's occasionally stalled HTTP event loop.
 - The prior signed-attempt lifecycle defect was closed only after two independent readers proved the expired raw
   transaction absent and nonce-unconsumed. That recovery remains historical evidence; it is not counted as a receipt or
   execution.
@@ -55,11 +57,13 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher and fixed-route cloud signer remain stopped; generic-v2 exclusively owns the live wallet
   lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free event board is running release `dc8b392abc17f9472ec1458284d9c6fc6fa80019`. Its SQLite current
+- The signer-free event board is running release `a34afd1cde38ec05eb722d44491a4159b8de227d`. Its SQLite current
   projections, material-evidence ledger and target-bound source catalog report healthy persistence parity under a
   448 MiB pressure threshold and 512 MiB hard limit. A quote backlog no longer freezes hot-log polling, although the
-  persisted cursor is still catching up to the chain head. The board remains loopback-only, uses the official public
-  RPC and has no signer or broadcast path.
+  persisted cursor is still catching up to the chain head. The board remains loopback-only and has no signer or
+  broadcast path. The live signer is temporarily using Robinhood's official public RPC through an explicit emergency
+  opt-in because the configured ChainStack account returned a service-paused billing error. This fallback is
+  rate-limited and is not treated as a production-grade provider.
 - The bounded source backfill now renders NINECAT as `LONG_ROUTE / DOPPLER / UNISWAP_V4 / NINECAT-AI`, with zero PAIR
   listings for that address. NINECAT is still `UNQUOTED` and `UNPROVEN`; source coverage remains partial and current
   proxy-positive rows are not executable-profit or receipt evidence.
@@ -75,6 +79,10 @@ See
 [`docs/evidence/2026-09-08-until-revoked-compounding-watcher-production-promotion.md`](docs/evidence/2026-09-08-until-revoked-compounding-watcher-production-promotion.md)
 for the schema-v3 no-expiry authority, retained-profit principal policy, loopback-failure correction and production
 readback.
+See
+[`docs/evidence/2026-09-08-persisted-feed-public-rpc-recovery.md`](docs/evidence/2026-09-08-persisted-feed-public-rpc-recovery.md)
+for the persisted execution-feed isolation, fail-closed permission correction, explicit public-RPC fallback and final
+production recovery readback.
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
