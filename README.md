@@ -39,30 +39,27 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   `0x3f3A60A2da9E8D9811F41c6093280D7a90685aDD` from release
   `a21b782c9a2fec3522f7a7a8f73a10c7df236e43`. The deployment receipt and identity are recorded in
   [`deployments/generic-v2-mainnet.json`](deployments/generic-v2-mainnet.json).
-- The first bounded arm produced four canonically confirmed autonomous executions with `2.253959 USDG` gross profit,
-  `1.396380 USDG` marked Gas and `0.857579 USDG` marked net execution profit. This small sample does not establish an
-  opportunity frequency or race-win probability.
-- The server watcher is currently stopped. Its fifth attempt exposed a lifecycle defect: the transaction was signed
-  and durably recorded, then the post-sign budget check counted that same attempt as a new attempt and stopped before
-  broadcast. The repair first promoted in `24c1d869ff82e912dc3ab85c147476f039247a93` is retained by the active server
-  release `1a49b15ec5cbddd74536b913eaecfb7bf46619ea`; it also redacts provider URLs from terminal diagnostics and derives
-  operational counters from the audit ledger. Two independent
-  readers later proved the expired raw transaction absent with nonce `8` unconsumed, and the audit ledger closed it as
-  `EXPIRED_NOT_OBSERVED` without broadcasting it.
-- The one-time deployment Gas was marked at `2.322841 USDG`; deployment plus the four confirmed executions therefore
-  remains `-1.465262 USDG`, excluding seed conversion impact. The execution set was profitable, but the live lifecycle
-  has not yet recovered deployment cost.
+- Eight canonically confirmed autonomous executions have produced `10.980908 USDG` gross profit, `2.985869 USDG`
+  marked Gas and `7.995039 USDG` marked net execution profit. After the separately marked `2.322841 USDG` one-time
+  deployment Gas, the combined marked result is `+5.672198 USDG`, excluding seed-conversion impact. This small sample
+  does not establish an opportunity frequency or race-win probability.
+- The server generic watcher is active from release `8cf94600d663ed3d6a637cc96e2f89ffebaf1ef2` under schema-v2
+  authorization `0x63df6ad407c48eb7f82b5a64be05eb7111e732a7b13cd9eff6579db2de31a554`. Its 168-hour lease is
+  configured to renew during the final 24 hours without changing the authorization ID or resetting cumulative failed
+  Gas. At the 2026-09-08 promotion readback it had a `33.021814 USDG` principal cap, zero new-arm attempts, zero failed
+  Gas, no unresolved mutation and zero service restarts.
+- The prior signed-attempt lifecycle defect was closed only after two independent readers proved the expired raw
+  transaction absent and nonce-unconsumed. That recovery remains historical evidence; it is not counted as a receipt or
+  execution.
 - Historical fixed-route receipt evidence is documented separately. A test, screen, running process or fork transaction is never presented as a new mainnet profit.
-- The old macOS polling watcher and the fixed-route cloud signer are stopped. The generic-v2 watcher is also stopped;
-  its exhausted arm cannot authorize a new attempt. The repaired release is deployed, but it will not resume until the
-  exhausted execution RPC is replaced, the previously exposed endpoint credential is rotated and a fresh bounded
-  authorization is explicitly approved.
+- The old macOS polling watcher and fixed-route cloud signer remain stopped; generic-v2 exclusively owns the live wallet
+  lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free event board is deployed from verified release `6e6faf52a2de8559aa16b52234b69f047aef989d`
-  (`v0.6.2`). Its SQLite v2 current projections, material-evidence ledger and target-bound source catalog passed the
-  Linux canary below the 384 MiB hard limit. A quote backlog no longer freezes hot-log polling, although the persisted
-  cursor is still catching up to the chain head. The board remains loopback-only, uses the official public RPC and has
-  no signer or broadcast path.
+- The signer-free event board is running release `c979ec5e11b115a63ea4660194d1de533d440ed8`. Its SQLite current
+  projections, material-evidence ledger and target-bound source catalog report healthy persistence parity under a
+  448 MiB pressure threshold and 512 MiB hard limit. A quote backlog no longer freezes hot-log polling, although the
+  persisted cursor is still catching up to the chain head. The board remains loopback-only, uses the official public
+  RPC and has no signer or broadcast path.
 - The bounded source backfill now renders NINECAT as `LONG_ROUTE / DOPPLER / UNISWAP_V4 / NINECAT-AI`, with zero PAIR
   listings for that address. NINECAT is still `UNQUOTED` and `UNPROVEN`; source coverage remains partial and current
   proxy-positive rows are not executable-profit or receipt evidence.
@@ -70,7 +67,10 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
 See [`docs/evidence/2026-09-06-signed-attempt-recovery.md`](docs/evidence/2026-09-06-signed-attempt-recovery.md)
-for the lifecycle root cause, repaired release, two-reader terminal recovery and current restart blockers.
+for the lifecycle root cause, repaired release, two-reader terminal recovery and then-current restart blockers.
+See
+[`docs/evidence/2026-09-08-rolling-generic-watcher-production-promotion.md`](docs/evidence/2026-09-08-rolling-generic-watcher-production-promotion.md)
+for the schema-v2 rolling-lease merge, Linux gates, controlled re-arm and current runtime/economic readback.
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
