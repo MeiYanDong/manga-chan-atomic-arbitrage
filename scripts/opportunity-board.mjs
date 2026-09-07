@@ -24,6 +24,7 @@ import {
   catalogIsComplete,
   nextCycleDelay,
   normalizePairCandidate,
+  normalizePersistedBoardSnapshot,
   publicError,
   reconcileOpportunityEpisodes,
   screenRoundTrip,
@@ -331,7 +332,7 @@ class OpportunityBoard {
     this.html = fs.readFileSync(path.join(ROOT, 'public', 'opportunity-board.html'), 'utf8')
     const persistedState = readJson(this.statePath) || {}
     const persistedChainCatalog = readJson(this.chainCatalogPath) || {}
-    this.previousSnapshot = readJson(this.snapshotPath)
+    this.previousSnapshot = normalizePersistedBoardSnapshot(readJson(this.snapshotPath))
     this.snapshot = this.previousSnapshot
     this.observations = new Map(
       (this.previousSnapshot?.items || [])

@@ -16,6 +16,8 @@ export const BoardStatus = Object.freeze({
 
 const POSITIVE_STATUS = BoardStatus.SCREENED_POSITIVE
 const EVENT_LEDGER_SCHEMA_VERSION = 2
+const LEGACY_EXECUTION_ESTIMATE = 'NOT_RUN_GENERIC_EXECUTOR_NOT_DEPLOYED'
+const EXACT_PREFLIGHT_EXECUTION_ESTIMATE = 'NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED'
 
 export const EpisodeState = Object.freeze({
   NONE: 'NONE',
@@ -28,6 +30,18 @@ export const EpisodeObservation = Object.freeze({
   CONFIRMED_NON_POSITIVE: 'CONFIRMED_NON_POSITIVE',
   UNKNOWN: 'UNKNOWN',
 })
+
+/** @param {Record<string, any>} item */
+export function normalizeExecutionEvidence(item) {
+  if (item.executionEstimate !== LEGACY_EXECUTION_ESTIMATE) return item
+  return { ...item, executionEstimate: EXACT_PREFLIGHT_EXECUTION_ESTIMATE }
+}
+
+/** @param {Record<string, any> | null} snapshot */
+export function normalizePersistedBoardSnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.items)) return snapshot
+  return { ...snapshot, items: snapshot.items.map((item) => normalizeExecutionEvidence(item)) }
+}
 
 /** @param {unknown} value */
 export function finiteNumber(value) {
@@ -213,7 +227,7 @@ export function buildBoardSnapshot(input) {
           executionEstimate: 'NOT_RUN',
           receiptEvidence: 'NONE',
         }
-    return applyFreshness(base, nowMs, input.staleMs)
+    return applyFreshness(normalizeExecutionEvidence(base), nowMs, input.staleMs)
   })
 
   items.sort((left, right) => {

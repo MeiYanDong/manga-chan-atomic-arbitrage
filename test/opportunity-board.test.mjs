@@ -11,6 +11,7 @@ import {
   materialEvents,
   nextCycleDelay,
   normalizePairCandidate,
+  normalizePersistedBoardSnapshot,
   publicError,
   reconcileOpportunityEpisodes,
   screenRoundTrip,
@@ -166,6 +167,45 @@ test('freshness fails closed without changing the underlying quote classificatio
   assert.equal(stale.status, BoardStatus.STALE)
   assert.equal(stale.underlyingStatus, BoardStatus.SCREENED_POSITIVE)
   assert.equal(stale.fresh, false)
+})
+
+test('persisted execution evidence migrates the obsolete deployment claim without mutating input', () => {
+  const persisted = {
+    schemaVersion: 3,
+    items: [
+      { id: 'legacy', executionEstimate: 'NOT_RUN_GENERIC_EXECUTOR_NOT_DEPLOYED' },
+      { id: 'current', executionEstimate: 'NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED' },
+      { id: 'unquoted', executionEstimate: 'NOT_RUN' },
+    ],
+  }
+
+  const normalized = normalizePersistedBoardSnapshot(persisted)
+  assert.notEqual(normalized, persisted)
+  assert.notEqual(normalized.items, persisted.items)
+  assert.equal(normalized.items[0].executionEstimate, 'NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED')
+  assert.equal(normalized.items[1], persisted.items[1])
+  assert.equal(normalized.items[2], persisted.items[2])
+  assert.equal(persisted.items[0].executionEstimate, 'NOT_RUN_GENERIC_EXECUTOR_NOT_DEPLOYED')
+
+  const candidate = normalizePairCandidate(candidateFixture(), { minDepthUsd: 100 })
+  const snapshot = buildBoardSnapshot({
+    generatedAt: '2026-09-07T00:00:01.000Z',
+    catalog: [candidate],
+    observations: new Map([
+      [
+        candidate.id,
+        {
+          status: BoardStatus.NO_EDGE,
+          quotedAt: '2026-09-07T00:00:00.000Z',
+          executionEstimate: 'NOT_RUN_GENERIC_EXECUTOR_NOT_DEPLOYED',
+        },
+      ],
+    ]),
+    staleMs: 60_000,
+    sourceState: { catalogComplete: true },
+    serviceState: { status: 'RUNNING' },
+  })
+  assert.equal(snapshot.items[0].executionEstimate, 'NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED')
 })
 
 function snapshotAt(generatedAt, observation) {
