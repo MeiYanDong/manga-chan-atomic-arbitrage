@@ -1,7 +1,7 @@
 import { formatUnits, parseUnits } from 'viem'
 
 export const MAX_AMOUNT_IN_USDG = 100_000_000n
-export const DEFAULT_AMOUNT_GRID_USDG = Object.freeze(['5', '7.5', '10', '12.5', '15', '25', '50', '75', '100'])
+export const DEFAULT_AMOUNT_GRID_USDG = Object.freeze(['5', '10', '25', '50', '100'])
 export const DEFAULT_PROBE_AMOUNTS_USDG = Object.freeze(['5', '10'])
 
 /**

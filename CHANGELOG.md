@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Replace repeated hot full-board scans with bounded public-HTTP PoolManager/V3 event wakeups plus a slower coverage
+  reconciliation; persist canonical cursors, deduplicate logs and rewind on a block-hash mismatch.
+- Merge stable 1,000-row PAIR API pagination with incremental PoolManager `Initialize` backfill, while reporting chain
+  completeness only from the configured start block.
+- Recompute every API PoolKey and separate shadow admission from live admission. Disabled quotes, unknown depth and the
+  API-observed undocumented Launch V2 hook cannot enter a schema-v3 execution plan.
+- Require both selected pools to carry same-block V4 Quoter attestation before the current generic executor accepts a
+  schema-v3 board candidate.
+- Count economic opportunity episodes rather than quote refreshes, and append a migration epoch so stale or unquotable
+  gaps do not inflate frequency.
+- Publish event-engine metrics and chain-catalog evidence through loopback-only endpoints and the dashboard.
+- Deduplicate identical V3 anchor quotes within one fixed block and transport independent JSON-RPC calls in bounded HTTP
+  batches, while reporting HTTP POSTs separately from contract-call and provider-billing claims.
+- Bound periodic work to priority rows, actual positive rows and one configured coverage batch; retain failed V3 factory
+  evidence for the fixed block and trip a cycle-level RPC circuit instead of amplifying a provider outage.
+- Rotate two historical priority rows per cycle and make full-grid expansion evidence-driven instead of spending public
+  RPC capacity on every no-edge priority row.
+- Separate candidate concurrency from within-candidate leg concurrency so independent fixed-block calls can share a
+  bounded HTTP batch without expanding multiple candidate grids at once.
+- Re-rank the complete allowed V3 path set on the first amount of every fixed block, then quote only its top-three
+  shortlist for larger amounts; reduce the coarse amount grid to 5/10/25/50/100 USDG before bounded refinement.
+
 - Treat the exact latest unresolved signed generic execution as the already-reserved current attempt at the final
   broadcast boundary, so the last authorized attempt can be sent without permitting an additional attempt.
 - Fail closed when the signed-attempt identity, authorization, ordering, ledger count or unresolved state differs from

@@ -96,9 +96,13 @@ Opportunity -> Intent -> Plan -> Signed exact raw -> Broadcast observation
 ## 5. Provider and event model
 
 The generic and fixed generations deliberately use different hot paths. Generic idle discovery is the signer-free
-loopback board backed by the official public RPC. Only a new eligible board candidate escalates to the strategy-owned
-HTTP RPC for exact simulation, Gas, signing, broadcast and receipt convergence. This bounds paid-RPC use without making
-the rate-limited public endpoint a live signing dependency.
+loopback board backed by the official public RPC. The board incrementally polls bounded PoolManager and known V3 anchor
+log ranges, maps a changed pool to affected candidates, and then repeats the full fixed-block quote for those candidates.
+Events are wake evidence only: the local post-event mirror is never used as executable output. A low-frequency round-robin
+reconciliation remains necessary because the V3 event set contains previously quoted routes rather than every route that
+could become best. Only a new eligible board candidate escalates to the strategy-owned HTTP RPC for exact simulation,
+Gas, signing, broadcast and receipt convergence. This bounds paid-RPC use without making the rate-limited public endpoint
+a live signing dependency.
 
 The fixed-route watcher subscribes only to:
 
@@ -106,7 +110,9 @@ The fixed-route watcher subscribes only to:
 - the V3 `Swap` event at the USDG/NVDA exit pool;
 - the V4 PoolManager `Swap` event for the exact MSFT/MANGA and MANGA/NVDA pool IDs.
 
-Duplicate and out-of-order logs collapse into a monotonic opportunity revision. HTTP must first prove that the triggering block is readable. `header not found`, unknown block, rate-limit and network failures enter bounded recovery; target/code/operator mismatches halt as invariants.
+Duplicate logs collapse into one candidate wake. A persisted block/hash anchor detects a reorganization and rewinds the
+bounded cursor before replay. Rate-limit and network failures do not advance the cursor and enter exponential polling
+backoff; target/code/operator mismatches remain invariants.
 
 A 30-second recovery poll protects against subscription gaps. It is not the primary trigger.
 
@@ -163,6 +169,34 @@ observed state; it does not establish opportunity frequency, race win probabilit
 cost. Old observations become `STALE` instead of remaining actionable. Metadata failures, missing anchors and quote
 reverts are `UNQUOTABLE`, never silently converted to zero profit.
 
-The catalog is refreshed in full and supplemented by a frequent newest-token page. Priority candidates and current
-positive rows are requoted first; the rest are covered with a persistent round-robin cursor. Coverage is reported in
-the snapshot rather than implied by process liveness.
+The API catalog is refreshed in full with stable newest-first pagination and supplemented by a frequent newest-token
+page. It is merged with durable, bounded PoolManager `Initialize`-log backfill. The chain artifact reports its configured
+start, scanned-through block, safe head, singletons and ambiguous launches; it never claims blocks before the configured
+start. Structurally valid null-depth or disabled-quote pools may be shadow-quoted, but the schema-v3 generic plan rejects
+them. PoolKey identity plus a successful V4 quote at the exact observation block is required before a supported pool is
+marked executor-compatible.
+
+Priority candidates and current positive rows are covered by the periodic reconciliation cursor. Between those sweeps,
+PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call counts and event-to-quote latency
+are published as runtime metrics. Equivalent V3 anchor requests are deduplicated only within the same fixed block, and
+independent JSON-RPC calls are transported in bounded HTTP batches without changing their individual call context or
+return data. HTTP POST counts are not represented as provider billing units. No reduction target is considered met until
+a deployed observation window measures it.
+
+Candidate concurrency and within-candidate leg concurrency are separate controls. The conservative public profile
+quotes one candidate at a time, while independent legs may share an HTTP batch; this reduces request bursts without
+allowing multiple candidate grids to expand simultaneously.
+
+The public-RPC profile rotates a bounded subset of historical priority rows and adds one bounded catalog batch. Every
+candidate starts with 5/10 USDG probes. A gross-positive probe or a previously actionable row expands to the full amount
+grid; no-edge priority status alone does not authorize a large quote fan-out. This is discovery scheduling, not execution
+authorization.
+
+For each direction at a fixed block, the first requested amount runs the complete allowed direct-or-one-WETH-bridge V3
+path set and retains the top three successful paths. Other amounts at that same block receive fresh Quoter results only
+for that shortlist. The snapshot labels this policy; it is not represented as an exhaustive all-path search at every
+amount. A new block starts a new competition.
+
+Economic opportunity frequency uses episode semantics. One fresh positive opens an episode; stale, unquotable and
+missing observations preserve it as unknown continuity; only a fresh non-positive quote closes it. A one-time epoch
+marker separates the legacy biased ledger from the new semantics.

@@ -43,10 +43,28 @@ export function diagnosticErrorText(error) {
 }
 
 /** @param {unknown} error */
+function errorIdentity(error) {
+  const parts = []
+  const visited = new Set()
+  let current = error
+  for (let depth = 0; current && depth < 8 && !visited.has(current); depth += 1) {
+    visited.add(current)
+    if (typeof current !== 'object') break
+    const object = /** @type {Record<string, any>} */ (current)
+    if (typeof object.name === 'string') parts.push(object.name)
+    if (typeof object.constructor?.name === 'string') parts.push(object.constructor.name)
+    if (object.code !== undefined) parts.push(String(object.code))
+    current = object.cause
+  }
+  return parts.join(' ')
+}
+
+/** @param {unknown} error */
 export function classifyRpcError(error) {
   const explicitClass = error && typeof error === 'object' ? /** @type {Record<string, any>} */ (error).rpcClass : null
   if (Object.values(RpcErrorClass).includes(explicitClass)) return explicitClass
   const message = errorText(error)
+  const identity = errorIdentity(error)
   if (
     /header not found|unknown block|block not found|missing trie node|state .*not available|requested block .*not found/i.test(
       message,
@@ -54,7 +72,13 @@ export function classifyRpcError(error) {
   ) {
     return RpcErrorClass.STATE_NOT_READY
   }
-  if (/\b429\b|too many requests|rate.?limit|quota exceeded/i.test(message)) return RpcErrorClass.THROTTLED
+  if (/\b429\b|too many requests|rate.?limit|quota exceeded/i.test(`${message} ${identity}`)) {
+    return RpcErrorClass.THROTTLED
+  }
+  if (/ContractFunctionRevertedError|ExecutionRevertedError/i.test(identity)) return RpcErrorClass.INVARIANT
+  if (/RpcRequestError|HttpRequestError|TimeoutError|UnknownRpcError|SocketError/i.test(identity)) {
+    return RpcErrorClass.NETWORK
+  }
   if (
     /timeout|timed out|econnreset|econnrefused|fetch failed|network|socket|websocket|http request failed|rpc request failed/i.test(
       message,

@@ -114,7 +114,21 @@ sudo -u manga-board env MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board npm
 The HTTP service deliberately listens only on loopback. View it through an SSH tunnel instead of opening a public
 firewall port. The supplied SSH drop-in permits only client-local forwarding to `127.0.0.1:8788`; validate it with
 `sshd -t`, reload SSH, and prove a fresh key-only session before relying on the tunnel. Runtime evidence is stored in
-`/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl` and `state.json`; none belongs in Git.
+`/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl`, `state.json`, `chain-catalog.json` and
+`pool-mirror.json`; none belongs in Git. `chain-catalog.json` is complete only from its recorded configured start block.
+The mirror contains event state, not a quote or execution instruction.
+
+Read the evidence surfaces separately:
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:8788/api/snapshot | jq '{health,source,coverage,selection}'
+curl --fail --silent --show-error http://127.0.0.1:8788/api/event-metrics | jq .
+curl --fail --silent --show-error http://127.0.0.1:8788/api/chain-catalog | jq '{coverage,summary,lastBatch}'
+```
+
+On the first v0.5 start, preserve the existing `events.jsonl`. The service appends one
+`EVENT_LEDGER_EPOCH_STARTED` record and stores its timestamp in `state.json`; older event counts remain legacy evidence.
+Do not truncate or rewrite the historical file during deployment.
 
 Stopping or rolling back the board must not stop, restart, disarm or change `manga-chan-watcher.service`. Conversely,
 board health never proves the signing watcher is armed or trading.
