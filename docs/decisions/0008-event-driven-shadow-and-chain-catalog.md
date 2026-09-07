@@ -48,6 +48,10 @@ its per-call gas estimate, while reducing connection bursts. Same-block, same-di
 share one in-flight/result promise; the cache is cleared at every block boundary and failed entries are evicted. Neither
 HTTP POST count nor cache-hit count is labeled as provider compute-unit savings.
 
+If viem observes an incomplete batch envelope, the service classifies it as transport evidence, retries the affected
+read through a bounded independent-request client and keeps that safer mode until restart. EVM reverts are identified
+before this fallback test and never trigger the transport downgrade.
+
 Periodic selection does not reserve empty capacity for nonexistent positive rows: it rotates a bounded subset of
 priority rows, adds the actual positive set up to its cap and then one coverage batch. Incomplete V3 factory evidence is
 retained for that fixed block and trips a cycle-level RPC circuit, so one provider failure cannot expand into repeated
