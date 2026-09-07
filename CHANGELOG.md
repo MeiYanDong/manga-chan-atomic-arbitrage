@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept the deployed signer-free board's additive schema-v4 snapshot in the generic execution planner while retaining
+  the existing service identity, read-only mode, authorization flag and same-block pool-attestation checks.
+
 ## 0.6.2 — 2026-09-07
 
 - Advance one bounded hot-log range before consuming an existing candidate backlog, so quote work cannot starve the

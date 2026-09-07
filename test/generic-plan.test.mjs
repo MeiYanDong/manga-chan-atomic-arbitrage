@@ -164,6 +164,23 @@ test('schema-v3 execution plans require same-block executable pool attestations'
   )
 })
 
+test('schema-v4 board snapshots retain the schema-v3 execution safety boundary', () => {
+  const fixture = schema3SnapshotFixture()
+  fixture.schemaVersion = 4
+  const candidate = buildGenericExecutionCandidate(fixture, {
+    nowMs: Date.parse('2026-09-05T00:00:10.000Z'),
+  })
+  assert.equal(candidate.economicEpisodeId, 'episode:test')
+  assert.equal(candidate.route.targetToken, TARGET)
+
+  const unsupported = schema3SnapshotFixture()
+  unsupported.schemaVersion = 5
+  assert.throws(
+    () => buildGenericExecutionCandidate(unsupported, { nowMs: Date.parse('2026-09-05T00:00:10.000Z') }),
+    /read-only boundary/,
+  )
+})
+
 test('typed preflight set keeps profitable amount variants and deduplicates execution payloads', () => {
   const fixture = snapshotFixture()
   fixture.items[0].amountQuotes = [
