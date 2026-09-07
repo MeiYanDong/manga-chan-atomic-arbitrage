@@ -20,7 +20,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'MANGA_GENERIC_MIN_NET_USDG=0.2',
       'MANGA_GENERIC_PROFIT_RETENTION_BPS=9400',
       'MANGA_GENERIC_WATCH_POLL_MS=750',
-      'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS=12',
+      'MANGA_GENERIC_WATCH_MAX_ATTEMPTS=unlimited',
+      'MANGA_GENERIC_WATCH_MAX_EXECUTIONS=unlimited',
+      'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS=unlimited',
       'MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0.25',
     ].join('\n'),
     { mode: 0o600 },
@@ -35,7 +37,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.genericProfitRetentionBps, 9_400)
   assert.equal(config.genericPreflightCandidates, 6)
   assert.equal(config.genericWatchPollMs, 750)
-  assert.equal(config.genericWatchMaxPreflights, 12)
+  assert.equal(config.genericWatchMaxAttempts, null)
+  assert.equal(config.genericWatchMaxExecutions, null)
+  assert.equal(config.genericWatchMaxPreflights, null)
   assert.equal(config.genericWatchMinScreenedNetUsdg, '0.25')
   assert.doesNotThrow(() => assertLiveTransport(config, { requireWss: true }))
 })
@@ -58,7 +62,14 @@ test('live watch refuses public fallback and silent polling-only mode', () => {
 })
 
 test('generic exact-preflight candidate count is bounded at configuration load', () => {
+  const finite = loadRuntimeConfig({
+    MANGA_CONFIG_FILE: '/definitely/missing',
+    MANGA_MAX_ATTEMPTS: '7',
+  })
+  assert.equal(finite.genericWatchMaxAttempts, 7)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_PREFLIGHT_CANDIDATES: '33' }), /1\.\.32/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_POLL_MS: '100' }), /250\.\.60000/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_EXECUTIONS: '21' }), /1\.\.20/)
+  assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_ATTEMPTS: '0' }), /正整数/)
+  assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_PREFLIGHTS: '0' }), /正整数/)
 })

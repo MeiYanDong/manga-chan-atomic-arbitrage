@@ -201,6 +201,12 @@ An arm binds the exact executor and build, current principal cap, screened and e
 maximum exact preflights, signed attempts, confirmed executions and failed Gas. Starting the service without a valid arm
 stops cleanly and never signs. Read local state without a chain call using:
 
+For the generic watcher only, `MANGA_GENERIC_WATCH_MAX_EXECUTIONS`, `MANGA_GENERIC_WATCH_MAX_ATTEMPTS` and
+`MANGA_GENERIC_WATCH_MAX_PREFLIGHTS` may be set to the explicit value `unlimited`. This removes terminal count stops
+without changing the arm expiry, failed-Gas budget, ETH reserve, profit floors, principal cap, nonce checks or unknown
+mutation barrier. Numeric values retain the finite policy; zero is invalid. The fixed-route watcher's
+`MANGA_MAX_ATTEMPTS` remains finite unless its own policy is separately reviewed.
+
 ```bash
 cd /opt/manga-chan-arbitrage/current
 sudo -u manga-chan-arb env \

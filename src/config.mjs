@@ -24,6 +24,7 @@ const CONFIG_KEYS = new Set([
   'MANGA_GENERIC_PREFLIGHT_CANDIDATES',
   'MANGA_GENERIC_WATCH_POLL_MS',
   'MANGA_GENERIC_WATCH_ARM_HOURS',
+  'MANGA_GENERIC_WATCH_MAX_ATTEMPTS',
   'MANGA_GENERIC_WATCH_MAX_EXECUTIONS',
   'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS',
   'MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG',
@@ -54,6 +55,7 @@ export function loadRuntimeConfig(environment = process.env) {
   const rpcUrl = value('MANGA_RPC_URL')
   const wsUrl = value('MANGA_WS_URL')
   const readRpcUrl = value('MANGA_READ_RPC_URL')
+  const maxAttempts = positiveInteger(value('MANGA_MAX_ATTEMPTS'), 5)
 
   return {
     configPath,
@@ -65,7 +67,7 @@ export function loadRuntimeConfig(environment = process.env) {
     runDir: value('MANGA_RUN_DIR'),
     allowPollingOnly: value('MANGA_ALLOW_POLLING_ONLY') === '1',
     finalityConfirmations: positiveInteger(value('MANGA_FINALITY_CONFIRMATIONS'), 3),
-    maxAttempts: positiveInteger(value('MANGA_MAX_ATTEMPTS'), 5),
+    maxAttempts,
     maxFailedGasWei: nonNegativeBigInt(value('MANGA_MAX_FAILED_GAS_WEI'), 1_000_000_000_000_000n),
     providerLabel: value('MANGA_PROVIDER_LABEL') || 'managed-provider',
     genericBoardUrl: value('MANGA_GENERIC_BOARD_URL') || 'http://127.0.0.1:8788/api/snapshot',
@@ -78,8 +80,13 @@ export function loadRuntimeConfig(environment = process.env) {
     genericPreflightCandidates: boundedPositiveInteger(value('MANGA_GENERIC_PREFLIGHT_CANDIDATES'), 6, 32),
     genericWatchPollMs: boundedInteger(value('MANGA_GENERIC_WATCH_POLL_MS'), 1_000, 250, 60_000),
     genericWatchArmHours: boundedPositiveInteger(value('MANGA_GENERIC_WATCH_ARM_HOURS'), 24, 168),
-    genericWatchMaxExecutions: boundedPositiveInteger(value('MANGA_GENERIC_WATCH_MAX_EXECUTIONS'), 5, 20),
-    genericWatchMaxPreflights: boundedPositiveInteger(value('MANGA_GENERIC_WATCH_MAX_PREFLIGHTS'), 24, 1_000),
+    genericWatchMaxAttempts: positiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_ATTEMPTS'), maxAttempts),
+    genericWatchMaxExecutions: boundedPositiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_EXECUTIONS'), 5, 20),
+    genericWatchMaxPreflights: boundedPositiveIntegerOrUnlimited(
+      value('MANGA_GENERIC_WATCH_MAX_PREFLIGHTS'),
+      24,
+      1_000,
+    ),
     genericWatchMinScreenedNetUsdg: value('MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG'),
     genericWatchMaxConsecutiveErrors: boundedPositiveInteger(
       value('MANGA_GENERIC_WATCH_MAX_CONSECUTIVE_ERRORS'),
@@ -111,6 +118,21 @@ function positiveInteger(value, fallback) {
 function boundedPositiveInteger(value, fallback, maximum) {
   const parsed = positiveInteger(value, fallback)
   if (parsed > maximum) throw new Error(`配置值必须在 1..${maximum}：${value}`)
+  return parsed
+}
+
+/** @param {string | null} value @param {number | null} fallback */
+function positiveIntegerOrUnlimited(value, fallback) {
+  if (value === null) return fallback
+  if (String(value).trim().toLowerCase() === 'unlimited') return null
+  return positiveInteger(value, fallback ?? 1)
+}
+
+/** @param {string | null} value @param {number | null} fallback @param {number} maximum */
+function boundedPositiveIntegerOrUnlimited(value, fallback, maximum) {
+  const parsed = positiveIntegerOrUnlimited(value, fallback)
+  if (parsed === null) return null
+  if (parsed > maximum) throw new Error(`配置值必须是 unlimited 或在 1..${maximum}：${value}`)
   return parsed
 }
 

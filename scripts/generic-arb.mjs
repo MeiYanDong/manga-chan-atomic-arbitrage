@@ -1539,6 +1539,10 @@ function genericWatchUsageStateFields(usage) {
   }
 }
 
+function displayCountLimit(value) {
+  return value === null ? 'UNLIMITED' : value
+}
+
 function currentGenericWatchUsageStateFields() {
   try {
     const arm = readJson(GENERIC_WATCH_ARM_PATH)
@@ -1707,7 +1711,7 @@ async function armGenericWatcher() {
       profitRetentionBps: RUNTIME_CONFIG.genericProfitRetentionBps,
       walletEthReserveWei: walletEthReserve.toString(),
       maxConfirmedExecutions: RUNTIME_CONFIG.genericWatchMaxExecutions,
-      maxAttempts: RUNTIME_CONFIG.maxAttempts,
+      maxAttempts: RUNTIME_CONFIG.genericWatchMaxAttempts,
       maxExactPreflights: RUNTIME_CONFIG.genericWatchMaxPreflights,
       maxFailedGasWei: RUNTIME_CONFIG.maxFailedGasWei.toString(),
       expiresAt: expiresAt.toISOString(),
@@ -1765,9 +1769,9 @@ async function armGenericWatcher() {
         principalCapUsdg: formatUnits(maxPrincipal, 6),
         minimumNetProfitUsdg: formatUnits(minimumNetProfit, 6),
         minimumScreenedNetProfitUsdg: formatUnits(minimumScreenedNetProfit, 6),
-        maxConfirmedExecutions: arm.maxConfirmedExecutions,
-        maxSignedAttempts: arm.maxAttempts,
-        maxExactPreflights: arm.maxExactPreflights,
+        maxConfirmedExecutions: displayCountLimit(arm.maxConfirmedExecutions),
+        maxSignedAttempts: displayCountLimit(arm.maxAttempts),
+        maxExactPreflights: displayCountLimit(arm.maxExactPreflights),
         maxFailedGasWei: arm.maxFailedGasWei,
         idleRpcBehavior: arm.idleRpcBehavior,
       }),
@@ -2175,9 +2179,9 @@ async function genericWatchStatus() {
         maxPrincipalUsdg: formatUnits(BigInt(arm.maxPrincipalUsdgWei), 6),
         minimumNetProfitUsdg: formatUnits(BigInt(arm.minimumNetProfitUsdgWei), 6),
         minimumScreenedNetProfitUsdg: formatUnits(BigInt(arm.minimumScreenedNetProfitUsdgWei), 6),
-        maxConfirmedExecutions: arm.maxConfirmedExecutions,
-        maxSignedAttempts: arm.maxAttempts,
-        maxExactPreflights: arm.maxExactPreflights,
+        maxConfirmedExecutions: displayCountLimit(arm.maxConfirmedExecutions),
+        maxSignedAttempts: displayCountLimit(arm.maxAttempts),
+        maxExactPreflights: displayCountLimit(arm.maxExactPreflights),
         maxFailedGasWei: arm.maxFailedGasWei,
       }
     } catch (error) {

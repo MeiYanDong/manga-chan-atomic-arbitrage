@@ -261,32 +261,42 @@ export function evaluateRawReplayDeadline(plan, observations) {
 }
 
 /**
- * @param {{maxConfirmedExecutions: number, maxAttempts: number, maxFailedGasWei: string | bigint, expiresAt: string}} arm
+ * @param {{maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, expiresAt: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, now?: number}} usage
  */
 export function evaluateArmBudget(arm, usage) {
   const now = usage.now ?? Date.now()
   if (!Number.isFinite(Date.parse(arm.expiresAt)) || now >= Date.parse(arm.expiresAt))
     return { allowed: false, reason: 'expired' }
-  if (usage.confirmedExecutions >= arm.maxConfirmedExecutions)
+  if (
+    arm.maxConfirmedExecutions !== null &&
+    (!Number.isSafeInteger(arm.maxConfirmedExecutions) || arm.maxConfirmedExecutions <= 0)
+  )
+    return { allowed: false, reason: 'invalid-confirmed-execution-limit' }
+  if (arm.maxAttempts !== null && (!Number.isSafeInteger(arm.maxAttempts) || arm.maxAttempts <= 0))
+    return { allowed: false, reason: 'invalid-attempt-limit' }
+  if (arm.maxConfirmedExecutions !== null && usage.confirmedExecutions >= arm.maxConfirmedExecutions)
     return { allowed: false, reason: 'confirmed-execution-limit' }
-  if (usage.attempts >= arm.maxAttempts) return { allowed: false, reason: 'attempt-limit' }
+  if (arm.maxAttempts !== null && usage.attempts >= arm.maxAttempts) return { allowed: false, reason: 'attempt-limit' }
   if (BigInt(usage.failedGasWei) >= BigInt(arm.maxFailedGasWei)) return { allowed: false, reason: 'failed-gas-limit' }
   return { allowed: true, reason: null }
 }
 
 /**
  * Paid exact preflights are a separately bounded resource from signed attempts.
- * @param {{maxConfirmedExecutions: number, maxAttempts: number, maxFailedGasWei: string | bigint, maxExactPreflights: number, expiresAt: string}} arm
+ * @param {{maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, maxExactPreflights: number | null, expiresAt: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, exactPreflights: number, now?: number}} usage
  */
 export function evaluateGenericArmBudget(arm, usage) {
   const transactionBudget = evaluateArmBudget(arm, usage)
   if (!transactionBudget.allowed) return transactionBudget
-  if (!Number.isSafeInteger(arm.maxExactPreflights) || arm.maxExactPreflights <= 0) {
+  if (
+    arm.maxExactPreflights !== null &&
+    (!Number.isSafeInteger(arm.maxExactPreflights) || arm.maxExactPreflights <= 0)
+  ) {
     return { allowed: false, reason: 'invalid-exact-preflight-limit' }
   }
-  if (usage.exactPreflights >= arm.maxExactPreflights) {
+  if (arm.maxExactPreflights !== null && usage.exactPreflights >= arm.maxExactPreflights) {
     return { allowed: false, reason: 'exact-preflight-limit' }
   }
   return { allowed: true, reason: null }
@@ -298,7 +308,7 @@ export function evaluateGenericArmBudget(arm, usage) {
  * as the attempt currently in flight instead of rejecting it as a new sixth
  * attempt. All other arm budgets remain unchanged.
  *
- * @param {{authorizationId?: string, maxConfirmedExecutions: number, maxAttempts: number, maxFailedGasWei: string | bigint, maxExactPreflights: number, expiresAt: string}} arm
+ * @param {{authorizationId?: string, maxConfirmedExecutions: number | null, maxAttempts: number | null, maxFailedGasWei: string | bigint, maxExactPreflights: number | null, expiresAt: string}} arm
  * @param {{confirmedExecutions: number, attempts: number, failedGasWei: string | bigint, exactPreflights: number, now?: number}} usage
  * @param {Array<Record<string, any>>} records
  * @param {{authorizationId: string, kind: string, intentId: string, planHash: string, hash: string, nonce: number | string}} currentSignedAttempt

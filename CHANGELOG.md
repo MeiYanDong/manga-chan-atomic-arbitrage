@@ -8,6 +8,9 @@
 - Raise only the signer-free board's cgroup headroom to `MemoryHigh=448M` and `MemoryMax=512M` after sustained live
   scanning at the prior pressure threshold starved its loopback snapshot API; signer limits and execution authority are
   unchanged.
+- Allow the generic watcher authorization to declare confirmed executions, signed attempts and exact preflights as
+  `unlimited`, while retaining expiry, failed-Gas, ETH-reserve, exact-profit, principal, nonce and unresolved-mutation
+  circuit breakers. Fixed-route watcher limits remain unchanged.
 
 ## 0.6.2 — 2026-09-07
 

@@ -229,6 +229,31 @@ test('generic arm independently bounds paid exact preflights', () => {
   )
 })
 
+test('generic arm can remove terminal count limits without removing economic circuit breakers', () => {
+  const arm = {
+    expiresAt: '2030-01-01T00:00:00.000Z',
+    maxConfirmedExecutions: null,
+    maxAttempts: null,
+    maxFailedGasWei: '1000',
+    maxExactPreflights: null,
+  }
+  const usage = {
+    confirmedExecutions: 1_000_000,
+    attempts: 1_000_000,
+    failedGasWei: 999n,
+    exactPreflights: 1_000_000,
+    now: Date.parse('2029-01-01T00:00:00Z'),
+  }
+  assert.equal(evaluateGenericArmBudget(arm, usage).allowed, true)
+  assert.equal(evaluateGenericArmBudget(arm, { ...usage, failedGasWei: 1000n }).reason, 'failed-gas-limit')
+  assert.equal(evaluateGenericArmBudget(arm, { ...usage, now: Date.parse('2030-01-01T00:00:00Z') }).reason, 'expired')
+  assert.equal(
+    evaluateGenericArmBudget({ ...arm, maxConfirmedExecutions: 0 }, usage).reason,
+    'invalid-confirmed-execution-limit',
+  )
+  assert.equal(evaluateGenericArmBudget({ ...arm, maxAttempts: 0 }, usage).reason, 'invalid-attempt-limit')
+})
+
 test('the exact fifth signed attempt can cross its broadcast boundary but cannot authorize a sixth', () => {
   const arm = {
     authorizationId: 'arm-1',
