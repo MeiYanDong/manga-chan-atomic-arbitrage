@@ -61,9 +61,9 @@ test('generic watch status projects canonical ledger usage over a stale runtime 
       maxPrincipalUsdgWei: '22040906',
       minimumNetProfitUsdgWei: '100000',
       minimumScreenedNetProfitUsdgWei: '100000',
-      maxConfirmedExecutions: 5,
-      maxAttempts: 5,
-      maxExactPreflights: 24,
+      maxConfirmedExecutions: null,
+      maxAttempts: null,
+      maxExactPreflights: null,
       maxFailedGasWei: '1000000000000000',
     }),
     { mode: 0o600 },
@@ -103,6 +103,9 @@ test('generic watch status projects canonical ledger usage over a stale runtime 
   assert.equal(output.runtime.completedExecutionsThisArm, 4)
   assert.equal(output.runtime.exactPreflightsThisArm, 10)
   assert.equal(output.runtime.signedAttemptsThisArm, 5)
+  assert.equal(output.authorization.maxConfirmedExecutions, 'UNLIMITED')
+  assert.equal(output.authorization.maxSignedAttempts, 'UNLIMITED')
+  assert.equal(output.authorization.maxExactPreflights, 'UNLIMITED')
 })
 
 test('generic watch status reports a corrupt authorization without crashing', (context) => {
