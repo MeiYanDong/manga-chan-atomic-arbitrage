@@ -187,9 +187,11 @@ immutable plan, raw-before-broadcast journal and UNKNOWN barrier. Disabled quote
 hooks remain shadow-only. Chain discovery reports completeness only from its configured start block; arbitrary earlier
 V4 history is not claimed as covered.
 
-The hot path uses bounded public-HTTP `eth_getLogs` ranges for PoolManager and previously quoted V3 pools. Events only
-choose what to requote; they never substitute a local price calculation for the fixed-block Quoter result. Runtime
-evidence is available at `/api/event-metrics` and `/api/chain-catalog` through the same loopback-only SSH tunnel.
+The hot path uses bounded public-HTTP `eth_getLogs` ranges for PoolManager and previously quoted V3 pools. Every event
+cycle advances at most one configured log range before it consumes the bounded quote backlog, preventing candidate work
+from freezing the chain cursor without increasing the four-candidate quote cap. Events only choose what to requote;
+they never substitute a local price calculation for the fixed-block Quoter result. Runtime evidence is available at
+`/api/event-metrics` and `/api/chain-catalog` through the same loopback-only SSH tunnel.
 
 The private source-aware console and read-only API are served on the same loopback listener. The Radar list uses a
 lightweight summary projection and loads full claim evidence only when a row is opened:

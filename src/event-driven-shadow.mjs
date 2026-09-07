@@ -228,6 +228,35 @@ export class CandidateWakeQueue {
   }
 }
 
+/**
+ * Advance the bounded hot-log poll before consuming an existing quote backlog.
+ * The poll may coalesce fresher revisions into the queue or consume a bounded
+ * wake itself. A transient poll failure must not prevent already-observed
+ * candidates from making progress.
+ *
+ * The queue is resolved after the poll because a reorg may replace it.
+ *
+ * @param {{poll: () => Promise<Record<string, any>>, getQueue: () => CandidateWakeQueue, limit: number}} options
+ */
+export async function pollBeforeDrainingWakeQueue(options) {
+  let pollResult = null
+  let pollError = null
+  try {
+    pollResult = await options.poll()
+  } catch (error) {
+    pollError = error
+  }
+
+  const queue = options.getQueue()
+  const polledWake = Array.isArray(pollResult?.candidateIds) && pollResult.candidateIds.length > 0
+  const wake = polledWake
+    ? pollResult
+    : queue.size > 0
+      ? { ...queue.take(options.limit), catalogRefresh: false, initialized: false }
+      : null
+  return { pollResult, pollError, wake }
+}
+
 /** @param {Map<string, Set<string>>} map @param {string} key @param {string} candidateId */
 function addDependency(map, key, candidateId) {
   const canonicalKey = key.toLowerCase()

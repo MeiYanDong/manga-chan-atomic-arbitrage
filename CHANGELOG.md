@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.6.2 — 2026-09-07
+
+- Advance one bounded hot-log range before consuming an existing candidate backlog, so quote work cannot starve the
+  PoolManager/V3 event cursor.
+- Preserve the four-candidate quote cap: a successful poll may coalesce newer revisions into the queue, while a failed
+  public-RPC poll records the error but still permits already-observed candidates to progress.
+- Resolve the active wake queue only after polling, so a canonical reorg rewind cannot leak stale pre-reorg wakes.
+- Keep the release signer-free: executor bytecode, watcher authorization, wallet state and broadcast paths are unchanged.
+
 ## 0.6.1 — 2026-09-07
 
 - Reject the v0.6.0 production canary after its first source projection reached the 256 MiB cgroup ceiling; roll back
