@@ -129,10 +129,9 @@ Acceptance:
 - live promotion requires a commit-addressed release, deployment receipt, runtime verification, arm readback and active
   service readback.
 
-Status: accepted for the bounded live canary. Linux CI passed, a commit-addressed release was installed, and deployment
-and arm readback passed. The first arm later produced four confirmed executions before stopping on the signed-attempt
-lifecycle defect covered by S13. The signer remains stopped pending reconciliation, repaired promotion and fresh human
-authorization.
+Status: accepted for live operation. The first arm exposed the signed-attempt lifecycle defect covered by S13; after
+two-reader recovery and repair, later bounded arms resumed canonical execution. The current schema-v2 rolling arm passed
+protected-branch CI, commit-addressed Linux installation, clean cutover and active-service readback.
 
 ## S13 — Signed-attempt lifecycle repair
 
@@ -149,9 +148,8 @@ Acceptance:
   heads are past its deadline; the expired raw can never enter the replay path.
 
 Status: implementation, regression tests, protected-branch CI, commit-addressed server promotion and two-reader stale
-raw reconciliation are complete. The watcher remains disabled because the old arm is exhausted and the configured
-execution RPC exhausted its monthly quota. Provider credential rotation, a working execution RPC and a fresh human
-authorization remain required before the watcher can resume.
+raw reconciliation are complete. A working strategy-owned execution RPC and fresh authorization later restored the
+watcher; eight canonical executions are now recorded in the deployment ledger.
 
 ## S14 — Economic opportunity episodes
 
@@ -224,4 +222,6 @@ Acceptance:
 - production promotion requires protected-branch CI, a clean controlled re-arm and readback of the new schema, lease,
   process, nonce, balance and unresolved-mutation state.
 
-Status: implemented and locally verified; protected-branch CI and production promotion are pending.
+Status: implemented, passed protected-branch and Linux installer gates, and promoted through a clean schema-v1 disarm to
+schema-v2 re-arm. Production readback proved the exact release, active process, rolling policy, zero new-arm failed Gas
+and no unresolved mutation. The first real lease renewal is not yet observed.
