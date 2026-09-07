@@ -51,3 +51,15 @@ Acceptance:
 - the new readback shows `RUNNING`, `UNTIL_REVOKED`, no expiry, 100 USDG hard cap, current realized principal, clean
   nonce and zero new-arm failed Gas; and
 - the compact loopback endpoint is measurably smaller and responds successfully after the board restart.
+
+## Story 5: explicit provider-outage fallback
+
+As the operator, I can keep the already-authorized lane available when the managed RPC is suspended, without silently
+weakening transport policy.
+
+Acceptance:
+
+- the official public RPC remains rejected unless `MANGA_ALLOW_PUBLIC_EXECUTION_RPC=1` is explicit;
+- the public endpoint passes chain, code, token, nonce, balance and exact-simulation checks before signing;
+- idle discovery consumes only the local persisted feed; and
+- missing independent receipt evidence remains `UNKNOWN` and blocks the next nonce.

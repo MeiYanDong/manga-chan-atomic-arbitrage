@@ -106,8 +106,8 @@ into an already-pending candidate; a poll failure is retained as source-health e
 may still be quoted. The quote batch limit is unchanged, and a reorg replaces the wake queue before any fallback drain.
 Events are wake evidence only: the local post-event mirror is never used as executable output. A low-frequency round-robin
 reconciliation remains necessary because the V3 event set contains previously quoted routes rather than every route that
-could become best. Only a new eligible board candidate escalates to the strategy-owned HTTP RPC for exact simulation,
-Gas, signing, broadcast and receipt convergence. This bounds paid-RPC use without making the rate-limited public endpoint
+could become best. Only a new eligible board candidate escalates to the explicitly configured execution RPC for exact
+simulation, Gas, signing, broadcast and receipt convergence. This bounds provider use without making a rate-limited public endpoint
 a live signing dependency.
 
 The fixed-route watcher subscribes only to:

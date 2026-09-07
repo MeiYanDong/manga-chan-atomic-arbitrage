@@ -182,6 +182,9 @@ function numberValue(value, fallback) {
 
 function loadConfig() {
   const runDir = path.resolve(process.env.MANGA_BOARD_RUN_DIR || path.join(ROOT, 'runs', 'opportunity-board'))
+  const executionSnapshotPath = path.resolve(
+    process.env.MANGA_BOARD_EXECUTION_SNAPSHOT || path.join(runDir, 'execution-snapshot.json'),
+  )
   const host = process.env.MANGA_BOARD_HOST || '127.0.0.1'
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('opportunity board must bind to loopback')
   const amountGrid = parseUsdgAmountGrid(process.env.MANGA_BOARD_AMOUNT_GRID_USDG, DEFAULT_AMOUNT_GRID_USDG)
@@ -196,6 +199,7 @@ function loadConfig() {
     rpcUrl: process.env.MANGA_BOARD_RPC_URL || null,
     providerLabel: process.env.MANGA_BOARD_PROVIDER_LABEL || 'read-only-provider',
     runDir,
+    executionSnapshotPath,
     host,
     port: integer(process.env.MANGA_BOARD_PORT, 8_788),
     readModel,
@@ -361,7 +365,7 @@ class OpportunityBoard {
     this.config = config
     this.startedAt = new Date().toISOString()
     this.snapshotPath = path.join(config.runDir, 'snapshot.json')
-    this.executionSnapshotPath = path.join(config.runDir, 'execution-snapshot.json')
+    this.executionSnapshotPath = config.executionSnapshotPath
     this.eventsPath = path.join(config.runDir, 'events.jsonl')
     this.statePath = path.join(config.runDir, 'state.json')
     this.chainCatalogPath = path.join(config.runDir, 'chain-catalog.json')

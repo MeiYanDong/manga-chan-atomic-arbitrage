@@ -10,6 +10,7 @@ const CONFIG_KEYS = new Set([
   'MANGA_PRIVATE_KEY_FILE',
   'MANGA_RUN_DIR',
   'MANGA_ALLOW_POLLING_ONLY',
+  'MANGA_ALLOW_PUBLIC_EXECUTION_RPC',
   'MANGA_FINALITY_CONFIRMATIONS',
   'MANGA_MAX_ATTEMPTS',
   'MANGA_MAX_FAILED_GAS_WEI',
@@ -79,6 +80,7 @@ export function loadRuntimeConfig(environment = process.env) {
     privateKeyFile: value('MANGA_PRIVATE_KEY_FILE'),
     runDir: value('MANGA_RUN_DIR'),
     allowPollingOnly: value('MANGA_ALLOW_POLLING_ONLY') === '1',
+    allowPublicExecutionRpc: strictBoolean(value('MANGA_ALLOW_PUBLIC_EXECUTION_RPC'), false),
     finalityConfirmations: positiveInteger(value('MANGA_FINALITY_CONFIRMATIONS'), 3),
     maxAttempts,
     maxFailedGasWei: nonNegativeBigInt(value('MANGA_MAX_FAILED_GAS_WEI'), 1_000_000_000_000_000n),
@@ -175,7 +177,8 @@ function strictBoolean(value, fallback) {
 }
 
 /**
- * Live signing must not silently fall back to a public endpoint.
+ * Live signing must not silently fall back to a public endpoint. The explicit
+ * exception exists for a reviewed outage response and remains off by default.
  * @param {ReturnType<typeof loadRuntimeConfig>} config
  * @param {{ requireWss?: boolean }} [options]
  */
@@ -187,7 +190,7 @@ export function assertLiveTransport(config, { requireWss = false } = {}) {
   } catch {
     throw new Error('MANGA_RPC_URL 不是有效 URL')
   }
-  if (rpc.hostname === 'rpc.mainnet.chain.robinhood.com') {
+  if (rpc.hostname === 'rpc.mainnet.chain.robinhood.com' && !config.allowPublicExecutionRpc) {
     throw new Error('官方公共 RPC 仅允许只读观察板使用；实盘精确模拟与广播必须使用策略专用 RPC')
   }
   if (requireWss && !config.wsUrl && !config.allowPollingOnly) {

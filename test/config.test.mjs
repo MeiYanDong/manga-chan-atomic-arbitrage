@@ -14,6 +14,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
     [
       'MANGA_RPC_URL=https://primary.invalid',
       'MANGA_WS_URL=wss://primary.invalid',
+      'MANGA_ALLOW_PUBLIC_EXECUTION_RPC=0',
       'RH_RPC_URL=https://must-not-be-read.invalid',
       'MANGA_MAX_ATTEMPTS=3',
       'MANGA_GENERIC_BOARD_URL=http://127.0.0.1:8788/api/snapshot',
@@ -36,6 +37,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   const config = loadRuntimeConfig({ MANGA_CONFIG_FILE: file })
   assert.equal(config.rpcUrl, 'https://primary.invalid')
   assert.equal(config.wsUrl, 'wss://primary.invalid')
+  assert.equal(config.allowPublicExecutionRpc, false)
   assert.equal(config.maxAttempts, 3)
   assert.equal(config.genericMinNetUsdg, '0.2')
   assert.equal(config.genericProfitRetentionBps, 9_400)
@@ -67,6 +69,14 @@ test('live watch refuses public fallback and silent polling-only mode', () => {
       }),
     /公共 RPC.*只读观察板/,
   )
+  assert.doesNotThrow(() =>
+    assertLiveTransport({
+      ...missing,
+      rpcUrl: 'https://rpc.mainnet.chain.robinhood.com',
+      allowPublicExecutionRpc: true,
+    }),
+  )
+  assert.throws(() => loadRuntimeConfig({ MANGA_ALLOW_PUBLIC_EXECUTION_RPC: 'yes' }), /0 或 1/)
 })
 
 test('generic exact-preflight candidate count is bounded at configuration load', () => {

@@ -4,7 +4,8 @@
 
 1. Check out the exact release commit and run `npm ci --no-audit --no-fund` followed by `npm run check`. CI must execute `systemd-analyze verify` on the supplied service units; local macOS checks explicitly report that this Linux-only gate was skipped.
 2. Confirm the release source hash matches `deployments/robinhood-mainnet.json`.
-3. Provision a strategy-owned managed HTTP endpoint and WSS endpoint. Do not reuse another strategy's configuration file.
+3. Normally provision a strategy-owned managed HTTP endpoint and WSS endpoint. The documented explicit public fallback
+   is degraded outage operation, not equivalent provider quality. Do not reuse another strategy's configuration file.
 4. Configure an independent HTTP reader when available. The two URLs must not alias one another.
 5. Create the signer as a host-bound encrypted systemd credential. Stream the key over the encrypted administration channel into `systemd-creds`; never place it in argv, an environment variable or an intermediate plaintext file:
 
@@ -157,9 +158,12 @@ RPC role or runtime directory. The signing command requests the compact executio
 same `MANGA_RUN_DIR` as the fixed signer lane so both generations share
 `wallet.lock`, `audit.jsonl` and the unresolved-mutation barrier.
 
-The board may use the official public RPC. `/etc/manga-chan-arbitrage/live.env` must instead contain a strategy-owned
-execution HTTP RPC; live commands reject the official public endpoint. The generic watcher has no idle WSS or HTTP chain
-poll. It touches the execution RPC only after a new local-board candidate clears the arm's pre-RPC gate.
+The board may use the official public RPC. `/etc/manga-chan-arbitrage/live.env` should normally contain a strategy-owned
+execution HTTP RPC; live commands reject the official public endpoint by default. During a reviewed managed-provider
+outage, `MANGA_ALLOW_PUBLIC_EXECUTION_RPC=1` explicitly admits Robinhood's official endpoint. Robinhood documents that
+endpoint as rate-limited and not production-grade, so retain the outage decision and restore a verified managed provider
+when available. The generic watcher has no idle WSS or HTTP chain poll. It touches the execution RPC only after a new
+local-board candidate clears the arm's pre-RPC gate.
 
 Before any generic deployment:
 
@@ -248,11 +252,12 @@ no-expiry arm is liveness/authority evidence, not profit evidence; only confirme
 and compoundable principal.
 
 The supplied Linux units avoid the board's single HTTP event loop on this path. The board atomically replaces
-`/var/lib/manga-opportunity-board/execution-snapshot.json` with mode `0640`; the signer account receives read-only
-membership in `manga-board`, while the board receives no access to `/var/lib/manga-chan-arbitrage` or the signing
-credential. The watcher caches an unchanged file generation, rejects symlinks and group/world-writable files, enforces a
-16 MiB input limit, then applies the same board identity, freshness, route and exact-preflight gates. Loopback HTTP
-remains the development fallback when `MANGA_GENERIC_BOARD_SNAPSHOT` is unset.
+`/run/manga-opportunity-board-feed/execution-snapshot.json` with mode `0640` inside a dedicated mode-`0750` runtime
+directory; the signer account receives read-only membership in `manga-board`, while the board's SQLite directory stays
+mode `0700` and the board receives no access to `/var/lib/manga-chan-arbitrage` or the signing credential. The watcher
+caches an unchanged file generation, rejects symlinks and group/world-writable files, enforces a 16 MiB input limit,
+then applies the same board identity, freshness, route and exact-preflight gates. Loopback HTTP remains the development
+fallback when `MANGA_GENERIC_BOARD_SNAPSHOT` is unset.
 
 Disarm writes `generic-watch-revocation.json` before changing the arm or signalling the process. The marker is scoped to
 that authorization ID and remains authoritative if a concurrent stale write temporarily restores `ARMED`; creating a

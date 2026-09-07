@@ -9,6 +9,8 @@
   bounded backoff. Dashboard clients keep the complete snapshot, and execution-RPC failures retain their finite halt.
 - Persist the compact signer projection atomically and let the Linux watcher read it through a read-only Unix group,
   decoupling candidate consumption from the board scanner's single HTTP event loop without sharing signer state.
+- Keep that signer projection in a dedicated mode-0750 runtime directory so the board's private SQLite directory can
+  remain mode 0700. Add an explicit, default-off public execution-RPC exception for reviewed provider outages.
 - Add opt-in rolling leases for the autonomous generic watcher. Renewal runs inside the existing Linux process, keeps
   one authorization ID so failed Gas and all usage remain cumulative, revalidates deployment/balance/nonce/reserve
   invariants, retries transient provider failures and cannot revive an expired lease.
