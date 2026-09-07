@@ -206,5 +206,6 @@ Acceptance:
 - a reorg-created replacement queue cannot leak stale pre-reorg wakes through the fallback drain;
 - production readback shows both `lastPollAt` and the hot cursor advancing while `pendingCandidates` remains nonzero.
 
-Status: implemented and deterministically tested in v0.6.2; Linux artifact and signer-free production readback remain
-promotion gates.
+Status: accepted for the v0.6.2 signer-free production board. Five consecutive bounded polls advanced exactly 2,000
+blocks each while approximately 248 candidates remained queued. Historical catch-up and steady-state latency remain
+open operational evidence, not completed acceptance claims.
