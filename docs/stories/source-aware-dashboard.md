@@ -42,9 +42,11 @@ Acceptance:
 
 Acceptance:
 
-- SQLite materializes current query state while JSONL retains append-only evidence;
+- SQLite materializes bounded current query state while JSONL retains append-only material evidence and compact
+  integrity checkpoints;
 - ingestion is idempotent by chain/event or response identity;
-- a restart reconstructs the same projection from evidence;
+- a restart reconstructs the same projection from the atomic current checkpoint plus evidence, and incrementally
+  replays only JSONL bytes not committed to SQLite;
 - migration runs dual-read parity checks against the current atomic JSON snapshot;
 - rollback does not delete the new ledger or alter signer state.
 

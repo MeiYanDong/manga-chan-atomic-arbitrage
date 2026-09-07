@@ -97,3 +97,6 @@ The page architecture, field contract and story-level acceptance criteria are sp
 - Existing `catalogSources`, `apiCanonicalClaim` and footer-only source copy remain legacy discovery semantics. The
   schema-v4 projection is additive; removing those fields requires a later breaking release.
 - This ADR changes no signer, service, RPC credential, production database, contract or wallet state.
+
+ADR 0010 preserves these attribution rules while bounding PoolManager retention and separating current projections
+from append-only material evidence after the v0.6.0 production canary was rejected.

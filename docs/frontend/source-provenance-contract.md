@@ -1,6 +1,6 @@
 # Source provenance contract v1
 
-- Contract status: implemented and integrated into the v0.6.0 board read model; production promotion pending
+- Contract status: implemented in the v0.6.1 board read model; production promotion pending
 - Compatibility goal: additive migration from the current opportunity-board schema
 - Unknown-value rule: absent evidence is `null`/`UNKNOWN`, never a fabricated default
 
@@ -25,6 +25,10 @@ Every material claim references at least one immutable evidence envelope:
 
 `observedAt` describes the read. `blockNumber` and `blockHash` describe the chain fact. A source response that lacks a
 block anchor cannot be upgraded into fixed-block quote evidence.
+
+The bounded current projection may carry only `evidenceId` beside a compact source fact. The complete immutable
+envelope remains in the append-only ledger; omitting its duplicate payload from current state does not weaken or
+upgrade the claim.
 
 ## Opportunity projection
 

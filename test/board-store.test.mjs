@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 import { BoardStore } from '../src/board-store.mjs'
 import { stablePayloadHash } from '../src/source-provenance.mjs'
@@ -72,18 +73,98 @@ test('content-addressed ingestion is idempotent', () => {
   store.close()
 })
 
-test('restart rebuilds the same SQLite projection from JSONL evidence', () => {
+test('an existing v1 database adopts its already-committed ledger tail without a full replay', () => {
   const runDir = temporaryRunDir()
   const store = new BoardStore({ runDir })
+  store.persistProjection({ snapshot: snapshot(), sourceCatalog: sourceCatalog() })
+  store.close()
+  const sqlitePath = path.join(runDir, 'board.sqlite')
+  const database = new DatabaseSync(sqlitePath)
+  database.prepare("DELETE FROM meta WHERE key = 'evidence_ledger_offset'").run()
+  database.close()
+
+  const reopened = new BoardStore({ runDir })
+  assert.equal(reopened.health().evidenceLedgerOffset, fs.statSync(path.join(runDir, 'evidence.jsonl')).size)
+  reopened.close()
+})
+
+test('restart rebuilds the same SQLite projection from atomic checkpoints and JSONL evidence', () => {
+  const runDir = temporaryRunDir()
+  const legacySnapshotPath = path.join(runDir, 'snapshot.json')
+  const sourceCatalogPath = path.join(runDir, 'source-catalog.json')
+  const store = new BoardStore({ runDir, legacySnapshotPath, sourceCatalogPath })
   const expected = snapshot()
-  store.persistProjection({ snapshot: expected, sourceCatalog: sourceCatalog() })
+  const expectedSource = sourceCatalog()
+  fs.writeFileSync(legacySnapshotPath, JSON.stringify(expected), { mode: 0o600 })
+  fs.writeFileSync(sourceCatalogPath, JSON.stringify(expectedSource), { mode: 0o600 })
+  store.persistProjection({ snapshot: expected, sourceCatalog: expectedSource })
   store.close()
   fs.rmSync(path.join(runDir, 'board.sqlite'))
 
-  const replayed = new BoardStore({ runDir })
+  const replayed = new BoardStore({ runDir, legacySnapshotPath, sourceCatalogPath })
   assert.equal(stablePayloadHash(replayed.readCurrentSnapshot()), stablePayloadHash(expected))
   assert.equal(replayed.listOpportunities()[0].symbol, 'TEST')
   replayed.close()
+})
+
+test('routine negative scans update current state without duplicating full projections in the ledger', () => {
+  const runDir = temporaryRunDir()
+  const store = new BoardStore({ runDir })
+  const first = snapshot()
+  first.items = Array.from({ length: 100 }, (_, index) => ({
+    id: `candidate:${index}`,
+    symbol: `TOKEN${index}`,
+    status: 'NO_EDGE',
+    economicEpisode: { episodeId: `episode:${index}`, state: 'CLOSED' },
+  }))
+  const firstSource = sourceCatalog()
+  firstSource.pairListings = Array.from({ length: 1_000 }, (_, index) => ({
+    targetAddress: `candidate:${index}`,
+    symbol: `TOKEN${index}`,
+  }))
+  store.persistProjection({ snapshot: first, sourceCatalog: firstSource })
+  const second = { ...first, generatedAt: '2026-09-07T01:01:00.000Z' }
+  const secondSource = { ...firstSource, generatedAt: second.generatedAt }
+  store.persistProjection({ snapshot: second, sourceCatalog: secondSource })
+
+  const ledger = fs.readFileSync(path.join(runDir, 'evidence.jsonl'), 'utf8')
+  const records = ledger
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  assert.equal(records.filter((record) => record.kind === 'BOARD_CHECKPOINT').length, 2)
+  assert.equal(
+    records.some((record) => record.kind === 'OPPORTUNITY_PROJECTION'),
+    false,
+  )
+  assert.equal(
+    records.some((record) => record.kind === 'SOURCE_CATALOG_PROJECTION'),
+    false,
+  )
+  assert.equal(store.listOpportunities().length, 100)
+  assert.equal(store.readSourceCatalog().pairListings.length, 1_000)
+  assert.ok(Buffer.byteLength(ledger) < 10_000)
+  assert.equal(store.health().projectionStorage, 'BOUNDED_SINGLETON_CURRENT_STATE')
+  store.close()
+})
+
+test('positive proxy observations remain in append-only material evidence', () => {
+  const runDir = temporaryRunDir()
+  const store = new BoardStore({ runDir })
+  const positive = snapshot()
+  positive.items[0].status = 'SCREENED_NET_POSITIVE'
+  store.persistProjection({
+    snapshot: positive,
+    sourceCatalog: sourceCatalog(),
+    events: [{ type: 'SCREENED_POSITIVE_ENTERED', at: positive.generatedAt, id: positive.items[0].id }],
+  })
+  const records = fs
+    .readFileSync(path.join(runDir, 'evidence.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  assert.equal(records.filter((record) => record.kind === 'OPPORTUNITY_OBSERVATION').length, 1)
+  store.close()
 })
 
 test('an evidence id collision fails closed without replacing the original payload', () => {

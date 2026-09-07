@@ -13,6 +13,7 @@ const emptyData = {
   overview: null,
   opportunities: [],
   sources: [],
+  sourceSummary: null,
   episodes: [],
   executions: [],
   system: null,
@@ -49,6 +50,7 @@ function useConsoleData() {
             overview,
             opportunities: opportunities.items || [],
             sources: sources.items || [],
+            sourceSummary: sources.summary || null,
             episodes: episodes.items || [],
             executions: executions.items || [],
             system,
@@ -422,7 +424,7 @@ function RadarPage({ opportunities, onOpen }) {
   )
 }
 
-function SourcesPage({ sources }) {
+function SourcesPage({ sources, summary }) {
   return (
     <div className="page-stack">
       <section className="page-title">
@@ -430,6 +432,20 @@ function SourcesPage({ sources }) {
         <h1>Independent source adapters</h1>
         <p>一个适配器的 complete 不会提升另一个适配器；链扫描只承诺 configured start 之后的范围。</p>
       </section>
+      <div className="ops-grid">
+        <Metric label="PAIR LISTINGS" value={summary?.pairListings ?? 'UNKNOWN'} note="listing evidence only" />
+        <Metric label="LONG ROUTES" value={summary?.longLaunches ?? 'UNKNOWN'} note="registered entry events" />
+        <Metric
+          label="DOPPLER TARGETS"
+          value={summary?.dopplerTargetsDiscovered ?? 'UNKNOWN'}
+          note={`${summary?.dopplerLaunches ?? 'UNKNOWN'} visible: PAIR, LONG, multi-pool or pending scan`}
+        />
+        <Metric
+          label="TARGET POOLS"
+          value={summary?.genericPools ?? 'UNKNOWN'}
+          note={summary?.poolRetention?.policy || 'retention policy unavailable'}
+        />
+      </div>
       <div className="source-grid">
         {sources.map((source) => (
           <article className="source-module" key={source.adapterId}>
@@ -778,8 +794,9 @@ export default function App() {
   }, [])
   let content
   if (page === 'radar') content = <RadarPage opportunities={state.data.opportunities} onOpen={openOpportunity} />
-  else if (page === 'sources') content = <SourcesPage sources={state.data.sources} />
-  else if (page === 'episodes') content = <EpisodesPage episodes={state.data.episodes} />
+  else if (page === 'sources') {
+    content = <SourcesPage sources={state.data.sources} summary={state.data.sourceSummary} />
+  } else if (page === 'episodes') content = <EpisodesPage episodes={state.data.episodes} />
   else if (page === 'execution') content = <ExecutionPage executions={state.data.executions} />
   else if (page === 'system') content = <SystemPage system={state.data.system} overview={state.data.overview} />
   else content = <OverviewPage data={state.data} onOpenOpportunity={openOpportunity} />

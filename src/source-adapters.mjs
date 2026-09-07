@@ -73,9 +73,22 @@ export const SOURCE_ADAPTER_MANIFESTS = Object.freeze([
     }),
   }),
   Object.freeze({
+    adapterId: 'pair.chain-catalog.v1',
+    label: 'PAIR chain catalog',
+    claimScope: 'PAIR_HOOK_POOL_INITIALIZE_FACTS_ONLY',
+    capabilities: Object.freeze({
+      transport: 'implemented',
+      discovery: 'implemented',
+      identity: 'implemented',
+      quote: 'unsupported',
+      replay: 'implemented',
+      ...unsupportedExecution,
+    }),
+  }),
+  Object.freeze({
     adapterId: 'uniswap-v4.pool-manager.v1',
     label: 'Uniswap v4 PoolManager',
-    claimScope: 'POOL_INITIALIZE_AND_SWAP_FACTS',
+    claimScope: 'SOURCE_TARGET_POOL_INITIALIZE_AND_SWAP_FACTS',
     capabilities: Object.freeze({
       transport: 'implemented',
       discovery: 'implemented',
@@ -365,6 +378,165 @@ export function mergeSourceFacts(existing, discovered, key) {
     if (blockOrder !== 0n) return blockOrder < 0n ? -1 : 1
     return Number(left.logIndex || 0) - Number(right.logIndex || 0)
   })
+}
+
+function addSourceTarget(output, value) {
+  if (!value) return
+  try {
+    const normalized = getAddress(value)
+    if (normalized !== '0x0000000000000000000000000000000000000000') output.add(normalized.toLowerCase())
+  } catch {
+    // Invalid source facts are ignored here and remain visible to their owning adapter as decode errors.
+  }
+}
+
+export function sourceTargetAddresses({
+  pairListings = [],
+  longLaunches = [],
+  dopplerLaunches = [],
+  dopplerTargetIndex = [],
+} = {}) {
+  const output = new Set()
+  for (const listing of pairListings) addSourceTarget(output, listing.targetAddress)
+  for (const launch of longLaunches) addSourceTarget(output, launch.asset)
+  for (const launch of dopplerLaunches) addSourceTarget(output, launch.asset)
+  for (const target of dopplerTargetIndex) addSourceTarget(output, target.asset || target)
+  return output
+}
+
+export function retainPoolsForSourceTargets(pools, targetAddresses) {
+  const targets = new Set()
+  for (const value of targetAddresses || []) addSourceTarget(targets, value)
+  return (pools || []).filter((pool) => {
+    const currency0 = String(pool?.currency0 || '').toLowerCase()
+    const currency1 = String(pool?.currency1 || '').toLowerCase()
+    return targets.has(currency0) || targets.has(currency1)
+  })
+}
+
+export function sourceFactEvidenceId(fact) {
+  return fact?.evidenceId || fact?.evidence?.evidenceId || null
+}
+
+export function compactSourceFact(fact) {
+  if (!fact || typeof fact !== 'object') return fact
+  const evidenceId = sourceFactEvidenceId(fact)
+  const payload = { ...fact }
+  delete payload.evidence
+  return evidenceId ? { ...payload, evidenceId } : payload
+}
+
+export function dopplerTargetFact(fact) {
+  const compact = compactSourceFact(fact)
+  return {
+    asset: compact.asset,
+    numeraire: compact.numeraire || null,
+    blockNumber: compact.blockNumber,
+    evidenceId: compact.evidenceId || null,
+  }
+}
+
+export function mergeDopplerTargetFacts(existing, discovered) {
+  const output = new Map()
+  for (const facts of [existing || [], discovered || []]) {
+    for (const fact of facts) {
+      const compact = dopplerTargetFact(fact)
+      if (!compact.asset) continue
+      const key = getAddress(compact.asset).toLowerCase()
+      const previous = output.get(key)
+      if (!previous || BigInt(compact.blockNumber) < BigInt(previous.blockNumber)) output.set(key, compact)
+    }
+  }
+  return [...output.values()].sort((left, right) => {
+    const blockOrder = BigInt(left.blockNumber) - BigInt(right.blockNumber)
+    if (blockOrder !== 0n) return blockOrder < 0n ? -1 : 1
+    return left.asset.toLowerCase().localeCompare(right.asset.toLowerCase())
+  })
+}
+
+export function selectVisibleDopplerLaunches({
+  dopplerTargetIndex = [],
+  pools = [],
+  pairListings = [],
+  longLaunches = [],
+  poolCursor,
+}) {
+  const indexAssets = new Set(dopplerTargetIndex.map((target) => target.asset.toLowerCase()))
+  const poolCounts = new Map()
+  for (const pool of pools) {
+    for (const currency of [pool.currency0, pool.currency1]) {
+      const key = String(currency || '').toLowerCase()
+      if (indexAssets.has(key)) poolCounts.set(key, Number(poolCounts.get(key) || 0) + 1)
+    }
+  }
+  const explicitlyVisible = sourceTargetAddresses({ pairListings, longLaunches })
+  const nextPoolBlock = BigInt(poolCursor)
+  return dopplerTargetIndex
+    .filter((target) => {
+      const key = target.asset.toLowerCase()
+      const pendingPoolScan = BigInt(target.blockNumber) >= nextPoolBlock
+      return explicitlyVisible.has(key) || Number(poolCounts.get(key) || 0) >= 2 || pendingPoolScan
+    })
+    .map((target) => ({
+      adapterId: 'doppler.registry.v1',
+      protocolId: ProtocolId.DOPPLER,
+      attributionStatus: 'CHAIN_ATTESTED',
+      asset: target.asset,
+      numeraire: target.numeraire,
+      blockNumber: target.blockNumber,
+      evidenceId: target.evidenceId,
+    }))
+}
+
+export function boundSourceCatalogPools(sourceCatalog, { observedAt = new Date().toISOString() } = {}) {
+  const pools = Array.isArray(sourceCatalog?.pools) ? sourceCatalog.pools : []
+  const targets = sourceTargetAddresses({
+    pairListings: sourceCatalog?.pairListings,
+    longLaunches: sourceCatalog?.longLaunches,
+    dopplerLaunches: sourceCatalog?.dopplerLaunches,
+    dopplerTargetIndex: sourceCatalog?.dopplerTargetIndex,
+  })
+  const retainedPools = retainPoolsForSourceTargets(pools, targets)
+  const retention = {
+    policy: 'SOURCE_TARGET_CURRENCY_ONLY',
+    sourceTargets: targets.size,
+    loadedPools: pools.length,
+    retainedPools: retainedPools.length,
+    prunedPools: pools.length - retainedPools.length,
+    reason: 'STARTUP_MIGRATION',
+  }
+  if (retainedPools.length === pools.length) return { sourceCatalog: sourceCatalog || {}, retention, changed: false }
+  return {
+    sourceCatalog: {
+      ...sourceCatalog,
+      generatedAt: observedAt,
+      summary: {
+        ...(sourceCatalog?.summary || {}),
+        genericPools: retainedPools.length,
+        poolRetention: retention,
+      },
+      pools: retainedPools,
+    },
+    retention,
+    changed: true,
+  }
+}
+
+export function planSourceTargetPoolRange({ cursor, longCursor, dopplerCursor, safeHead, blockRange }) {
+  const fromBlock = BigInt(cursor)
+  const range = BigInt(blockRange)
+  if (range <= 0n) throw new Error('source target pool blockRange must be positive')
+  const launchCoverageCursor = BigInt(longCursor) < BigInt(dopplerCursor) ? BigInt(longCursor) : BigInt(dopplerCursor)
+  const launchCoveredThrough = launchCoverageCursor - 1n
+  const requestedSafeHead = BigInt(safeHead)
+  const poolSafeHead = launchCoveredThrough < requestedSafeHead ? launchCoveredThrough : requestedSafeHead
+  if (fromBlock > poolSafeHead) return null
+  const maximumTo = fromBlock + range - 1n
+  return {
+    fromBlock,
+    toBlock: maximumTo < poolSafeHead ? maximumTo : poolSafeHead,
+    poolSafeHead,
+  }
 }
 
 export function sourceFactsByAsset({ longLaunches = [], dopplerLaunches = [], pools = [] }) {
