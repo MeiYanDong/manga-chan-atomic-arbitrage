@@ -16,6 +16,8 @@
   deleting or rewriting historical evidence.
 - Set the board-only memory pressure boundary to 320 MiB and its hard cgroup ceiling to 384 MiB after a migration test;
   signer services remain disabled and isolated.
+- Promote the commit-addressed artifact after Linux migration, bounded-growth, public-RPC, desktop/mobile UI and
+  signer-non-mutation gates; backfill NINECAT as LONG route / Doppler / Uniswap v4 without PAIR attribution.
 
 ## 0.6.0 — 2026-09-07
 

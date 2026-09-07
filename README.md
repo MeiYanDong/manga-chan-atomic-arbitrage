@@ -58,13 +58,13 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   exhausted execution RPC is replaced, the previously exposed endpoint credential is rotated and a fresh bounded
   authorization is explicitly approved.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free event board is deployed from release `ea1374841ce5a35757786c33f7e06d19b5b9905e` (`v0.5.4`). Production
-  readback exercised its one-time fallback from malformed public-RPC batches to bounded individual requests, retained
-  HTTP 200 health, proved a mandatory reconciliation/backfill cycle under continuous event traffic and normalized all
-  persisted execution-evidence labels. Backfill completeness, steady-state latency, opportunity frequency and race
-  outcomes remain unproven.
-- The source-aware v0.6.0 console is implemented and locally validated but is not included in that v0.5.4 deployment.
-  Until a current host readback records otherwise, its production status is pending.
+- The signer-free event board is deployed from verified release `23cdf02d9c3d8c8bd05e04be0549974f70b24a45`
+  (`v0.6.1`). Its SQLite v2 current projections, material-evidence ledger and target-bound source catalog passed the
+  Linux canary below the 384 MiB hard limit. It remains loopback-only, uses the official public RPC and has no signer or
+  broadcast path.
+- The bounded source backfill now renders NINECAT as `LONG_ROUTE / DOPPLER / UNISWAP_V4 / NINECAT-AI`, with zero PAIR
+  listings for that address. NINECAT is still `UNQUOTED` and `UNPROVEN`; source coverage remains partial and current
+  proxy-positive rows are not executable-profit or receipt evidence.
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
@@ -79,6 +79,11 @@ for the failed v0.5.0 promotion, rollback, public-RPC fallback and accepted v0.5
 See
 [`docs/evidence/2026-09-07-source-aware-dashboard-local-validation.md`](docs/evidence/2026-09-07-source-aware-dashboard-local-validation.md)
 for v0.6.0's deterministic, browser and temporary public-RPC validation; it is not production evidence.
+See
+[`docs/evidence/2026-09-07-source-aware-dashboard-v0.6.0-canary-rejection.md`](docs/evidence/2026-09-07-source-aware-dashboard-v0.6.0-canary-rejection.md)
+for the rejected 256 MiB canary and signer-safe rollback, and
+[`docs/evidence/2026-09-07-v0.6.1-production-promotion.md`](docs/evidence/2026-09-07-v0.6.1-production-promotion.md)
+for the verified artifact, bounded migration, NINECAT backfill and final production readback.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 
