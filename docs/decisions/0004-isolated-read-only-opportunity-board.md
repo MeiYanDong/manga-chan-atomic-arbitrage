@@ -15,6 +15,10 @@ page, then admits tokens with at least two canonical active V4 pools above the c
 category is not a gate: stock tokens, AI tokens and meme tokens are treated identically if they appear in the source
 and have a quotable USDG anchor route.
 
+The API is discovery and listing evidence only. Appearance in that feed does not prove that PAIR issued or launched a
+token. Platform route, launch protocol, liquidity venue and asset classification remain independent claims under
+[ADR 0009](0009-orthogonal-source-provenance.md).
+
 ## Rationale
 
 The board has a much broader RPC workload and a weaker evidence level than the fixed MANGA executor. Sharing its

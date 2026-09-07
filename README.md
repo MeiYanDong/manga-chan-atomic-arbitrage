@@ -25,6 +25,12 @@ PoolManager `Initialize`-log backfill, quotes the best observed
 economic opportunity episodes. Pool events wake affected candidates between slower coverage sweeps. The board has no
 wallet, signer or broadcast path.
 
+`PAIR API` in that sentence is a discovery boundary, not an issuer label. The accepted multi-platform dashboard design
+keeps discovery, listing, platform route, launch protocol, liquidity venue, asset class, quote and execution provenance
+independent. See [ADR 0009](docs/decisions/0009-orthogonal-source-provenance.md) and the
+[source-aware dashboard architecture](docs/frontend/source-aware-dashboard.md). NINECAT's corrected chain attribution
+is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-correction.md) and is not PAIR.
+
 ## Honest status
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
