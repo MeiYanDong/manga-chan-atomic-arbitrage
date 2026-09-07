@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.4 — 2026-09-07
+
+- Normalize the obsolete executor-deployment estimate when recovering persisted board state, so stale rows cannot retain
+  the inaccurate v0.5.2 label after an upgrade.
+
 ## 0.5.3 — 2026-09-07
 
 - Describe board-only screens as requiring an exact executor preflight instead of incorrectly claiming that the already
