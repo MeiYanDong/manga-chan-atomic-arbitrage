@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Stream the growing source catalog through a bounded canonical atomic writer, reference its hash from SQLite economic
+  checkpoints instead of copying the full document, preserve the signer feed across board restarts and retry transient
+  `ENOENT`/`ESTALE` feed loss without weakening permission, integrity or signing gates.
 - Add an explicit until-revoked generic watcher authorization. It has no wall-clock expiry, compounds only from
   confirmed executor USDG post-balances up to the immutable 100 USDG contract cap, and retains failed-Gas, ETH-reserve,
   exact-profit, nonce, unresolved-mutation and manual-revocation breakers.

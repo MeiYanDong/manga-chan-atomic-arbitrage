@@ -16,10 +16,12 @@ import {
   publicError,
   reconcileOpportunityEpisodes,
   screenRoundTrip,
-  writeJsonAtomic,
   writeExecutionBoardSnapshot,
+  writeJsonAtomic,
+  writeStableJsonAtomic,
 } from '../src/opportunity-board.mjs'
 import { canonicalPoolKey, pairPoolId } from '../src/pair-catalog.mjs'
+import { stablePayloadHash } from '../src/source-provenance.mjs'
 
 test('cycle pacing preserves start interval and enforces a post-cycle cooldown', () => {
   assert.equal(nextCycleDelay({ scanIntervalMs: 120_000, cycleDurationMs: 45_000, minimumPauseMs: 60_000 }), 75_000)
@@ -47,6 +49,25 @@ test('execution snapshot keeps only fresh positive rows without mutating the ful
   assert.deepEqual(compact.items, [positive])
   assert.equal(compact.selection, snapshot.selection)
   assert.equal(snapshot.items.length, 3)
+})
+
+test('large stable JSON writes are atomic, parseable and hash-identical to canonical provenance', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-stable-json-'))
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const file = path.join(directory, 'source-catalog.json')
+  const value = {
+    zeta: '猫',
+    items: Array.from({ length: 5_000 }, (_, index) => ({ z: index, a: `token-${index}` })),
+    alpha: { nested: true, count: 5_000 },
+  }
+
+  const result = writeStableJsonAtomic(file, value)
+
+  assert.equal(result.hash, stablePayloadHash(value))
+  assert.equal(result.bytes, fs.statSync(file).size)
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), value)
+  assert.equal(fs.statSync(file).mode & 0o777, 0o640)
+  assert.deepEqual(fs.readdirSync(directory), ['source-catalog.json'])
 })
 
 test('execution snapshot is atomically persisted as a group-readable non-writable projection', (context) => {

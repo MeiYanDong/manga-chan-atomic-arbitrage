@@ -583,14 +583,20 @@ export class BoardStore {
     return [...sourceEvidence(sourceCatalog), ...eventRecords, ...opportunityRecords, checkpoint]
   }
 
-  persistProjection({ snapshot, sourceCatalog = null, events = [] }) {
+  persistProjection({ snapshot, sourceCatalog = null, sourceCatalogHash = null, events = [] }) {
     const serializedSnapshot = serializeProjection(snapshot)
-    const serializedSourceCatalog = serializeProjection(sourceCatalog)
+    const serializedSourceCatalog = sourceCatalog ? serializeProjection(sourceCatalog) : null
+    if (sourceCatalogHash !== null && !/^sha256:[0-9a-f]{64}$/.test(sourceCatalogHash)) {
+      throw new Error('source catalog hash must be a sha256 digest')
+    }
+    if (serializedSourceCatalog && sourceCatalogHash && serializedSourceCatalog.hash !== sourceCatalogHash) {
+      throw new Error('source catalog payload does not match its supplied hash')
+    }
     const prepared = {
       snapshotHash: serializedSnapshot.hash,
       snapshotJson: serializedSnapshot.json,
-      sourceCatalogHash: serializedSourceCatalog.hash,
-      sourceCatalogJson: sourceCatalog ? serializedSourceCatalog.json : null,
+      sourceCatalogHash: serializedSourceCatalog?.hash || sourceCatalogHash || stablePayloadHash(null),
+      sourceCatalogJson: serializedSourceCatalog?.json || null,
     }
     const records = this.projectionRecords(snapshot, sourceCatalog, events, prepared)
     const appended = this.appendRecords(records)
@@ -608,7 +614,7 @@ export class BoardStore {
     const current = this.database.prepare('SELECT payload_hash FROM current_snapshot WHERE singleton = 1').get()
     const parity = current?.payload_hash === prepared.snapshotHash
     if (!parity) throw new Error('SQLite projection parity mismatch after commit')
-    return { appended: appended.appended, parity, revision }
+    return { appended: appended.appended, parity, revision, sourceCatalogPersisted: Boolean(sourceCatalog) }
   }
 
   migrateLegacyProjection() {

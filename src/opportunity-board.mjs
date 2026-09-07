@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { formatUnits, getAddress } from 'viem'
 import { normalizeApiPool, PoolAdmission } from './pair-catalog.mjs'
 import { classifyRpcError, errorText } from './policy.mjs'
@@ -579,10 +579,92 @@ export function materialEvents(previous, current, options = {}) {
 /** @param {string} file @param {unknown} value */
 export function writeJsonAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const temporary = `${file}.${process.pid}.tmp`
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o640 })
   fs.renameSync(temporary, file)
   fs.chmodSync(file, 0o640)
+}
+
+/**
+ * Persist a large JSON-safe value without first allocating one monolithic
+ * string. Object keys use the same recursive ordering as stablePayloadHash,
+ * so the returned digest commits the exact JSON bytes written to disk.
+ *
+ * @param {string} file
+ * @param {unknown} value
+ */
+export function writeStableJsonAtomic(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  const descriptor = fs.openSync(temporary, 'wx', 0o640)
+  const digest = createHash('sha256')
+  let pending = ''
+  let bytes = 0
+
+  const flush = () => {
+    if (pending.length === 0) return
+    const encoded = Buffer.from(pending)
+    let offset = 0
+    while (offset < encoded.length) {
+      const written = fs.writeSync(descriptor, encoded, offset, encoded.length - offset)
+      if (written <= 0) throw new Error('stable JSON writer made no forward progress')
+      offset += written
+    }
+    digest.update(encoded)
+    bytes += encoded.length
+    pending = ''
+  }
+  /** @param {string} chunk */
+  const push = (chunk) => {
+    pending += chunk
+    if (pending.length >= 64 * 1024) flush()
+  }
+  /** @param {unknown} item @param {boolean} arrayValue */
+  const writeValue = (item, arrayValue = false) => {
+    if (Array.isArray(item)) {
+      push('[')
+      for (let index = 0; index < item.length; index += 1) {
+        if (index > 0) push(',')
+        writeValue(item[index], true)
+      }
+      push(']')
+      return
+    }
+    if (item && typeof item === 'object') {
+      push('{')
+      let written = 0
+      for (const key of Object.keys(item).sort((left, right) => left.localeCompare(right))) {
+        const child = /** @type {Record<string, unknown>} */ (item)[key]
+        if (['undefined', 'function', 'symbol'].includes(typeof child)) continue
+        if (written > 0) push(',')
+        push(`${JSON.stringify(key)}:`)
+        writeValue(child)
+        written += 1
+      }
+      push('}')
+      return
+    }
+    const serialized = JSON.stringify(item)
+    push(serialized === undefined && arrayValue ? 'null' : (serialized ?? 'null'))
+  }
+
+  try {
+    writeValue(value ?? null)
+    flush()
+    fs.fsyncSync(descriptor)
+    fs.closeSync(descriptor)
+    fs.renameSync(temporary, file)
+    fs.chmodSync(file, 0o640)
+    return { hash: `sha256:${digest.digest('hex')}`, bytes }
+  } catch (error) {
+    try {
+      fs.closeSync(descriptor)
+    } catch {}
+    try {
+      fs.unlinkSync(temporary)
+    } catch {}
+    throw error
+  }
 }
 
 /** @param {string} file @param {Record<string, any>[]} events */

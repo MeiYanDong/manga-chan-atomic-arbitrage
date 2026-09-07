@@ -106,6 +106,8 @@
   "opportunity_census": {
     "source": "complete PAIR first-party catalog plus newest-token reconciliation and persistent round-robin quote coverage",
     "completeness_watermark": "catalog completeness and fresh quote coverage are separate snapshot fields; full exact-preflight coverage is not yet claimed",
+    "source_projection": "canonical bounded-buffer atomic JSON plus SHA-256 checkpoint reference; current economic SQLite commits do not duplicate the full catalog",
+    "signer_feed": "compact mode-0640 atomic runtime file, preserved across board restart and independently freshness-validated",
     "required_outcomes": [
       "NOT_OBSERVED",
       "OBSERVED_AFTER_EXPIRY",
@@ -318,6 +320,7 @@
     "receipt_timeout_ms": 120000,
     "same_raw_rebroadcast_limit": 1,
     "restart_policy": "reconcile the shared wallet lane before any discovery candidate can become a new signed intent",
+    "board_restart_policy": "preserve the last complete signer feed; retry ENOENT or ESTALE as board-only degradation without execution RPC or signing",
     "unresolved_transaction_fallback": "pause every signer sharing the wallet"
   },
   "exit": {

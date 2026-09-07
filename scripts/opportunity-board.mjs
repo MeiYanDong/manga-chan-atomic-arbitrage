@@ -33,6 +33,7 @@ import {
   usdg,
   writeExecutionBoardSnapshot,
   writeJsonAtomic,
+  writeStableJsonAtomic,
 } from '../src/opportunity-board.mjs'
 import {
   OFFICIAL_PAIR_HOOK,
@@ -383,7 +384,7 @@ class OpportunityBoard {
     const boundedStartupCatalog = boundSourceCatalogPools(persistedSourceCatalog)
     persistedSourceCatalog = boundedStartupCatalog.sourceCatalog
     const startupRetention = boundedStartupCatalog.retention
-    if (boundedStartupCatalog.changed) writeJsonAtomic(this.sourceCatalogPath, persistedSourceCatalog)
+    if (boundedStartupCatalog.changed) writeStableJsonAtomic(this.sourceCatalogPath, persistedSourceCatalog)
     this.store = new BoardStore({
       runDir: config.runDir,
       legacySnapshotPath: this.snapshotPath,
@@ -559,6 +560,12 @@ class OpportunityBoard {
     this.rpcTransportMode = config.rpcBatchSize > 1 ? 'BATCH' : 'INDIVIDUAL'
     this.rpcBatchFallbackAt = null
     this.rpcBatchFallbackReason = null
+    this.latestSourceCatalog = this.sourceCatalogProjection(
+      this.sourceCatalogSafeHead,
+      persistedSourceCatalog.generatedAt || this.startedAt,
+    )
+    const persistedCatalog = writeStableJsonAtomic(this.sourceCatalogPath, this.latestSourceCatalog)
+    this.latestSourceCatalogHash = persistedCatalog.hash
     if (config.rpcUrl) {
       const chain = defineChain({
         id: CHAIN_ID,
@@ -690,14 +697,14 @@ class OpportunityBoard {
     })
   }
 
-  writeSourceCatalog(safeHead = this.sourceCatalogSafeHead) {
-    this.sourceCatalogSafeHead = safeHead === null ? null : String(safeHead)
-    const catalog = {
+  sourceCatalogProjection(safeHead = this.sourceCatalogSafeHead, generatedAt = new Date().toISOString()) {
+    const normalizedSafeHead = safeHead === null ? null : String(safeHead)
+    return {
       schemaVersion: 4,
       registryVersion: SOURCE_CONTRACT_REGISTRY.version,
       mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
-      generatedAt: new Date().toISOString(),
-      safeHead: this.sourceCatalogSafeHead,
+      generatedAt,
+      safeHead: normalizedSafeHead,
       summary: {
         pairListings: this.pairListings.length,
         longLaunches: this.longLaunches.length,
@@ -721,8 +728,14 @@ class OpportunityBoard {
       dopplerTargetIndex: this.dopplerTargetIndex,
       pools: this.genericPools,
     }
-    writeJsonAtomic(this.sourceCatalogPath, catalog)
+  }
+
+  writeSourceCatalog(safeHead = this.sourceCatalogSafeHead) {
+    this.sourceCatalogSafeHead = safeHead === null ? null : String(safeHead)
+    const catalog = this.sourceCatalogProjection(this.sourceCatalogSafeHead)
+    const persisted = writeStableJsonAtomic(this.sourceCatalogPath, catalog)
     this.latestSourceCatalog = catalog
+    this.latestSourceCatalogHash = persisted.hash
     return catalog
   }
 
@@ -2028,7 +2041,8 @@ class OpportunityBoard {
     try {
       const committed = this.store.persistProjection({
         snapshot: reconciled.snapshot,
-        sourceCatalog: this.latestSourceCatalog || readJson(this.sourceCatalogPath),
+        sourceCatalog: null,
+        sourceCatalogHash: this.latestSourceCatalogHash,
         events: reconciled.events,
       })
       this.persistenceState = {
@@ -2036,6 +2050,8 @@ class OpportunityBoard {
         lastCommitAt: generatedAt,
         lastError: null,
         parity: committed.parity,
+        sourceCatalogProjection: 'ATOMIC_HASHED_FILE',
+        sourceCatalogHash: this.latestSourceCatalogHash,
       }
     } catch (error) {
       this.persistenceState = {
@@ -2197,7 +2213,7 @@ class OpportunityBoard {
     const sqlite = this.config.readModel === 'sqlite'
     const snapshot = sqlite ? this.store.readCurrentSnapshot({ fallback: false }) : this.snapshot
     if (!snapshot) return null
-    const sourceCatalog = sqlite ? this.store.readSourceCatalog() : readJson(this.sourceCatalogPath)
+    const sourceCatalog = this.latestSourceCatalog || readJson(this.sourceCatalogPath)
     const cacheKey = [
       this.config.readModel,
       sqlite ? this.store.currentRevision() : snapshot.generatedAt,
@@ -2230,6 +2246,28 @@ class OpportunityBoard {
     response.end(`${JSON.stringify(payload)}\n`)
   }
 
+  respondJsonFile(response, file) {
+    let descriptor = null
+    try {
+      descriptor = fs.openSync(file, 'r')
+      const metadata = fs.fstatSync(descriptor)
+      if (!metadata.isFile()) throw new Error('JSON projection is not a regular file')
+      response.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': metadata.size,
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      })
+      const stream = fs.createReadStream(file, { fd: descriptor, autoClose: true })
+      descriptor = null
+      stream.on('error', () => response.destroy())
+      stream.pipe(response)
+    } catch {
+      if (descriptor !== null) fs.closeSync(descriptor)
+      this.respondJson(response, 503, { status: 'BACKFILL_NOT_STARTED' })
+    }
+  }
+
   startHttp() {
     this.server = httpServer.createServer((request, response) => {
       if (request.method !== 'GET') return this.respondJson(response, 405, { error: 'method not allowed' })
@@ -2247,8 +2285,7 @@ class OpportunityBoard {
         return this.respondJson(response, catalog ? 200 : 503, catalog || { status: 'BACKFILL_NOT_STARTED' })
       }
       if (requestUrl.pathname === '/api/source-catalog') {
-        const catalog = readJson(this.sourceCatalogPath)
-        return this.respondJson(response, catalog ? 200 : 503, catalog || { status: 'BACKFILL_NOT_STARTED' })
+        return this.respondJsonFile(response, this.sourceCatalogPath)
       }
       if (requestUrl.pathname === '/api/event-metrics') {
         return this.respondJson(response, 200, this.serviceState().eventDrivenShadow)
