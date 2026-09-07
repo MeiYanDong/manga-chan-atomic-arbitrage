@@ -1,6 +1,6 @@
 # ADR 0013: stop on economic risk, not accumulated profitable executions
 
-- Status: Accepted by explicit operator direction; production promotion pending
+- Status: Accepted
 - Date: 2026-09-07
 
 ## Context
