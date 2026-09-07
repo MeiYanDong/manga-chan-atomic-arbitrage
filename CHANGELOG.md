@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add opt-in rolling leases for the autonomous generic watcher. Renewal runs inside the existing Linux process, keeps
+  one authorization ID so failed Gas and all usage remain cumulative, revalidates deployment/balance/nonce/reserve
+  invariants, retries transient provider failures and cannot revive an expired lease.
 - Accept the deployed signer-free board's additive schema-v4 snapshot through one shared generic execution/runtime
   identity gate while retaining the existing service identity, read-only mode, authorization flag and same-block
   pool-attestation checks.

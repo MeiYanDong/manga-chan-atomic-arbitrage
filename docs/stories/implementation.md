@@ -209,3 +209,19 @@ Acceptance:
 Status: accepted for the v0.6.2 signer-free production board. Five consecutive bounded polls advanced exactly 2,000
 blocks each while approximately 248 candidates remained queued. Historical catch-up and steady-state latency remain
 open operational evidence, not completed acceptance claims.
+
+## S18 — Rolling live lease without risk reset
+
+Acceptance:
+
+- rolling renewal is opt-in and legacy arms retain manual expiry behavior;
+- every lease revision preserves one authorization ID, so failed Gas and all usage remain cumulative;
+- renewal occurs only inside the valid window after canonical deployment, clean mutation, nonce, principal and ETH
+  reserve checks pass;
+- transient provider failures retry before expiry, while expiry, nonce mismatch and invariant failure stop authority;
+- an authorization-specific durable revocation marker prevents a concurrent stale renewal from undoing disarm;
+- the Linux watcher owns renewal without a systemd timer, local scheduled task or Codex heartbeat;
+- production promotion requires protected-branch CI, a clean controlled re-arm and readback of the new schema, lease,
+  process, nonce, balance and unresolved-mutation state.
+
+Status: implemented and locally verified; protected-branch CI and production promotion are pending.

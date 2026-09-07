@@ -123,6 +123,30 @@ test('generic watch status reports a corrupt authorization without crashing', (c
   assert.match(output.authorization.error, /INVALID_AUTHORIZATION_READBACK/)
 })
 
+test('a durable revocation marker wins even if stale state rewrites the arm as ARMED', (context) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-revocation-'))
+  context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const armPath = path.join(runDir, 'generic-watch-arm.json')
+  fs.writeFileSync(armPath, JSON.stringify({ authorizationId: 'revoked-authorization', status: 'ARMED' }), {
+    mode: 0o600,
+  })
+
+  const disarm = run('watch-disarm', runDir)
+  assert.equal(disarm.status, 0, disarm.stderr)
+  const revocation = JSON.parse(fs.readFileSync(path.join(runDir, 'generic-watch-revocation.json'), 'utf8'))
+  assert.equal(revocation.authorizationId, 'revoked-authorization')
+  assert.ok(Number.isFinite(Date.parse(revocation.revokedAt)))
+
+  fs.writeFileSync(armPath, JSON.stringify({ authorizationId: 'revoked-authorization', status: 'ARMED' }), {
+    mode: 0o600,
+  })
+  const watch = run('watch', runDir)
+  assert.equal(watch.status, 0, watch.stderr)
+  const state = JSON.parse(fs.readFileSync(path.join(runDir, 'generic-watch-state.json'), 'utf8'))
+  assert.equal(state.status, 'STOPPED_POLICY')
+  assert.match(state.reason, /disarmed/)
+})
+
 test('generic CLI redacts credentialized RPC URLs from stderr diagnostics', (context) => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-stderr-'))
   context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))

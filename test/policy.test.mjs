@@ -11,12 +11,15 @@ import {
   evaluateExpiredMutationAbandonment,
   evaluateGenericArmBudget,
   evaluateGenericArmBudgetAtBroadcast,
+  evaluateGenericRollingLease,
   evaluateRawReplayDeadline,
   fixedSignerLaneConflict,
+  genericWatchAuthorizationCommitment,
   genericSignerLaneConflict,
   isGenericOpportunityMiss,
   isMalformedRpcBatchResponse,
   latestUnresolvedMutation,
+  renewGenericRollingLease,
   selectGenericWatchCandidate,
 } from '../src/policy.mjs'
 
@@ -189,6 +192,88 @@ test('generic raw replay requires every reader timestamp to remain within deadli
   )
   assert.equal(evaluateRawReplayDeadline(plan, observations.slice(0, 1)).reason, 'insufficient-reader-timestamps')
   assert.equal(evaluateRawReplayDeadline({ kind: 'generic-withdraw' }, []).allowed, true)
+})
+
+test('rolling generic lease opens a bounded renewal window without changing its authorization epoch', () => {
+  const arm = {
+    schemaVersion: 2,
+    mode: 'AUTO_POLICY',
+    policyVersion: 'generic-v2-loopback-escalation-v2',
+    issuedAt: '2030-01-01T00:00:00.000Z',
+    initialExpiresAt: '2030-01-08T00:00:00.000Z',
+    lastRenewedAt: '2030-01-01T00:00:00.000Z',
+    expiresAt: '2030-01-08T00:00:00.000Z',
+    autoRenewLease: true,
+    leaseDurationHours: 168,
+    renewBeforeHours: 24,
+    leaseRevision: 0,
+    chainId: 4_663,
+    wallet: '0xwallet',
+    executor: '0xexecutor',
+    maxPrincipalUsdgWei: '25000000',
+    maxFailedGasWei: '1000',
+    baselineNonce: 10,
+    baselineExecutionCount: 8,
+  }
+  const beforeWindow = evaluateGenericRollingLease(arm, Date.parse('2030-01-06T23:59:59.999Z'))
+  assert.equal(beforeWindow.allowed, true)
+  assert.equal(beforeWindow.renewalDue, false)
+
+  const windowOpen = evaluateGenericRollingLease(arm, Date.parse('2030-01-07T00:00:00.000Z'))
+  assert.equal(windowOpen.allowed, true)
+  assert.equal(windowOpen.renewalDue, true)
+  assert.equal(windowOpen.renewWindowStartsAt, '2030-01-07T00:00:00.000Z')
+
+  const oldCommitment = genericWatchAuthorizationCommitment(arm)
+  const renewal = renewGenericRollingLease(arm, Date.parse('2030-01-07T12:00:00.000Z'))
+  assert.equal(renewal.allowed, true)
+  assert.equal(renewal.arm.leaseRevision, 1)
+  assert.equal(renewal.arm.lastRenewedAt, '2030-01-07T12:00:00.000Z')
+  assert.equal(renewal.arm.expiresAt, '2030-01-14T12:00:00.000Z')
+  assert.equal(renewal.arm.initialExpiresAt, arm.initialExpiresAt)
+  assert.deepEqual(genericWatchAuthorizationCommitment(renewal.arm), oldCommitment)
+  assert.equal(evaluateGenericRollingLease(renewal.arm, Date.parse('2030-01-07T12:00:00.000Z')).allowed, true)
+})
+
+test('rolling generic lease cannot renew early, revive after expiry or accept malformed state', () => {
+  const arm = {
+    schemaVersion: 2,
+    issuedAt: '2030-01-01T00:00:00.000Z',
+    initialExpiresAt: '2030-01-08T00:00:00.000Z',
+    lastRenewedAt: '2030-01-01T00:00:00.000Z',
+    expiresAt: '2030-01-08T00:00:00.000Z',
+    autoRenewLease: true,
+    leaseDurationHours: 168,
+    renewBeforeHours: 24,
+    leaseRevision: 0,
+  }
+  assert.equal(renewGenericRollingLease(arm, Date.parse('2030-01-06T23:59:59.999Z')).reason, 'renewal-not-due')
+  assert.equal(renewGenericRollingLease(arm, Date.parse(arm.expiresAt)).reason, 'expired')
+  assert.equal(
+    evaluateGenericRollingLease({ ...arm, expiresAt: '2030-01-09T00:00:00.000Z' }, Date.parse(arm.issuedAt)).reason,
+    'invalid-rolling-lease',
+  )
+  assert.equal(
+    evaluateGenericRollingLease({ ...arm, leaseRevision: 1 }, Date.parse(arm.issuedAt)).reason,
+    'invalid-rolling-lease',
+  )
+  assert.equal(evaluateGenericRollingLease(arm, Number.NaN).reason, 'invalid-rolling-lease')
+})
+
+test('legacy generic arms retain their single committed expiry and never auto-renew', () => {
+  const arm = {
+    schemaVersion: 1,
+    issuedAt: '2030-01-01T00:00:00.000Z',
+    expiresAt: '2030-01-02T00:00:00.000Z',
+  }
+  assert.deepEqual(evaluateGenericRollingLease(arm, Date.parse('2030-01-03T00:00:00.000Z')), {
+    allowed: true,
+    reason: null,
+    autoRenew: false,
+    renewalDue: false,
+  })
+  assert.equal(genericWatchAuthorizationCommitment(arm).expiresAt, arm.expiresAt)
+  assert.equal(renewGenericRollingLease(arm, Date.parse('2030-01-03T00:00:00.000Z')).reason, 'renewal-not-due')
 })
 
 test('arm budget stops on each independent boundary', () => {
