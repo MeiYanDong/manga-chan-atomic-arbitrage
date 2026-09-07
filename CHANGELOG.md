@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.2 — 2026-09-07
+
+- Put a hard deadline around event waiting so a continuously busy pool-event stream cannot starve periodic catalog
+  coverage, stale-state reconciliation or durable `Initialize`-log backfill.
+- Publish the last and next mandatory reconciliation timestamps with the event metrics.
+
 ## 0.5.1 — 2026-09-07
 
 - Treat an identity-only viem `UnknownRpcError` as incomplete transport evidence after EVM-revert identity has been

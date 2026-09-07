@@ -7,6 +7,7 @@ import {
   ShadowWakeSource,
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
+  capEventWaitForReconciliation,
   planHotLogRange,
   reconcileHotCursorAnchor,
   retryReadOnly,
@@ -49,6 +50,13 @@ test('rotating priority slice covers the list without selecting every priority e
   assert.deepEqual(rotatingSlice(priorities, 2, 2), ['c', 'd'])
   assert.deepEqual(rotatingSlice(priorities, 4, 2), ['e', 'a'])
   assert.deepEqual(rotatingSlice(priorities, 6, 2), ['b', 'c'])
+})
+
+test('event waiting cannot cross the mandatory reconciliation deadline', () => {
+  assert.equal(capEventWaitForReconciliation(60_000, 100_000, 105_000), 5_000)
+  assert.equal(capEventWaitForReconciliation(4_000, 100_000, 105_000), 4_000)
+  assert.equal(capEventWaitForReconciliation(60_000, 105_000, 105_000), 0)
+  assert.throws(() => capEventWaitForReconciliation(-1, 100_000, 105_000), /non-negative/)
 })
 
 test('bounded read retry recovers transient evidence but never retries a business revert', async () => {

@@ -190,6 +190,7 @@ Acceptance:
 - runtime exposes event wakes, exact candidate count, Quoter-call totals and observed-log-to-quote latency.
 - same-block anchor requests are deduplicated, HTTP batches are bounded and an incomplete RPC set trips one cycle-level
   circuit instead of being cached as pool absence or retried across every candidate amount.
+- a mandatory periodic deadline prevents continuous event traffic from starving coverage rotation and chain backfill.
 
 Status: implementation, deterministic tests and one successful public-RPC local cycle are complete; deployed latency
 and RPC-reduction targets remain unproven.
