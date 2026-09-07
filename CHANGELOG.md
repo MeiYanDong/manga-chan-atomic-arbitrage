@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add an explicit until-revoked generic watcher authorization. It has no wall-clock expiry, compounds only from
+  confirmed executor USDG post-balances up to the immutable 100 USDG contract cap, and retains failed-Gas, ETH-reserve,
+  exact-profit, nonce, unresolved-mutation and manual-revocation breakers.
+- Serve the signer bridge a compact fresh-positive board view and retry board-only transport failures indefinitely with
+  bounded backoff. Dashboard clients keep the complete snapshot, and execution-RPC failures retain their finite halt.
 - Add opt-in rolling leases for the autonomous generic watcher. Renewal runs inside the existing Linux process, keeps
   one authorization ID so failed Gas and all usage remain cumulative, revalidates deployment/balance/nonce/reserve
   invariants, retries transient provider failures and cannot revive an expired lease.

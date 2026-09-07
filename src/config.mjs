@@ -25,6 +25,7 @@ const CONFIG_KEYS = new Set([
   'MANGA_GENERIC_WATCH_POLL_MS',
   'MANGA_GENERIC_WATCH_ARM_HOURS',
   'MANGA_GENERIC_WATCH_AUTO_RENEW',
+  'MANGA_GENERIC_WATCH_UNTIL_REVOKED',
   'MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS',
   'MANGA_GENERIC_WATCH_MAX_ATTEMPTS',
   'MANGA_GENERIC_WATCH_MAX_EXECUTIONS',
@@ -60,7 +61,11 @@ export function loadRuntimeConfig(environment = process.env) {
   const maxAttempts = positiveInteger(value('MANGA_MAX_ATTEMPTS'), 5)
   const genericWatchArmHours = boundedPositiveInteger(value('MANGA_GENERIC_WATCH_ARM_HOURS'), 24, 168)
   const genericWatchAutoRenew = strictBoolean(value('MANGA_GENERIC_WATCH_AUTO_RENEW'), false)
+  const genericWatchUntilRevoked = strictBoolean(value('MANGA_GENERIC_WATCH_UNTIL_REVOKED'), false)
   const genericWatchRenewBeforeHours = boundedPositiveInteger(value('MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS'), 6, 167)
+  if (genericWatchAutoRenew && genericWatchUntilRevoked) {
+    throw new Error('MANGA_GENERIC_WATCH_AUTO_RENEW 与 MANGA_GENERIC_WATCH_UNTIL_REVOKED 不能同时启用')
+  }
   if (genericWatchAutoRenew && genericWatchRenewBeforeHours >= genericWatchArmHours) {
     throw new Error('MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS 必须小于 MANGA_GENERIC_WATCH_ARM_HOURS')
   }
@@ -89,6 +94,7 @@ export function loadRuntimeConfig(environment = process.env) {
     genericWatchPollMs: boundedInteger(value('MANGA_GENERIC_WATCH_POLL_MS'), 1_000, 250, 60_000),
     genericWatchArmHours,
     genericWatchAutoRenew,
+    genericWatchUntilRevoked,
     genericWatchRenewBeforeHours,
     genericWatchMaxAttempts: positiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_ATTEMPTS'), maxAttempts),
     genericWatchMaxExecutions: boundedPositiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_EXECUTIONS'), 5, 20),

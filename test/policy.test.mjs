@@ -15,6 +15,8 @@ import {
   evaluateRawReplayDeadline,
   fixedSignerLaneConflict,
   genericWatchAuthorizationCommitment,
+  genericWatchSpendablePrincipal,
+  genericWatchTransportFailurePolicy,
   genericSignerLaneConflict,
   isGenericOpportunityMiss,
   isMalformedRpcBatchResponse,
@@ -276,6 +278,67 @@ test('legacy generic arms retain their single committed expiry and never auto-re
   assert.equal(renewGenericRollingLease(arm, Date.parse('2030-01-03T00:00:00.000Z')).reason, 'renewal-not-due')
 })
 
+test('until-revoked generic arms have no time stop but retain every economic breaker', () => {
+  const arm = {
+    schemaVersion: 3,
+    authorizationLifetime: 'UNTIL_REVOKED',
+    principalPolicy: 'REALIZED_EXECUTOR_BALANCE_UP_TO_HARD_CAP',
+    maxPrincipalUsdgWei: '100000000',
+    principalUsdgWeiAtArm: '33021814',
+    baselineExecutionCount: 2,
+    maxConfirmedExecutions: null,
+    maxAttempts: null,
+    maxExactPreflights: null,
+    maxFailedGasWei: '1000',
+  }
+  const usage = {
+    confirmedExecutions: 0,
+    attempts: 0,
+    exactPreflights: 0,
+    failedGasWei: 0n,
+    now: Date.parse('2099-01-01T00:00:00.000Z'),
+  }
+  assert.equal(evaluateGenericArmBudget(arm, usage).allowed, true)
+  assert.equal(evaluateGenericArmBudget(arm, { ...usage, failedGasWei: 1000n }).reason, 'failed-gas-limit')
+  assert.equal(
+    evaluateGenericArmBudget({ ...arm, expiresAt: '2099-02-01T00:00:00.000Z' }, usage).reason,
+    'invalid-authorization-lifetime',
+  )
+  const commitment = genericWatchAuthorizationCommitment(arm)
+  assert.equal(commitment.authorizationLifetime, 'UNTIL_REVOKED')
+  assert.equal(commitment.principalPolicy, 'REALIZED_EXECUTOR_BALANCE_UP_TO_HARD_CAP')
+  assert.equal(Object.hasOwn(commitment, 'expiresAt'), false)
+})
+
+test('schema-v3 principal compounds from confirmed executor balances and never exceeds the hard cap', () => {
+  const arm = {
+    schemaVersion: 3,
+    authorizationLifetime: 'UNTIL_REVOKED',
+    principalPolicy: 'REALIZED_EXECUTOR_BALANCE_UP_TO_HARD_CAP',
+    maxPrincipalUsdgWei: '100000000',
+    principalUsdgWeiAtArm: '33021814',
+    baselineExecutionCount: 2,
+  }
+  const baseline = { executions: [{ hash: 'old-1' }, { hash: 'old-2' }] }
+  assert.equal(genericWatchSpendablePrincipal(arm, baseline), 33_021_814n)
+  assert.equal(
+    genericWatchSpendablePrincipal(arm, {
+      executions: [...baseline.executions, { executorUsdgAfterWei: '38750000' }],
+    }),
+    38_750_000n,
+  )
+  assert.equal(
+    genericWatchSpendablePrincipal(arm, {
+      executions: [...baseline.executions, { executorUsdgAfterWei: '125000000' }],
+    }),
+    100_000_000n,
+  )
+  assert.throws(
+    () => genericWatchSpendablePrincipal(arm, { executions: [{ hash: 'missing-baseline' }] }),
+    /execution baseline is invalid/,
+  )
+})
+
 test('arm budget stops on each independent boundary', () => {
   const arm = {
     expiresAt: '2030-01-01T00:00:00.000Z',
@@ -518,6 +581,24 @@ test('generic watch selection enforces dedupe, principal and screened-net bounda
   )
 })
 
+test('board transport loss retries without a terminal count while execution RPC keeps its breaker', () => {
+  assert.deepEqual(genericWatchTransportFailurePolicy('BOARD', 10_000, 10), {
+    status: 'DEGRADED_BOARD',
+    shouldStop: false,
+    decision: 'BOARD_RETRY_SCHEDULED',
+  })
+  assert.deepEqual(genericWatchTransportFailurePolicy('EXECUTION', 9, 10), {
+    status: 'DEGRADED_RPC',
+    shouldStop: false,
+    decision: 'RPC_ERROR',
+  })
+  assert.deepEqual(genericWatchTransportFailurePolicy('EXECUTION', 10, 10), {
+    status: 'HALTED_RPC',
+    shouldStop: true,
+    decision: 'RPC_ERROR',
+  })
+})
+
 test('generic watcher distinguishes economic misses from safety invariants', () => {
   assert.equal(isGenericOpportunityMiss(new Error('exact simulation does not meet the net floor')), true)
   assert.equal(isGenericOpportunityMiss(new Error('triggered candidate left the fresh board set')), true)
@@ -559,6 +640,14 @@ test('fixed signer lane fails closed on an active generic-v2 signer', () => {
     processIsAlive: () => false,
   })
   assert.match(conflict, /generic-v2 signing arm is still active/)
+
+  const untilRevokedConflict = genericSignerLaneConflict({
+    arm: { status: 'ARMED', schemaVersion: 3, authorizationLifetime: 'UNTIL_REVOKED' },
+    lockExists: false,
+    nowMs: Date.parse('2099-01-01T00:00:00.000Z'),
+    processIsAlive: () => false,
+  })
+  assert.match(untilRevokedConflict, /generic-v2 signing arm is still active/)
 })
 
 test('event queue deduplicates logs and collapses out-of-order revisions to the newest block', async () => {

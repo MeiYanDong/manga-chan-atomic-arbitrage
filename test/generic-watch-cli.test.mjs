@@ -123,6 +123,49 @@ test('generic watch status reports a corrupt authorization without crashing', (c
   assert.match(output.authorization.error, /INVALID_AUTHORIZATION_READBACK/)
 })
 
+test('generic watch status reports until-revoked lifetime and realized compounding principal separately', (context) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-until-revoked-status-'))
+  context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  fs.writeFileSync(
+    path.join(runDir, 'generic-watch-arm.json'),
+    JSON.stringify({
+      schemaVersion: 3,
+      authorizationId: 'until-revoked-authorization',
+      status: 'ARMED',
+      issuedAt: '2030-01-01T00:00:00.000Z',
+      authorizationLifetime: 'UNTIL_REVOKED',
+      principalPolicy: 'REALIZED_EXECUTOR_BALANCE_UP_TO_HARD_CAP',
+      baselineExecutionCount: 0,
+      principalUsdgWeiAtArm: '33021814',
+      maxPrincipalUsdgWei: '100000000',
+      minimumNetProfitUsdgWei: '100000',
+      minimumScreenedNetProfitUsdgWei: '100000',
+      maxConfirmedExecutions: null,
+      maxAttempts: null,
+      maxExactPreflights: null,
+      maxFailedGasWei: '1000000000000000',
+    }),
+    { mode: 0o600 },
+  )
+  fs.writeFileSync(
+    path.join(runDir, 'generic-state.json'),
+    JSON.stringify({
+      status: 'live_gross_validated',
+      executor: '0xexecutor',
+      executions: [{ executorUsdgAfterWei: '38750000' }],
+    }),
+    { mode: 0o600 },
+  )
+
+  const result = run('watch-status', runDir)
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.equal(output.authorization.authorizationLifetime, 'UNTIL_REVOKED')
+  assert.equal(output.authorization.expiresAt, null)
+  assert.equal(output.authorization.principalHardCapUsdg, '100')
+  assert.equal(output.authorization.currentSpendablePrincipalUsdg, '38.75')
+})
+
 test('a durable revocation marker wins even if stale state rewrites the arm as ARMED', (context) => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-generic-revocation-'))
   context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))

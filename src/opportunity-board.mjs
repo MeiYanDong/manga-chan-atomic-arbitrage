@@ -43,6 +43,21 @@ export function normalizePersistedBoardSnapshot(snapshot) {
   return { ...snapshot, items: snapshot.items.map((item) => normalizeExecutionEvidence(item)) }
 }
 
+/**
+ * Keep the signing bridge small without weakening its trust boundary. The
+ * watcher still validates the board identity, freshness, arithmetic, paths and
+ * same-block pool attestations; non-positive rows are irrelevant to that gate.
+ *
+ * @param {Record<string, any> | null} snapshot
+ */
+export function compactExecutionBoardSnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.items)) return snapshot
+  return {
+    ...snapshot,
+    items: snapshot.items.filter((item) => item.status === BoardStatus.SCREENED_POSITIVE && item.fresh === true),
+  }
+}
+
 /** @param {unknown} value */
 export function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null

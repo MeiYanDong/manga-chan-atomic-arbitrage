@@ -89,6 +89,7 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   const source = fs.readFileSync(path.join(root, 'scripts', 'generic-arb.mjs'), 'utf8')
   const plannerSource = fs.readFileSync(path.join(root, 'src', 'generic-plan.mjs'), 'utf8')
   assert.match(source, /MANGA_GENERIC_BOARD_URL|genericBoardUrl/)
+  assert.match(source, /searchParams\.set\('view', 'execution'\)/)
   assert.match(source, /buildGenericExecutionCandidates/)
   assert.match(source, /assertGenericBoardIdentity\(board\)/)
   assert.match(plannerSource, /READ_ONLY_NO_SIGNING_NO_BROADCAST/)
@@ -103,6 +104,8 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   assert.match(source, /generic execution raw must not be rebroadcast/)
   assert.match(source, /appendAudit\('mutation_abandoned'/)
   assert.match(source, /status: 'RUNNING',[\s\S]*consecutiveBoardErrors: 0,[\s\S]*reason: null/)
+  assert.match(source, /genericWatchTransportFailurePolicy/)
+  assert.match(source, /if \(failurePolicy\.shouldStop\)/)
 })
 
 test('generic systemd services isolate the board and mutually exclude the fixed signer', () => {
