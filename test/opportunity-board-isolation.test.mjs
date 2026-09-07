@@ -20,6 +20,9 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   }
   assert.equal(source.includes('MANGA_BOARD_RPC_URL'), true)
   assert.equal(source.includes('READ_ONLY_NO_SIGNING_NO_BROADCAST'), true)
+  assert.match(source, /eth_getLogs/)
+  assert.match(source, /waitForEventWake/)
+  assert.match(source, /advanceChainCatalog/)
 })
 
 test('systemd unit keeps the board in a separate loopback-only identity without credentials', () => {
@@ -33,6 +36,11 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
 
   const example = fs.readFileSync(path.join(root, 'deploy', 'opportunity-board.env.example'), 'utf8')
   assert.match(example, /^MANGA_BOARD_HOST=127\.0\.0\.1$/m)
+  assert.match(example, /^MANGA_BOARD_EVENT_POLL_MS=4000$/m)
+  assert.match(example, /^MANGA_BOARD_CHAIN_CATALOG_START_BLOCK=45000000$/m)
+  assert.match(example, /^MANGA_BOARD_RPC_BATCH_SIZE=20$/m)
+  assert.match(example, /^MANGA_BOARD_RPC_HTTP_CONCURRENCY=1$/m)
+  assert.match(example, /^MANGA_BOARD_FULL_GRID_EVERY_CYCLES=0$/m)
   assert.doesNotMatch(example, /MANGA_PRIVATE_KEY|MANGA_RPC_URL=|MANGA_WS_URL=/)
 })
 

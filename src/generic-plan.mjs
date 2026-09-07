@@ -1,32 +1,23 @@
-import { encodeAbiParameters, getAddress, keccak256, parseUnits, toHex } from 'viem'
+import { getAddress, keccak256, parseUnits, toHex } from 'viem'
 import { stableStringify } from './journal.mjs'
 import { BoardStatus } from './opportunity-board.mjs'
+import {
+  OFFICIAL_PAIR_HOOK,
+  PAIR_FEE,
+  PAIR_TICK_SPACING,
+  PoolAdmission,
+  PoolEvidence,
+  pairPoolId,
+} from './pair-catalog.mjs'
 import { MAX_AMOUNT_IN_USDG } from './route-optimizer.mjs'
 
 export const GENERIC_USDG = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 export const GENERIC_WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
-export const GENERIC_PAIR_HOOK = getAddress('0x16D1560630Ce74af4478d9b8AD46548A092A2000')
-export const GENERIC_PAIR_FEE = 10_000
-export const GENERIC_PAIR_TICK_SPACING = 200
+export const GENERIC_PAIR_HOOK = OFFICIAL_PAIR_HOOK
+export const GENERIC_PAIR_FEE = PAIR_FEE
+export const GENERIC_PAIR_TICK_SPACING = PAIR_TICK_SPACING
 export const GENERIC_V3_FEES = Object.freeze([100, 500, 3_000, 10_000])
-
-const POOL_KEY_ABI = [
-  {
-    type: 'tuple',
-    components: [
-      { name: 'currency0', type: 'address' },
-      { name: 'currency1', type: 'address' },
-      { name: 'fee', type: 'uint24' },
-      { name: 'tickSpacing', type: 'int24' },
-      { name: 'hooks', type: 'address' },
-    ],
-  },
-]
-
-/** @param {{currency0: string, currency1: string, fee: number, tickSpacing: number, hooks: string}} key */
-export function pairPoolId(key) {
-  return keccak256(encodeAbiParameters(POOL_KEY_ABI, [key]))
-}
+export { pairPoolId }
 
 /** @param {string} path */
 export function decodeV3Path(path) {
@@ -82,13 +73,14 @@ export function pairPoolKey(pool, targetToken) {
 /** @param {Record<string, any>} snapshot */
 function assertBoardIdentity(snapshot) {
   if (
-    snapshot?.schemaVersion !== 2 ||
+    ![2, 3].includes(snapshot?.schemaVersion) ||
     snapshot.service !== 'manga-opportunity-board' ||
     snapshot.mode !== 'READ_ONLY_NO_SIGNING_NO_BROADCAST' ||
     snapshot.selection?.executionAuthorized !== false
   ) {
     throw new Error('snapshot identity or read-only boundary is invalid')
   }
+  return Number(snapshot.schemaVersion)
 }
 
 /**
@@ -100,12 +92,12 @@ function assertBoardIdentity(snapshot) {
  * @param {{nowMs?: number, maxAgeMs?: number}} [options]
  */
 export function buildGenericExecutionCandidate(snapshot, options = {}) {
-  assertBoardIdentity(snapshot)
+  const boardSchemaVersion = assertBoardIdentity(snapshot)
   const nowMs = options.nowMs ?? Date.now()
   const maxAgeMs = options.maxAgeMs ?? 30_000
   const selectedId = snapshot?.selection?.id
   const item = (snapshot?.items || []).find((candidate) => candidate.id === selectedId)
-  return buildCandidateFromItem(item, { nowMs, maxAgeMs })
+  return buildCandidateFromItem(item, { nowMs, maxAgeMs, boardSchemaVersion })
 }
 
 /**
@@ -117,7 +109,7 @@ export function buildGenericExecutionCandidate(snapshot, options = {}) {
  * @param {{nowMs?: number, maxAgeMs?: number, limit?: number}} [options]
  */
 export function buildGenericExecutionCandidates(snapshot, options = {}) {
-  assertBoardIdentity(snapshot)
+  const boardSchemaVersion = assertBoardIdentity(snapshot)
   const nowMs = options.nowMs ?? Date.now()
   const maxAgeMs = options.maxAgeMs ?? 30_000
   const limit = options.limit ?? 6
@@ -137,7 +129,7 @@ export function buildGenericExecutionCandidates(snapshot, options = {}) {
     const variants = completeAmounts.length > 0 ? completeAmounts.map((quote) => ({ ...item, ...quote })) : [item]
     for (const variant of variants) {
       try {
-        rows.push(buildCandidateFromItem(variant, { nowMs, maxAgeMs }))
+        rows.push(buildCandidateFromItem(variant, { nowMs, maxAgeMs, boardSchemaVersion }))
       } catch {}
     }
   }
@@ -159,9 +151,9 @@ export function buildGenericExecutionCandidates(snapshot, options = {}) {
   return [...unique.values()]
 }
 
-/** @param {Record<string, any> | undefined} item @param {{nowMs: number, maxAgeMs: number}} options */
+/** @param {Record<string, any> | undefined} item @param {{nowMs: number, maxAgeMs: number, boardSchemaVersion: number}} options */
 function buildCandidateFromItem(item, options) {
-  const { nowMs, maxAgeMs } = options
+  const { nowMs, maxAgeMs, boardSchemaVersion } = options
   if (!item || item.status !== BoardStatus.SCREENED_POSITIVE || item.fresh !== true) {
     throw new Error('snapshot has no fresh screened-positive selection')
   }
@@ -190,6 +182,19 @@ function buildCandidateFromItem(item, options) {
   const exitPool = item.pools?.find((pool) => pool.poolId === item.legs?.exitPoolId)
   if (!entryPool || !exitPool || entryPool.poolId === exitPool.poolId) {
     throw new Error('selected V4 pools are missing or identical')
+  }
+  if (boardSchemaVersion >= 3) {
+    for (const pool of [entryPool, exitPool]) {
+      if (
+        pool.poolIdEvidence !== PoolEvidence.POOL_KEY_MATCHED ||
+        pool.chainAttestation?.status !== PoolEvidence.INITIALIZED_QUOTER_CONFIRMED ||
+        String(pool.chainAttestation?.blockNumber) !== String(item.blockNumber) ||
+        String(pool.chainAttestation?.blockHash).toLowerCase() !== String(item.blockHash).toLowerCase() ||
+        pool.executionAdmission !== PoolAdmission.EXECUTOR_COMPATIBLE
+      ) {
+        throw new Error('selected pool lacks same-block executable chain attestation')
+      }
+    }
   }
   if (item.id !== String(item.tokenAddress).toLowerCase()) throw new Error('candidate id does not match target address')
   if (item.routeKey !== `${entryPool.poolId}:${exitPool.poolId}`)
@@ -231,6 +236,12 @@ function buildCandidateFromItem(item, options) {
   const candidate = {
     schemaVersion: 1,
     opportunityId: `${item.id}:${item.blockHash}:${item.routeKey}:${item.amountInUsdg}`,
+    ...(boardSchemaVersion >= 3
+      ? {
+          opportunityRevisionId: `${item.id}:${item.blockHash}:${item.routeKey}:${item.amountInUsdg}`,
+          economicEpisodeId: item.economicEpisode?.episodeId || null,
+        }
+      : {}),
     quoteBlockNumber: BigInt(item.blockNumber),
     quoteBlockHash: item.blockHash,
     quotedAt: item.quotedAt,

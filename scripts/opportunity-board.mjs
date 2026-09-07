@@ -2,20 +2,49 @@ import fs from 'node:fs'
 import httpServer from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPublicClient, defineChain, encodePacked, getAddress, http, parseAbi, parseEther } from 'viem'
+import { createPublicClient, defineChain, encodePacked, getAddress, http, parseAbi, parseEther, toHex } from 'viem'
+import {
+  AsyncConcurrencyGate,
+  CandidateWakeQueue,
+  FixedBlockPromiseCache,
+  applyPoolMirrorEvent,
+  buildShadowDependencyIndex,
+  planHotLogRange,
+  reconcileHotCursorAnchor,
+  retryReadOnly,
+  rotatingSlice,
+  routeShadowEvent,
+  selectPeriodicShadowCandidates,
+} from '../src/event-driven-shadow.mjs'
 import {
   BoardStatus,
   appendEvents,
   buildBoardSnapshot,
   catalogIsComplete,
-  materialEvents,
   nextCycleDelay,
   normalizePairCandidate,
   publicError,
+  reconcileOpportunityEpisodes,
   screenRoundTrip,
   usdg,
   writeJsonAtomic,
 } from '../src/opportunity-board.mjs'
+import {
+  OFFICIAL_PAIR_HOOK,
+  PoolAdmission,
+  PoolEvidence,
+  ROBINHOOD_CHAIN_ID,
+  V3_SWAP_TOPIC,
+  V4_INITIALIZE_TOPIC,
+  V4_POOL_MANAGER,
+  V4_QUOTER,
+  V4_SWAP_TOPIC,
+  decodePoolManagerLog,
+  decodeV3SwapLog,
+  inferPairLaunchPools,
+  mergeApiAndChainCatalog,
+  mergeChainPools,
+} from '../src/pair-catalog.mjs'
 import {
   DEFAULT_AMOUNT_GRID_USDG,
   DEFAULT_PROBE_AMOUNTS_USDG,
@@ -25,16 +54,18 @@ import {
   refinementAmounts,
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
+import { classifyRpcError, errorText, RpcErrorClass } from '../src/policy.mjs'
 
-const CHAIN_ID = 4663
+const CHAIN_ID = ROBINHOOD_CHAIN_ID
 const PAIR_TOKENS_API = 'https://pair.fund/api/tokens'
 const PAIR_STOCK_TOKENS_API = 'https://pair.fund/api/stock-tokens'
 const ROBINHOOD_ASSETS_API = 'https://api.robinhood.com/rhj/assets'
+const PAIR_CATALOG_PAGE_SIZE = 1_000
 const USDG = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 const WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
 const V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
 const V3_QUOTER = getAddress('0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7')
-const V4_QUOTER = getAddress('0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94')
+const POOL_MANAGER = V4_POOL_MANAGER
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 const V3_FEES = [100, 500, 3_000, 10_000]
 const INITIAL_PRIORITY = [
@@ -137,12 +168,15 @@ function loadConfig() {
     minimumCyclePauseMs: integer(process.env.MANGA_BOARD_MIN_CYCLE_PAUSE_MS, 30_000, 0),
     catalogIntervalMs: integer(process.env.MANGA_BOARD_CATALOG_INTERVAL_MS, 300_000, 30_000),
     staleMs: integer(process.env.MANGA_BOARD_STALE_MS, 180_000, 30_000),
-    batchSize: integer(process.env.MANGA_BOARD_BATCH_SIZE, 8),
-    topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 32),
+    batchSize: integer(process.env.MANGA_BOARD_BATCH_SIZE, 4),
+    priorityRefreshSize: integer(process.env.MANGA_BOARD_PRIORITY_REFRESH_SIZE, 2),
+    topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 4),
     quoteConcurrency: integer(process.env.MANGA_BOARD_QUOTE_CONCURRENCY, 2),
+    legConcurrency: integer(process.env.MANGA_BOARD_LEG_CONCURRENCY, 5),
     catalogConcurrency: integer(process.env.MANGA_BOARD_CATALOG_CONCURRENCY, 6),
     amountQuoteConcurrency: integer(process.env.MANGA_BOARD_AMOUNT_QUOTE_CONCURRENCY, 1),
-    fullGridEveryCycles: integer(process.env.MANGA_BOARD_FULL_GRID_EVERY_CYCLES, 20),
+    v3ShortlistSize: integer(process.env.MANGA_BOARD_V3_SHORTLIST_SIZE, 3),
+    fullGridEveryCycles: integer(process.env.MANGA_BOARD_FULL_GRID_EVERY_CYCLES, 0, 0),
     fullGridRefreshMs: integer(process.env.MANGA_BOARD_FULL_GRID_REFRESH_MS, 300_000),
     blockLag: BigInt(integer(process.env.MANGA_BOARD_BLOCK_LAG, 1, 0)),
     minDepthUsd: numberValue(process.env.MANGA_BOARD_MIN_DEPTH_USD, 100),
@@ -150,6 +184,20 @@ function loadConfig() {
     probeAmounts,
     overheadGas: BigInt(integer(process.env.MANGA_BOARD_OVERHEAD_GAS, 100_000, 0)),
     requestTimeoutMs: integer(process.env.MANGA_BOARD_REQUEST_TIMEOUT_MS, 15_000, 1_000),
+    rpcBatchSize: integer(process.env.MANGA_BOARD_RPC_BATCH_SIZE, 20),
+    rpcBatchWaitMs: integer(process.env.MANGA_BOARD_RPC_BATCH_WAIT_MS, 10, 0),
+    rpcHttpConcurrency: integer(process.env.MANGA_BOARD_RPC_HTTP_CONCURRENCY, 2),
+    rpcLogicalAttempts: integer(process.env.MANGA_BOARD_RPC_LOGICAL_ATTEMPTS, 3),
+    rpcRetryDelayMs: integer(process.env.MANGA_BOARD_RPC_RETRY_DELAY_MS, 200, 0),
+    eventPollMs: integer(process.env.MANGA_BOARD_EVENT_POLL_MS, 4_000, 1_000),
+    eventConfirmations: BigInt(integer(process.env.MANGA_BOARD_EVENT_CONFIRMATIONS, 2, 0)),
+    eventMaxBlockRange: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_BLOCK_RANGE, 2_000)),
+    eventWakeMaxCandidates: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_CANDIDATES, 4),
+    eventV3MaxAddresses: integer(process.env.MANGA_BOARD_EVENT_V3_MAX_ADDRESSES, 200),
+    eventReorgLookback: BigInt(integer(process.env.MANGA_BOARD_EVENT_REORG_LOOKBACK, 12)),
+    chainCatalogStartBlock: BigInt(integer(process.env.MANGA_BOARD_CHAIN_CATALOG_START_BLOCK, 45_000_000, 0)),
+    chainCatalogBlockRange: BigInt(integer(process.env.MANGA_BOARD_CHAIN_CATALOG_BLOCK_RANGE, 50_000)),
+    chainCatalogBatchesPerCycle: integer(process.env.MANGA_BOARD_CHAIN_CATALOG_BATCHES_PER_CYCLE, 1),
   }
 }
 
@@ -242,14 +290,36 @@ function observationFromItem(item) {
     'exitV3Path',
     'entryV3Tokens',
     'exitV3Tokens',
+    'entryV3Pools',
+    'exitV3Pools',
     'entryV3Fees',
     'exitV3Fees',
     'failures',
     'evidenceLevel',
     'executionEstimate',
     'receiptEvidence',
+    'quoteTrigger',
+    'routeExecutionAdmission',
+    'v3RoutePolicy',
   ]
   return Object.fromEntries(keys.filter((key) => item[key] !== undefined).map((key) => [key, item[key]]))
+}
+
+/** @param {unknown} error */
+function quoteTransportIsIncomplete(error) {
+  const classification = classifyRpcError(error)
+  if ([RpcErrorClass.STATE_NOT_READY, RpcErrorClass.THROTTLED].includes(classification)) return true
+  if (classification !== RpcErrorClass.NETWORK) return false
+  return /\b429\b|too many requests|rate.?limit|quota|timeout|timed out|econn|fetch failed|network|socket|websocket|http request failed/i.test(
+    errorText(error),
+  )
+}
+
+/** @param {string} message @param {unknown} cause */
+function incompleteRpcError(message, cause) {
+  const error = new Error(message)
+  error.cause = cause
+  return error
 }
 
 class OpportunityBoard {
@@ -260,7 +330,11 @@ class OpportunityBoard {
     this.snapshotPath = path.join(config.runDir, 'snapshot.json')
     this.eventsPath = path.join(config.runDir, 'events.jsonl')
     this.statePath = path.join(config.runDir, 'state.json')
+    this.chainCatalogPath = path.join(config.runDir, 'chain-catalog.json')
+    this.poolMirrorPath = path.join(config.runDir, 'pool-mirror.json')
     this.html = fs.readFileSync(path.join(ROOT, 'public', 'opportunity-board.html'), 'utf8')
+    const persistedState = readJson(this.statePath) || {}
+    const persistedChainCatalog = readJson(this.chainCatalogPath) || {}
     this.previousSnapshot = readJson(this.snapshotPath)
     this.snapshot = this.previousSnapshot
     this.observations = new Map(
@@ -271,15 +345,77 @@ class OpportunityBoard {
     this.rawTokens = new Map()
     this.catalog = []
     this.stockAddresses = new Set()
+    this.quoteAssets = new Map()
+    this.chainPools = Array.isArray(persistedChainCatalog.pools) ? persistedChainCatalog.pools : []
+    this.chainAmbiguities = Array.isArray(persistedChainCatalog.ambiguities) ? persistedChainCatalog.ambiguities : []
+    this.chainCatalogNextBlock = BigInt(
+      persistedState.chainCatalogNextBlock || config.chainCatalogStartBlock.toString(),
+    )
+    if (this.chainCatalogNextBlock < config.chainCatalogStartBlock) {
+      this.chainCatalogNextBlock = config.chainCatalogStartBlock
+    }
+    this.chainCatalogSafeHead = persistedChainCatalog.coverage?.safeHead || null
+    this.chainCatalogComplete = persistedChainCatalog.coverage?.status === 'COMPLETE_FROM_CONFIGURED_START'
+    this.chainCatalogLastError = null
+    this.chainAttestations = new Map()
     this.feeCache = new Map()
-    this.cursor = Number(readJson(this.statePath)?.cursor || 0)
-    this.cycleNumber = Number(readJson(this.statePath)?.cycleNumber || 0)
+    this.v3PoolDiscoveryCache = new FixedBlockPromiseCache()
+    this.v3RouteShortlistCache = new FixedBlockPromiseCache()
+    this.v3QuoteCache = new FixedBlockPromiseCache()
+    this.cursor = Number(persistedState.cursor || 0)
+    this.cycleNumber = Number(persistedState.cycleNumber || 0)
+    this.hotCursor = persistedState.hotCursor || {
+      nextBlock: null,
+      lastProcessedBlock: null,
+      lastProcessedBlockHash: null,
+      reorgCount: 0,
+    }
+    this.eventQueue = new CandidateWakeQueue()
+    this.dependencyIndex = buildShadowDependencyIndex([], this.observations)
+    this.poolMirror = readJson(this.poolMirrorPath) || {}
+    this.eventMetrics = {
+      mode: 'PUBLIC_HTTP_BOUNDED_LOG_POLLING',
+      startedAt: this.startedAt,
+      polls: 0,
+      rpcLogCalls: 0,
+      logsSeen: 0,
+      relevantLogs: 0,
+      dedupedLogs: 0,
+      candidateWakes: 0,
+      eventQuoteCandidates: 0,
+      lastPollAt: null,
+      lastEventAt: null,
+      lastEventToQuoteMs: null,
+      lastError: null,
+      consecutiveErrors: 0,
+      lastCycleTrigger: null,
+      lastCycleCandidateCount: 0,
+      lastCycleQuoterCalls: 0,
+      eventDrivenQuoterCalls: 0,
+      reconciliationQuoterCalls: 0,
+    }
+    this.quoteRpcMetrics = {
+      rpcHttpPosts: 0,
+      rpcHttpPeakConcurrency: 0,
+      rpcLogicalRetries: 0,
+      v3FactoryReads: 0,
+      v3FactoryCacheHits: 0,
+      v3QuoterCalls: 0,
+      v3QuoterCacheHits: 0,
+      v3ShortlistDiscoveries: 0,
+      v3ShortlistHits: 0,
+      v4QuoterCalls: 0,
+    }
+    this.catalogRefreshRequested = false
+    this.rpcHttpGate = new AsyncConcurrencyGate(config.rpcHttpConcurrency)
+    this.eventLedgerEpoch = persistedState.eventLedgerEpoch || null
     this.lastCatalogAt = null
     this.lastFullCatalogAt = null
     this.lastCycleAt = null
     this.lastQuoteAt = null
     this.consecutiveErrors = 0
     this.lastError = null
+    this.cycleRpcFailure = null
     this.inCycle = false
     this.stopping = false
     this.server = null
@@ -295,7 +431,20 @@ class OpportunityBoard {
       })
       this.client = createPublicClient({
         chain,
-        transport: http(config.rpcUrl, { timeout: 20_000, retryCount: 1 }),
+        transport: http(config.rpcUrl, {
+          batch: { batchSize: config.rpcBatchSize, wait: config.rpcBatchWaitMs },
+          fetchFn: (...args) =>
+            this.rpcHttpGate.run(async () => {
+              this.quoteRpcMetrics.rpcHttpPosts += 1
+              this.quoteRpcMetrics.rpcHttpPeakConcurrency = Math.max(
+                this.quoteRpcMetrics.rpcHttpPeakConcurrency,
+                this.rpcHttpGate.active,
+              )
+              return fetch(...args)
+            }),
+          timeout: 20_000,
+          retryCount: 1,
+        }),
       })
     }
   }
@@ -313,20 +462,56 @@ class OpportunityBoard {
       pid: process.pid,
       listen: `${this.config.host}:${this.config.port}`,
       signerLoaded: false,
+      eventDrivenShadow: {
+        ...this.eventMetrics,
+        rpcTransport: {
+          mode: 'BOUNDED_HTTP_JSON_RPC_BATCH',
+          batchSize: this.config.rpcBatchSize,
+          batchWaitMs: this.config.rpcBatchWaitMs,
+          maxHttpConcurrency: this.config.rpcHttpConcurrency,
+          metricCaveat: 'rpcHttpPosts are transport requests, not provider billing units',
+        },
+        pendingCandidates: this.eventQueue.size,
+        nextBlock: this.hotCursor.nextBlock,
+        reorgCount: Number(this.hotCursor.reorgCount || 0),
+        quoteRpcTotals: { ...this.quoteRpcMetrics },
+      },
     }
   }
 
   sourceState() {
     return {
-      discovery: 'PAIR_FIRST_PARTY_API',
-      canonicalAssets: 'ROBINHOOD_ASSETS_API_PLUS_PAIR_STOCK_TOKENS',
+      discovery: 'PAIR_API_PLUS_BOUNDED_POOL_MANAGER_INITIALIZE_BACKFILL',
+      canonicalAssets: 'ROBINHOOD_ASSETS_API_PLUS_PAIR_QUOTE_REGISTRY',
       quoteRpc: this.config.providerLabel,
       discoveredTokens: this.rawTokens.size,
       catalogComplete: this.catalogComplete ?? false,
       catalogExpectedTokens: this.catalogExpectedTokens ?? null,
       catalogObservedAt: this.lastCatalogAt,
       fullCatalogObservedAt: this.lastFullCatalogAt,
+      chainCatalog: {
+        evidence: 'POOL_MANAGER_INITIALIZE_LOGS',
+        configuredStartBlock: this.config.chainCatalogStartBlock.toString(),
+        nextBlock: this.chainCatalogNextBlock.toString(),
+        safeHead: this.chainCatalogSafeHead,
+        status: this.chainCatalogComplete ? 'COMPLETE_FROM_CONFIGURED_START' : 'BACKFILL_PARTIAL',
+        poolCount: this.chainPools.length,
+        ambiguousLaunchCount: this.chainAmbiguities.length,
+        lastError: this.chainCatalogLastError,
+        scopeWarning: 'not a claim of completeness before configuredStartBlock',
+      },
     }
+  }
+
+  persistState(updatedAt = new Date().toISOString()) {
+    writeJsonAtomic(this.statePath, {
+      cursor: this.cursor,
+      cycleNumber: this.cycleNumber,
+      chainCatalogNextBlock: this.chainCatalogNextBlock.toString(),
+      hotCursor: this.hotCursor,
+      eventLedgerEpoch: this.eventLedgerEpoch,
+      updatedAt,
+    })
   }
 
   async refreshCatalog({ full }) {
@@ -336,24 +521,45 @@ class OpportunityBoard {
       const stockAddresses = new Set(
         (Array.isArray(stockPayload) ? stockPayload : []).map((item) => item?.address?.toLowerCase()).filter(Boolean),
       )
+      const quoteAssets = new Map(
+        (Array.isArray(stockPayload) ? stockPayload : [])
+          .filter((item) => item?.address)
+          .map((item) => [item.address.toLowerCase(), { ...item }]),
+      )
       for (const asset of robinhoodPayload?.assets || []) {
         if (asset?.status !== 'ASSET_STATUS_ACTIVE') continue
         for (const deployment of asset.deployments || []) {
           if (Number(deployment.chainId) === CHAIN_ID && deployment.contractAddress) {
             stockAddresses.add(deployment.contractAddress.toLowerCase())
+            if (!quoteAssets.has(deployment.contractAddress.toLowerCase())) {
+              quoteAssets.set(deployment.contractAddress.toLowerCase(), {
+                address: deployment.contractAddress,
+                symbol: asset.symbol || asset.ticker || 'ROBINHOOD_ASSET',
+                decimals: 18,
+                enabled: true,
+              })
+            }
           }
         }
       }
       this.stockAddresses = stockAddresses
+      this.quoteAssets = quoteAssets
     }
 
     if (full) {
-      const first = await fetchJson(`${PAIR_TOKENS_API}?page=1&limit=50&sort=market_cap`, this.config.requestTimeoutMs)
-      const pages = Math.max(1, Math.ceil(Number(first.total || 0) / Number(first.limit || 50)))
+      const first = await fetchJson(
+        `${PAIR_TOKENS_API}?page=1&limit=${PAIR_CATALOG_PAGE_SIZE}&sort=newest`,
+        this.config.requestTimeoutMs,
+      )
+      const pages = Math.max(1, Math.ceil(Number(first.total || 0) / Number(first.limit || PAIR_CATALOG_PAGE_SIZE)))
       const rest = await mapLimit(
         this.config.catalogConcurrency,
         Array.from({ length: Math.max(0, pages - 1) }, (_, index) => index + 2),
-        (page) => fetchJson(`${PAIR_TOKENS_API}?page=${page}&limit=50&sort=market_cap`, this.config.requestTimeoutMs),
+        (page) =>
+          fetchJson(
+            `${PAIR_TOKENS_API}?page=${page}&limit=${PAIR_CATALOG_PAGE_SIZE}&sort=newest`,
+            this.config.requestTimeoutMs,
+          ),
       )
       this.rawTokens.clear()
       for (const payload of [first, ...rest]) {
@@ -371,128 +577,546 @@ class OpportunityBoard {
     }
     if (full) this.catalogComplete = catalogIsComplete(this.rawTokens.size, this.catalogExpectedTokens)
 
-    this.catalog = [...this.rawTokens.values()]
-      .map((token) =>
-        normalizePairCandidate(token, { minDepthUsd: this.config.minDepthUsd, stockAddresses: this.stockAddresses }),
-      )
-      .filter(Boolean)
+    for (const token of this.rawTokens.values()) {
+      for (const pair of token.pairs || []) {
+        if (pair?.quoteToken?.address && !this.quoteAssets.has(pair.quoteToken.address.toLowerCase())) {
+          this.quoteAssets.set(pair.quoteToken.address.toLowerCase(), { ...pair.quoteToken })
+        }
+      }
+    }
+    this.rebuildCatalogFromSources()
     this.lastCatalogAt = new Date().toISOString()
   }
 
-  /** @param {string} tokenA @param {string} tokenB @param {bigint} blockNumber */
-  async availableV3Fees(tokenA, tokenB, blockNumber) {
-    if (tokenA.toLowerCase() === tokenB.toLowerCase()) return []
-    const key = [tokenA.toLowerCase(), tokenB.toLowerCase()].sort().join(':')
-    const cached = this.feeCache.get(key)
-    if (cached && (cached.fees.length > 0 || Date.now() - cached.at < this.config.catalogIntervalMs)) {
-      return cached.fees
-    }
-    const pools = await Promise.all(
-      V3_FEES.map(async (fee) => {
-        try {
-          const pool = await this.client.readContract({
-            address: V3_FACTORY,
-            abi: FACTORY_ABI,
-            functionName: 'getPool',
-            args: [tokenA, tokenB, fee],
-            blockNumber,
-          })
-          return pool !== ZERO_ADDRESS ? fee : null
-        } catch {
-          return null
-        }
+  rebuildCatalogFromSources() {
+    const mergedCatalog = mergeApiAndChainCatalog([...this.rawTokens.values()], this.chainPools, this.quoteAssets)
+    this.catalog = mergedCatalog
+      .map((token) =>
+        normalizePairCandidate(token, {
+          minDepthUsd: this.config.minDepthUsd,
+          quoteAssetAddresses: this.stockAddresses,
+          chainAttestations: this.chainAttestations,
+        }),
+      )
+      .filter(Boolean)
+    this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
+  }
+
+  /** @param {Record<string, any>} filter */
+  async rpcLogs(filter) {
+    const logs = await this.client.request(
+      /** @type {any} */ ({
+        method: 'eth_getLogs',
+        params: [filter],
       }),
     )
-    const fees = pools.filter((fee) => fee !== null)
-    this.feeCache.set(key, { fees, at: Date.now() })
-    return fees
+    if (!Array.isArray(logs)) throw new Error('eth_getLogs did not return an array')
+    return logs
+  }
+
+  /** @param {Record<string, any>[]} initializeEvents */
+  ingestInitializeEvents(initializeEvents) {
+    const inferred = inferPairLaunchPools(initializeEvents, new Set(this.quoteAssets.keys()))
+    const beforeCount = this.chainPools.length
+    this.chainPools = mergeChainPools(this.chainPools, inferred.pools)
+    const ambiguityMap = new Map(
+      this.chainAmbiguities.map((item) => [`${item.launchTxHash}:${(item.poolIds || []).join(',')}`, item]),
+    )
+    for (const item of inferred.ambiguities) {
+      ambiguityMap.set(`${item.launchTxHash}:${item.poolIds.join(',')}`, item)
+    }
+    this.chainAmbiguities = [...ambiguityMap.values()]
+    return { discoveredPools: this.chainPools.length - beforeCount, ambiguities: inferred.ambiguities.length }
+  }
+
+  writeChainCatalog(safeHead, lastBatch = null) {
+    const byTarget = new Map()
+    for (const pool of this.chainPools) {
+      const key = pool.targetAddress.toLowerCase()
+      if (!byTarget.has(key)) byTarget.set(key, [])
+      byTarget.get(key).push(pool)
+    }
+    this.chainCatalogSafeHead = safeHead.toString()
+    this.chainCatalogComplete = this.chainCatalogNextBlock > safeHead
+    writeJsonAtomic(this.chainCatalogPath, {
+      schemaVersion: 1,
+      mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
+      generatedAt: new Date().toISOString(),
+      coverage: {
+        status: this.chainCatalogComplete ? 'COMPLETE_FROM_CONFIGURED_START' : 'BACKFILL_PARTIAL',
+        configuredStartBlock: this.config.chainCatalogStartBlock.toString(),
+        scannedThroughBlock:
+          this.chainCatalogNextBlock > this.config.chainCatalogStartBlock
+            ? (this.chainCatalogNextBlock - 1n).toString()
+            : null,
+        nextBlock: this.chainCatalogNextBlock.toString(),
+        safeHead: safeHead.toString(),
+        scopeWarning: 'blocks before configuredStartBlock are not covered',
+      },
+      summary: {
+        pools: this.chainPools.length,
+        attributedTargets: byTarget.size,
+        multiPoolTargets: [...byTarget.values()].filter((pools) => pools.length >= 2).length,
+        singlePoolTargets: [...byTarget.values()].filter((pools) => pools.length === 1).length,
+        ambiguousLaunches: this.chainAmbiguities.length,
+      },
+      lastBatch,
+      targets: [...byTarget.entries()]
+        .map(([targetAddress, pools]) => ({
+          targetAddress,
+          poolCount: pools.length,
+          strategyEligibility: pools.length >= 2 ? 'MULTI_POOL_SHADOW_CANDIDATE' : 'SINGLE_POOL_NO_INTERNAL_CYCLE',
+          poolIds: pools.map((pool) => pool.poolId),
+          quoteAddresses: pools.map((pool) => pool.quoteAddress),
+        }))
+        .sort(
+          (left, right) => right.poolCount - left.poolCount || left.targetAddress.localeCompare(right.targetAddress),
+        ),
+      pools: this.chainPools,
+      ambiguities: this.chainAmbiguities,
+    })
+  }
+
+  /** @param {bigint} safeHead */
+  async advanceChainCatalog(safeHead) {
+    let batches = 0
+    let logsSeen = 0
+    let discoveredPools = 0
+    let ambiguities = 0
+    let lastFromBlock = null
+    let lastToBlock = null
+    while (batches < this.config.chainCatalogBatchesPerCycle && this.chainCatalogNextBlock <= safeHead) {
+      const fromBlock = this.chainCatalogNextBlock
+      const maximumTo = fromBlock + this.config.chainCatalogBlockRange - 1n
+      const toBlock = maximumTo < safeHead ? maximumTo : safeHead
+      const logs = await this.rpcLogs({
+        address: POOL_MANAGER,
+        fromBlock: toHex(fromBlock),
+        toBlock: toHex(toBlock),
+        topics: [V4_INITIALIZE_TOPIC],
+      })
+      const events = logs.map((log) => decodePoolManagerLog(log))
+      const ingested = this.ingestInitializeEvents(events)
+      logsSeen += logs.length
+      discoveredPools += ingested.discoveredPools
+      ambiguities += ingested.ambiguities
+      batches += 1
+      lastFromBlock = fromBlock
+      lastToBlock = toBlock
+      this.chainCatalogNextBlock = toBlock + 1n
+    }
+    const lastBatch = {
+      at: new Date().toISOString(),
+      batches,
+      logsSeen,
+      discoveredPools,
+      ambiguities,
+      fromBlock: lastFromBlock?.toString() || null,
+      toBlock: lastToBlock?.toString() || null,
+    }
+    this.writeChainCatalog(safeHead, lastBatch)
+    if (discoveredPools > 0) this.rebuildCatalogFromSources()
+    this.persistState(lastBatch.at)
+    return lastBatch
+  }
+
+  v3WatchAddresses() {
+    return [...this.dependencyIndex.v3PoolToCandidates.keys()].sort().slice(0, this.config.eventV3MaxAddresses)
+  }
+
+  async pollHotEvents() {
+    const observedAtMs = Date.now()
+    const head = await this.client.getBlockNumber()
+    this.eventMetrics.lastError = null
+    this.eventMetrics.consecutiveErrors = 0
+    let nextBlock = this.hotCursor.nextBlock === null ? null : BigInt(this.hotCursor.nextBlock)
+    let planned = planHotLogRange(nextBlock, head, {
+      confirmations: this.config.eventConfirmations,
+      maxBlockRange: this.config.eventMaxBlockRange,
+    })
+    this.eventMetrics.polls += 1
+    this.eventMetrics.lastPollAt = new Date(observedAtMs).toISOString()
+
+    if (nextBlock === null) {
+      this.hotCursor = {
+        ...this.hotCursor,
+        nextBlock: planned.initializedNextBlock.toString(),
+      }
+      this.persistState()
+      return { candidateIds: [], catalogRefresh: false, initialized: true }
+    }
+    if (!planned.range) {
+      this.persistState()
+      return { candidateIds: [], catalogRefresh: false, initialized: false }
+    }
+
+    if (this.hotCursor.lastProcessedBlock) {
+      const anchorBlock = await this.client.getBlock({ blockNumber: BigInt(this.hotCursor.lastProcessedBlock) })
+      const reconciled = reconcileHotCursorAnchor(this.hotCursor, anchorBlock.hash, {
+        startBlock: this.config.chainCatalogStartBlock,
+        reorgLookback: this.config.eventReorgLookback,
+      })
+      if (reconciled.reorgDetected) {
+        this.hotCursor = reconciled
+        this.eventQueue = new CandidateWakeQueue()
+        nextBlock = BigInt(reconciled.nextBlock)
+        planned = planHotLogRange(nextBlock, head, {
+          confirmations: this.config.eventConfirmations,
+          maxBlockRange: this.config.eventMaxBlockRange,
+        })
+      }
+    }
+    if (!planned.range) return { candidateIds: [], catalogRefresh: false, initialized: false }
+
+    const { fromBlock, toBlock } = planned.range
+    const v4Logs = await this.rpcLogs({
+      address: POOL_MANAGER,
+      fromBlock: toHex(fromBlock),
+      toBlock: toHex(toBlock),
+      topics: [[V4_SWAP_TOPIC, V4_INITIALIZE_TOPIC]],
+    })
+    this.eventMetrics.rpcLogCalls += 1
+
+    const v3Logs = []
+    const addresses = this.v3WatchAddresses()
+    for (let index = 0; index < addresses.length; index += 100) {
+      const addressChunk = addresses.slice(index, index + 100)
+      v3Logs.push(
+        ...(await this.rpcLogs({
+          address: addressChunk.length === 1 ? addressChunk[0] : addressChunk,
+          fromBlock: toHex(fromBlock),
+          toBlock: toHex(toBlock),
+          topics: [V3_SWAP_TOPIC],
+        })),
+      )
+      this.eventMetrics.rpcLogCalls += 1
+    }
+
+    const events = [
+      ...v4Logs.map((log) => decodePoolManagerLog(log)),
+      ...v3Logs.map((log) => decodeV3SwapLog(log)),
+    ].filter(Boolean)
+    events.sort((left, right) => {
+      if (left.blockNumber !== right.blockNumber) return left.blockNumber < right.blockNumber ? -1 : 1
+      return left.logIndex - right.logIndex
+    })
+    const initializeEvents = events.filter((event) => event.type === 'V4_INITIALIZE')
+    const initializeResult = this.ingestInitializeEvents(initializeEvents)
+    if (initializeResult.discoveredPools > 0) {
+      this.catalogRefreshRequested = true
+      this.writeChainCatalog(planned.safeHead, {
+        at: new Date().toISOString(),
+        source: 'HOT_FORWARD_LOG',
+        logsSeen: initializeEvents.length,
+        discoveredPools: initializeResult.discoveredPools,
+      })
+    }
+
+    let relevantLogs = 0
+    let candidateWakes = 0
+    let catalogRefresh = initializeEvents.length > 0
+    for (const event of events) {
+      const routed = routeShadowEvent(event, this.dependencyIndex)
+      catalogRefresh ||= routed.catalogRefresh
+      if (routed.candidateIds.length === 0) continue
+      const offered = this.eventQueue.offer(event, routed.candidateIds, observedAtMs)
+      if (!offered.accepted) continue
+      relevantLogs += 1
+      candidateWakes += offered.candidateCount
+      this.poolMirror = applyPoolMirrorEvent(this.poolMirror, event)
+    }
+    const anchor = await this.client.getBlock({ blockNumber: toBlock })
+    this.hotCursor = {
+      ...this.hotCursor,
+      nextBlock: (toBlock + 1n).toString(),
+      lastProcessedBlock: toBlock.toString(),
+      lastProcessedBlockHash: anchor.hash,
+      lastProcessedAt: new Date().toISOString(),
+    }
+    this.eventMetrics.logsSeen += events.length
+    this.eventMetrics.relevantLogs += relevantLogs
+    this.eventMetrics.candidateWakes += candidateWakes
+    this.eventMetrics.dedupedLogs = this.eventQueue.dedupedEvents
+    this.eventMetrics.lastEventAt =
+      events.length > 0 ? new Date(observedAtMs).toISOString() : this.eventMetrics.lastEventAt
+    this.eventMetrics.lastError = null
+    this.eventMetrics.consecutiveErrors = 0
+    if (relevantLogs > 0) writeJsonAtomic(this.poolMirrorPath, this.poolMirror)
+    this.persistState()
+    const wake = this.eventQueue.take(this.config.eventWakeMaxCandidates)
+    return { ...wake, catalogRefresh, initialized: false }
+  }
+
+  /** @param {number} timeoutMs */
+  async waitForEventWake(timeoutMs) {
+    const deadline = Date.now() + timeoutMs
+    while (!this.stopping && Date.now() < deadline) {
+      try {
+        if (this.eventQueue.size > 0) {
+          const pending = this.eventQueue.take(this.config.eventWakeMaxCandidates)
+          return { ...pending, observedAtMs: pending.oldestObservedAtMs, catalogRefresh: false }
+        }
+        const result = await this.pollHotEvents()
+        if (result.catalogRefresh) this.catalogRefreshRequested = true
+        if (result.candidateIds.length > 0) {
+          return {
+            ...result,
+            observedAtMs: result.oldestObservedAtMs,
+          }
+        }
+      } catch (error) {
+        this.eventMetrics.lastError = publicError(error)
+        this.eventMetrics.consecutiveErrors += 1
+      }
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
+      const errorMultiplier = 2 ** Math.min(this.eventMetrics.consecutiveErrors, 4)
+      const pollDelay = Math.min(60_000, this.config.eventPollMs * errorMultiplier)
+      await new Promise((resolve) => {
+        this.sleepResolve = resolve
+        this.sleepTimer = setTimeout(resolve, Math.min(pollDelay, remaining))
+      })
+      this.sleepResolve = null
+      this.sleepTimer = null
+    }
+    return null
+  }
+
+  /** @param {string} tokenA @param {string} tokenB @param {bigint} blockNumber */
+  async availableV3Pools(tokenA, tokenB, blockNumber) {
+    if (tokenA.toLowerCase() === tokenB.toLowerCase()) return []
+    const key = [tokenA.toLowerCase(), tokenB.toLowerCase()].sort().join(':')
+    const fixedBlock = this.v3PoolDiscoveryCache.getOrCreate(
+      blockNumber,
+      key,
+      () => this.availableV3PoolsUncached(tokenA, tokenB, blockNumber, key),
+      { evictRejected: false },
+    )
+    if (fixedBlock.hit) this.quoteRpcMetrics.v3FactoryCacheHits += 1
+    return fixedBlock.promise
+  }
+
+  /** @param {string} tokenA @param {string} tokenB @param {bigint} blockNumber @param {string} key */
+  async availableV3PoolsUncached(tokenA, tokenB, blockNumber, key) {
+    const cached = this.feeCache.get(key)
+    if (cached && (cached.pools.length > 0 || Date.now() - cached.at < this.config.catalogIntervalMs)) {
+      return cached.pools
+    }
+    const reads = await Promise.allSettled(
+      V3_FEES.map(async (fee) => {
+        this.quoteRpcMetrics.v3FactoryReads += 1
+        const pool = await this.retryRpc(
+          () =>
+            this.client.readContract({
+              address: V3_FACTORY,
+              abi: FACTORY_ABI,
+              functionName: 'getPool',
+              args: [tokenA, tokenB, fee],
+              blockNumber,
+            }),
+          () => true,
+        )
+        return pool !== ZERO_ADDRESS ? { fee, address: getAddress(pool) } : null
+      }),
+    )
+    const rejected = reads.filter((result) => result.status === 'rejected')
+    if (rejected.length > 0) {
+      const failure = incompleteRpcError(
+        `V3 factory evidence incomplete (${rejected.length}/${V3_FEES.length} reads failed)`,
+        rejected[0].reason,
+      )
+      this.cycleRpcFailure ||= failure
+      throw failure
+    }
+    const available = reads.map((result) => result.value).filter((pool) => pool !== null)
+    this.feeCache.set(key, { pools: available, at: Date.now() })
+    return available
+  }
+
+  /** @param {() => Promise<any>} operation @param {(error: unknown) => boolean} [shouldRetry] */
+  retryRpc(operation, shouldRetry = quoteTransportIsIncomplete) {
+    return retryReadOnly(operation, {
+      attempts: this.config.rpcLogicalAttempts,
+      delayMs: this.config.rpcRetryDelayMs,
+      shouldRetry,
+      onRetry: () => {
+        this.quoteRpcMetrics.rpcLogicalRetries += 1
+      },
+    })
   }
 
   /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
   async quoteBestV3(tokenIn, tokenOut, amountIn, blockNumber) {
+    const cacheKey = `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}:${amountIn.toString()}`
+    const cached = this.v3QuoteCache.getOrCreate(blockNumber, cacheKey, () =>
+      this.quoteBestV3Uncached(tokenIn, tokenOut, amountIn, blockNumber),
+    )
+    if (cached.hit) this.quoteRpcMetrics.v3QuoterCacheHits += 1
+    return cached.promise
+  }
+
+  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
+  async quoteBestV3Uncached(tokenIn, tokenOut, amountIn, blockNumber) {
     if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
-      return { amountOut: amountIn, gasEstimate: 0n, fees: [], tokens: [tokenIn], path: '0x' }
+      return { amountOut: amountIn, gasEstimate: 0n, fees: [], tokens: [tokenIn], poolAddresses: [], path: '0x' }
     }
+    const directionKey = `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`
+    const shortlist = this.v3RouteShortlistCache.getOrCreate(blockNumber, directionKey, () =>
+      this.discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber),
+    )
+    if (shortlist.hit) this.quoteRpcMetrics.v3ShortlistHits += 1
+    const discovery = await shortlist.promise
+    if (discovery.amountIn === amountIn) return discovery.best
+    const successful = await this.quoteV3Routes(discovery.routes, amountIn, blockNumber)
+    if (successful.length === 0) throw new Error('no quotable shortlisted V3 anchor route')
+    return successful[0]
+  }
+
+  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
+  async discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber) {
+    this.quoteRpcMetrics.v3ShortlistDiscoveries += 1
     const candidates = []
-    const directFees = await this.availableV3Fees(tokenIn, tokenOut, blockNumber)
-    for (const fee of directFees) candidates.push({ tokens: [tokenIn, tokenOut], fees: [fee] })
+    const directPools = await this.availableV3Pools(tokenIn, tokenOut, blockNumber)
+    for (const pool of directPools) {
+      candidates.push({
+        tokens: [tokenIn, tokenOut],
+        fees: [pool.fee],
+        poolAddresses: [pool.address],
+        path: v3Path([tokenIn, tokenOut], [pool.fee]),
+      })
+    }
 
     if (tokenIn.toLowerCase() !== WETH.toLowerCase() && tokenOut.toLowerCase() !== WETH.toLowerCase()) {
-      const [entryFees, exitFees] = await Promise.all([
-        this.availableV3Fees(tokenIn, WETH, blockNumber),
-        this.availableV3Fees(WETH, tokenOut, blockNumber),
+      const [entryPools, exitPools] = await Promise.all([
+        this.availableV3Pools(tokenIn, WETH, blockNumber),
+        this.availableV3Pools(WETH, tokenOut, blockNumber),
       ])
-      for (const entryFee of entryFees) {
-        for (const exitFee of exitFees) {
-          candidates.push({ tokens: [tokenIn, WETH, tokenOut], fees: [entryFee, exitFee] })
+      for (const entryPool of entryPools) {
+        for (const exitPool of exitPools) {
+          candidates.push({
+            tokens: [tokenIn, WETH, tokenOut],
+            fees: [entryPool.fee, exitPool.fee],
+            poolAddresses: [entryPool.address, exitPool.address],
+            path: v3Path([tokenIn, WETH, tokenOut], [entryPool.fee, exitPool.fee]),
+          })
         }
       }
     }
 
-    const quotes = await Promise.all(
+    const successful = await this.quoteV3Routes(candidates, amountIn, blockNumber)
+    if (successful.length === 0) throw new Error('no quotable direct-or-WETH V3 anchor route')
+    const routes = successful.slice(0, this.config.v3ShortlistSize).map((result) => ({
+      tokens: result.tokens,
+      fees: result.fees,
+      poolAddresses: result.poolAddresses,
+      path: result.path,
+    }))
+    return { amountIn, best: successful[0], routes }
+  }
+
+  /** @param {Record<string, any>[]} candidates @param {bigint} amountIn @param {bigint} blockNumber */
+  async quoteV3Routes(candidates, amountIn, blockNumber) {
+    const quoteResults = await Promise.all(
       candidates.map(async (candidate) => {
         try {
-          const path = v3Path(candidate.tokens, candidate.fees)
-          const { result } = await this.client.simulateContract({
-            account: ZERO_ADDRESS,
-            address: V3_QUOTER,
-            abi: V3_QUOTER_ABI,
-            functionName: 'quoteExactInput',
-            args: [path, amountIn],
-            blockNumber,
-          })
-          return { amountOut: result[0], gasEstimate: result[3], ...candidate, path }
-        } catch {
-          return null
+          this.quoteRpcMetrics.v3QuoterCalls += 1
+          const { result } = await this.retryRpc(() =>
+            this.client.simulateContract({
+              account: ZERO_ADDRESS,
+              address: V3_QUOTER,
+              abi: V3_QUOTER_ABI,
+              functionName: 'quoteExactInput',
+              args: [candidate.path, amountIn],
+              blockNumber,
+            }),
+          )
+          return { amountOut: result[0], gasEstimate: result[3], ...candidate }
+        } catch (error) {
+          return { error }
         }
       }),
     )
-    const successful = quotes.filter(Boolean).sort((left, right) => (left.amountOut > right.amountOut ? -1 : 1))
-    if (successful.length === 0) throw new Error('no quotable direct-or-WETH V3 anchor route')
-    return successful[0]
+    const incomplete = quoteResults.find((result) => result?.error && quoteTransportIsIncomplete(result.error))
+    if (incomplete) {
+      const failure = incompleteRpcError('V3 quote evidence incomplete', incomplete.error)
+      this.cycleRpcFailure ||= failure
+      throw failure
+    }
+    const successful = quoteResults
+      .filter((result) => result?.amountOut !== undefined)
+      .sort((left, right) => (left.amountOut > right.amountOut ? -1 : 1))
+    return successful
   }
 
-  /** @param {Record<string, any>} pool @param {string} tokenIn @param {bigint} amountIn @param {bigint} blockNumber */
-  async quoteV4(pool, tokenIn, amountIn, blockNumber) {
+  /** @param {Record<string, any>} pool @param {string} tokenIn @param {bigint} amountIn @param {bigint} blockNumber @param {string} blockHash */
+  async quoteV4(pool, tokenIn, amountIn, blockNumber, blockHash) {
     const currency0 = addressBefore(pool.tokenAddress, pool.quoteAddress) ? pool.tokenAddress : pool.quoteAddress
     const currency1 = currency0 === pool.tokenAddress ? pool.quoteAddress : pool.tokenAddress
     if (![currency0.toLowerCase(), currency1.toLowerCase()].includes(tokenIn.toLowerCase())) {
       throw new Error('token is not part of V4 pool key')
     }
-    const { result } = await this.client.simulateContract({
-      account: ZERO_ADDRESS,
-      address: V4_QUOTER,
-      abi: V4_QUOTER_ABI,
-      functionName: 'quoteExactInputSingle',
-      args: [
-        {
-          poolKey: {
-            currency0,
-            currency1,
-            fee: pool.fee,
-            tickSpacing: pool.tickSpacing,
-            hooks: pool.hookAddress,
+    this.quoteRpcMetrics.v4QuoterCalls += 1
+    const { result } = await this.retryRpc(() =>
+      this.client.simulateContract({
+        account: ZERO_ADDRESS,
+        address: V4_QUOTER,
+        abi: V4_QUOTER_ABI,
+        functionName: 'quoteExactInputSingle',
+        args: [
+          {
+            poolKey: {
+              currency0,
+              currency1,
+              fee: pool.fee,
+              tickSpacing: pool.tickSpacing,
+              hooks: pool.hookAddress,
+            },
+            zeroForOne: tokenIn.toLowerCase() === currency0.toLowerCase(),
+            exactAmount: amountIn,
+            hookData: '0x',
           },
-          zeroForOne: tokenIn.toLowerCase() === currency0.toLowerCase(),
-          exactAmount: amountIn,
-          hookData: '0x',
-        },
-      ],
-      blockNumber,
-    })
+        ],
+        blockNumber,
+      }),
+    )
+    const chainAttestation = {
+      status: PoolEvidence.INITIALIZED_QUOTER_CONFIRMED,
+      blockNumber: blockNumber.toString(),
+      blockHash,
+      evidence: 'SUCCESSFUL_V4_QUOTER_CALL_AT_FIXED_BLOCK',
+    }
+    this.chainAttestations.set(pool.poolId, chainAttestation)
+    pool.chainAttestation = chainAttestation
+    if (
+      pool.poolIdEvidence === PoolEvidence.POOL_KEY_MATCHED &&
+      pool.hookAddress === OFFICIAL_PAIR_HOOK &&
+      pool.launchEnabled === true &&
+      pool.depthStatus === 'ADEQUATE'
+    ) {
+      pool.executionAdmission = PoolAdmission.EXECUTOR_COMPATIBLE
+    }
     return { amountOut: result[0], gasEstimate: result[1] }
   }
 
   /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn */
   async quoteCandidateAmount(candidate, fixed, amountIn) {
+    if (this.cycleRpcFailure) throw this.cycleRpcFailure
     const failures = []
     const entries = (
-      await mapLimit(Math.min(3, this.config.quoteConcurrency), candidate.pools, async (pool) => {
+      await mapLimit(this.config.legConcurrency, candidate.pools, async (pool) => {
         try {
           const anchor = await this.quoteBestV3(USDG, pool.quoteAddress, amountIn, fixed.blockNumber)
-          const tokenQuote = await this.quoteV4(pool, pool.quoteAddress, anchor.amountOut, fixed.blockNumber)
+          const tokenQuote = await this.quoteV4(
+            pool,
+            pool.quoteAddress,
+            anchor.amountOut,
+            fixed.blockNumber,
+            fixed.block.hash,
+          )
           return { pool, anchor, tokenQuote }
         } catch (error) {
+          if (quoteTransportIsIncomplete(error))
+            this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
           failures.push({ leg: `USDG_TO_${pool.quoteSymbol}_TO_TOKEN`, reason: publicError(error) })
           return null
         }
@@ -501,16 +1125,19 @@ class OpportunityBoard {
       .filter(Boolean)
       .sort((left, right) => (left.tokenQuote.amountOut > right.tokenQuote.amountOut ? -1 : 1))
 
+    if (this.cycleRpcFailure) throw this.cycleRpcFailure
+
     const routes = []
     for (const entry of entries.slice(0, 2)) {
       const exits = candidate.pools.filter((pool) => pool.poolId !== entry.pool.poolId)
-      const quotedExits = await mapLimit(Math.min(3, this.config.quoteConcurrency), exits, async (pool) => {
+      const quotedExits = await mapLimit(this.config.legConcurrency, exits, async (pool) => {
         try {
           const quoteAsset = await this.quoteV4(
             pool,
             candidate.tokenAddress,
             entry.tokenQuote.amountOut,
             fixed.blockNumber,
+            fixed.block.hash,
           )
           const anchor = await this.quoteBestV3(pool.quoteAddress, USDG, quoteAsset.amountOut, fixed.blockNumber)
           const screening = screenRoundTrip({
@@ -529,11 +1156,14 @@ class OpportunityBoard {
           })
           return { entry, exitPool: pool, quoteAsset, exitAnchor: anchor, screening }
         } catch (error) {
+          if (quoteTransportIsIncomplete(error))
+            this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
           failures.push({ leg: `TOKEN_TO_${pool.quoteSymbol}_TO_USDG`, reason: publicError(error) })
           return null
         }
       })
       routes.push(...quotedExits.filter(Boolean))
+      if (this.cycleRpcFailure) throw this.cycleRpcFailure
     }
 
     if (routes.length === 0) {
@@ -557,6 +1187,7 @@ class OpportunityBoard {
 
   /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed */
   async quoteCandidate(candidate, fixed) {
+    if (this.cycleRpcFailure) throw this.cycleRpcFailure
     const evaluate = (amounts) =>
       mapLimit(this.config.amountQuoteConcurrency, amounts, (amount) =>
         this.quoteCandidateAmount(candidate, fixed, amount),
@@ -571,7 +1202,7 @@ class OpportunityBoard {
       probeQuotes: evaluated,
       previousStatus,
       previousFullGridAt: previousObservation?.fullGridAt || null,
-      priority: INITIAL_PRIORITY.includes(candidate.id),
+      priority: false,
       cycleNumber: this.cycleNumber,
       fullGridEveryCycles: this.config.fullGridEveryCycles,
       fullGridRefreshMs: this.config.fullGridRefreshMs,
@@ -617,6 +1248,8 @@ class OpportunityBoard {
             exitV3Path: quote.exitAnchor.path,
             entryV3Tokens: quote.entry.anchor.tokens,
             exitV3Tokens: quote.exitAnchor.tokens,
+            entryV3Pools: quote.entry.anchor.poolAddresses,
+            exitV3Pools: quote.exitAnchor.poolAddresses,
             legs: {
               entryPoolId: quote.entry.pool.poolId,
               entryV3Fees: quote.entry.anchor.fees,
@@ -651,12 +1284,20 @@ class OpportunityBoard {
         optimizationMode,
         fullGridAt,
         failures,
+        v3RoutePolicy: `FIXED_BLOCK_FIRST_AMOUNT_TOP_${this.config.v3ShortlistSize}_SHORTLIST`,
         evidenceLevel: 'FIXED_BLOCK_QUOTE_FAILED',
         executionEstimate: 'NOT_RUN',
         receiptEvidence: 'NONE',
       }
     }
 
+    const routeDepths = [best.entry.pool.depthUsd, best.exitPool.depthUsd]
+    const minimumRouteDepthUsd = routeDepths.every((value) => Number.isFinite(value)) ? Math.min(...routeDepths) : null
+    const routeExecutionAdmission = [best.entry.pool, best.exitPool].every(
+      (pool) => pool.executionAdmission === PoolAdmission.EXECUTOR_COMPATIBLE,
+    )
+      ? PoolAdmission.EXECUTOR_COMPATIBLE
+      : 'SHADOW_ONLY'
     return {
       status: best.screening.status,
       quotedAt: new Date().toISOString(),
@@ -672,7 +1313,8 @@ class OpportunityBoard {
       gasPriceWei: fixed.gasPrice.toString(),
       gasUnitsProxy: best.screening.gasUnitsProxy.toString(),
       quoterGasUnits: best.screening.routeGas.toString(),
-      minimumRouteDepthUsd: Math.min(best.entry.pool.depthUsd, best.exitPool.depthUsd),
+      minimumRouteDepthUsd,
+      routeExecutionAdmission,
       amountQuotes,
       amountGridUsdg: formatAmountGrid(this.config.amountGrid),
       optimizationMode,
@@ -681,11 +1323,14 @@ class OpportunityBoard {
       exitV3Path: best.exitAnchor.path,
       entryV3Tokens: best.entry.anchor.tokens,
       exitV3Tokens: best.exitAnchor.tokens,
+      entryV3Pools: best.entry.anchor.poolAddresses,
+      exitV3Pools: best.exitAnchor.poolAddresses,
       entryV3Fees: best.entry.anchor.fees,
       exitV3Fees: best.exitAnchor.fees,
       legs: {
         entryV3Fee: best.entry.anchor.fees.length === 1 ? best.entry.anchor.fees[0] : null,
         entryV3Fees: best.entry.anchor.fees,
+        entryV3Pools: best.entry.anchor.poolAddresses,
         entryV3Hops: best.entry.anchor.fees.length,
         entryPoolId: best.entry.pool.poolId,
         entryV4Fee: best.entry.pool.fee,
@@ -693,46 +1338,47 @@ class OpportunityBoard {
         exitV4Fee: best.exitPool.fee,
         exitV3Fee: best.exitAnchor.fees.length === 1 ? best.exitAnchor.fees[0] : null,
         exitV3Fees: best.exitAnchor.fees,
+        exitV3Pools: best.exitAnchor.poolAddresses,
         exitV3Hops: best.exitAnchor.fees.length,
       },
       failures,
-      evidenceLevel: 'FIXED_BLOCK_QUOTER_SCREEN',
+      v3RoutePolicy: `FIXED_BLOCK_FIRST_AMOUNT_TOP_${this.config.v3ShortlistSize}_SHORTLIST`,
+      evidenceLevel: 'FIXED_BLOCK_QUOTER_SCREEN_WITH_POOL_ATTESTATION_AND_V3_SHORTLIST',
       executionEstimate: 'NOT_RUN_GENERIC_EXECUTOR_NOT_DEPLOYED',
       receiptEvidence: 'NONE',
     }
   }
 
-  selectCandidates() {
+  /** @param {string[]} [wakeCandidateIds] */
+  selectCandidates(wakeCandidateIds = []) {
     const byId = new Map(this.catalog.map((candidate) => [candidate.id, candidate]))
-    const selected = []
-    const seen = new Set()
-    const add = (candidate) => {
-      if (!candidate || seen.has(candidate.id)) return
-      seen.add(candidate.id)
-      selected.push(candidate)
-    }
 
-    for (const id of INITIAL_PRIORITY) add(byId.get(id))
-    const currentPositive = [...this.observations.entries()]
-      .filter(([, observation]) =>
-        [BoardStatus.SCREENED_POSITIVE, BoardStatus.GROSS_POSITIVE].includes(observation.status),
-      )
-      .sort((left, right) => Number(right[1].screenedNetUsdg) - Number(left[1].screenedNetUsdg))
-      .slice(0, this.config.topRefreshSize)
-    for (const [id] of currentPositive) add(byId.get(id))
-
-    const targetSize = INITIAL_PRIORITY.length + this.config.topRefreshSize + this.config.batchSize
-    for (const candidate of this.catalog) {
-      if (selected.length >= targetSize) break
-      if (!this.observations.has(candidate.id)) add(candidate)
-    }
-    if (this.catalog.length > 0) {
-      for (let offset = 0; offset < this.config.batchSize && selected.length < targetSize; offset += 1) {
-        add(this.catalog[(this.cursor + offset) % this.catalog.length])
+    if (wakeCandidateIds.length > 0) {
+      const selected = []
+      const seen = new Set()
+      for (const id of wakeCandidateIds.slice(0, this.config.eventWakeMaxCandidates)) {
+        const candidate = byId.get(id.toLowerCase())
+        if (candidate && !seen.has(candidate.id)) {
+          seen.add(candidate.id)
+          selected.push(candidate)
+        }
       }
-      this.cursor = (this.cursor + this.config.batchSize) % this.catalog.length
+      return selected
     }
-    return selected
+
+    const result = selectPeriodicShadowCandidates(this.catalog, this.observations, {
+      priorityIds: rotatingSlice(
+        INITIAL_PRIORITY,
+        this.cycleNumber * this.config.priorityRefreshSize,
+        this.config.priorityRefreshSize,
+      ),
+      positiveStatuses: [BoardStatus.SCREENED_POSITIVE, BoardStatus.GROSS_POSITIVE],
+      topRefreshSize: this.config.topRefreshSize,
+      batchSize: this.config.batchSize,
+      cursor: this.cursor,
+    })
+    this.cursor = result.nextCursor
+    return result.selected
   }
 
   async fixedBlock() {
@@ -756,30 +1402,78 @@ class OpportunityBoard {
       sourceState: this.sourceState(),
       serviceState: this.serviceState(status),
     })
-    const events = materialEvents(this.previousSnapshot, snapshot)
-    writeJsonAtomic(this.snapshotPath, snapshot)
-    appendEvents(this.eventsPath, events)
-    writeJsonAtomic(this.statePath, { cursor: this.cursor, cycleNumber: this.cycleNumber, updatedAt: generatedAt })
-    this.previousSnapshot = snapshot
-    this.snapshot = snapshot
-    return { snapshot, events }
+    const reconciled = reconcileOpportunityEpisodes(this.previousSnapshot, snapshot)
+    if (!this.eventLedgerEpoch) {
+      this.eventLedgerEpoch = generatedAt
+      reconciled.events.unshift({
+        schemaVersion: 2,
+        type: 'EVENT_LEDGER_EPOCH_STARTED',
+        at: generatedAt,
+        semantics: 'ECONOMIC_EPISODES_V2',
+        legacyHistoryBefore: generatedAt,
+      })
+    }
+    reconciled.snapshot.eventLedger.epochStartedAt = this.eventLedgerEpoch
+    writeJsonAtomic(this.snapshotPath, reconciled.snapshot)
+    appendEvents(this.eventsPath, reconciled.events)
+    this.persistState(generatedAt)
+    this.previousSnapshot = reconciled.snapshot
+    this.snapshot = reconciled.snapshot
+    return reconciled
   }
 
-  async cycle({ forceCatalog = false } = {}) {
+  /** @param {{forceCatalog?: boolean, eventWake?: Record<string, any> | null}} [options] */
+  async cycle(options = {}) {
+    const { forceCatalog = false, eventWake = null } = options
     if (this.inCycle) return null
     this.inCycle = true
+    this.cycleRpcFailure = null
+    const quoterCallsBefore = this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls
     try {
-      const catalogDue =
+      const fullCatalogDue =
         forceCatalog ||
         !this.lastFullCatalogAt ||
         Date.now() - Date.parse(this.lastFullCatalogAt) >= this.config.catalogIntervalMs
-      await this.refreshCatalog({ full: catalogDue })
+      const metadataDue =
+        fullCatalogDue ||
+        this.catalogRefreshRequested ||
+        !this.lastCatalogAt ||
+        Date.now() - Date.parse(this.lastCatalogAt) >= this.config.catalogIntervalMs
+      if (metadataDue) {
+        await this.refreshCatalog({ full: fullCatalogDue })
+        this.catalogRefreshRequested = false
+      }
       this.publish('SCANNING')
-      const selected = this.selectCandidates()
       const fixed = await this.fixedBlock()
+      if (this.hotCursor.nextBlock === null) {
+        this.hotCursor = {
+          ...this.hotCursor,
+          nextBlock: (fixed.blockNumber + 1n).toString(),
+          lastProcessedBlock: fixed.blockNumber.toString(),
+          lastProcessedBlockHash: fixed.block.hash,
+          initializedFrom: 'INITIAL_FIXED_BLOCK_RECONCILIATION',
+        }
+        this.persistState()
+      }
+      const selected = this.selectCandidates(eventWake?.candidateIds || [])
+      const triggerByCandidate = new Map((eventWake?.triggers || []).map((trigger) => [trigger.candidateId, trigger]))
       await mapLimit(this.config.quoteConcurrency, selected, async (candidate) => {
         try {
-          this.observations.set(candidate.id, await this.quoteCandidate(candidate, fixed))
+          const observation = await this.quoteCandidate(candidate, fixed)
+          const trigger = triggerByCandidate.get(candidate.id)
+          if (trigger) {
+            observation.quoteTrigger = {
+              mode: 'EVENT_DRIVEN_HTTP_LOG_WAKE',
+              sources: trigger.sources,
+              eventCount: trigger.eventCount,
+              minBlock: trigger.minBlock.toString(),
+              maxBlock: trigger.maxBlock.toString(),
+              observedLogToQuoteMs: Date.now() - trigger.firstObservedAtMs,
+            }
+          } else {
+            observation.quoteTrigger = { mode: 'PERIODIC_RECONCILIATION' }
+          }
+          this.observations.set(candidate.id, observation)
         } catch (error) {
           this.observations.set(candidate.id, {
             status: BoardStatus.UNQUOTABLE,
@@ -790,9 +1484,34 @@ class OpportunityBoard {
             evidenceLevel: 'FIXED_BLOCK_QUOTE_FAILED',
             executionEstimate: 'NOT_RUN',
             receiptEvidence: 'NONE',
+            quoteTrigger: triggerByCandidate.has(candidate.id)
+              ? { mode: 'EVENT_DRIVEN_HTTP_LOG_WAKE', failed: true }
+              : { mode: 'PERIODIC_RECONCILIATION', failed: true },
           })
         }
       })
+      if (this.cycleRpcFailure) throw this.cycleRpcFailure
+      if (!eventWake) {
+        try {
+          await this.advanceChainCatalog(fixed.blockNumber)
+          this.chainCatalogLastError = null
+        } catch (error) {
+          this.chainCatalogLastError = publicError(error)
+        }
+      }
+      this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
+      const cycleQuoterCalls =
+        this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls - quoterCallsBefore
+      this.eventMetrics.lastCycleTrigger = eventWake ? 'POOL_EVENT' : 'PERIODIC_RECONCILIATION'
+      this.eventMetrics.lastCycleCandidateCount = selected.length
+      this.eventMetrics.lastCycleQuoterCalls = cycleQuoterCalls
+      if (eventWake) {
+        this.eventMetrics.eventQuoteCandidates += selected.length
+        this.eventMetrics.eventDrivenQuoterCalls += cycleQuoterCalls
+        this.eventMetrics.lastEventToQuoteMs = eventWake.observedAtMs ? Date.now() - eventWake.observedAtMs : null
+      } else {
+        this.eventMetrics.reconciliationQuoterCalls += cycleQuoterCalls
+      }
       this.lastCycleAt = new Date().toISOString()
       this.lastQuoteAt = this.lastCycleAt
       this.cycleNumber += 1
@@ -845,6 +1564,13 @@ class OpportunityBoard {
         return this.respondJson(response, this.snapshot ? 200 : 503, this.snapshot || { status: 'STARTING' })
       }
       if (requestUrl.pathname === '/api/events') return this.respondJson(response, 200, this.recentEvents())
+      if (requestUrl.pathname === '/api/chain-catalog') {
+        const catalog = readJson(this.chainCatalogPath)
+        return this.respondJson(response, catalog ? 200 : 503, catalog || { status: 'BACKFILL_NOT_STARTED' })
+      }
+      if (requestUrl.pathname === '/api/event-metrics') {
+        return this.respondJson(response, 200, this.serviceState().eventDrivenShadow)
+      }
       if (requestUrl.pathname === '/healthz') {
         const age = this.lastCycleAt ? Date.now() - Date.parse(this.lastCycleAt) : Number.POSITIVE_INFINITY
         const healthyStatus = ['RUNNING', 'SCANNING'].includes(this.snapshot?.health?.status)
@@ -856,6 +1582,8 @@ class OpportunityBoard {
           lastCycleAt: this.lastCycleAt,
           candidateTokens: this.snapshot?.coverage?.candidateTokens ?? 0,
           screenedPositive: this.snapshot?.coverage?.counts?.[BoardStatus.SCREENED_POSITIVE] ?? 0,
+          eventLastPollAt: this.eventMetrics.lastPollAt,
+          chainCatalogStatus: this.chainCatalogComplete ? 'COMPLETE_FROM_CONFIGURED_START' : 'BACKFILL_PARTIAL',
         })
       }
       if (requestUrl.pathname !== '/') return this.respondJson(response, 404, { error: 'not found' })
@@ -887,9 +1615,10 @@ class OpportunityBoard {
         mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
       }),
     )
+    let eventWake = null
     while (!this.stopping) {
       const started = Date.now()
-      const result = await this.cycle({ forceCatalog: this.catalog.length === 0 })
+      const result = await this.cycle({ forceCatalog: this.catalog.length === 0, eventWake })
       if (result) {
         console.log(
           JSON.stringify({
@@ -899,6 +1628,8 @@ class OpportunityBoard {
             freshQuoted: result.snapshot.coverage.freshQuotedTokens,
             screenedPositive: result.snapshot.coverage.counts[BoardStatus.SCREENED_POSITIVE] || 0,
             events: result.events.length,
+            trigger: eventWake ? 'POOL_EVENT' : 'PERIODIC_RECONCILIATION',
+            eventCandidateCount: eventWake?.candidateIds?.length || 0,
           }),
         )
       }
@@ -907,14 +1638,7 @@ class OpportunityBoard {
         cycleDurationMs: Date.now() - started,
         minimumPauseMs: this.config.minimumCyclePauseMs,
       })
-      if (remaining > 0) {
-        await new Promise((resolve) => {
-          this.sleepResolve = resolve
-          this.sleepTimer = setTimeout(resolve, remaining)
-        })
-        this.sleepResolve = null
-        this.sleepTimer = null
-      }
+      eventWake = remaining > 0 ? await this.waitForEventWake(remaining) : null
     }
   }
 

@@ -1,6 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { formatUnits, getAddress } from 'viem'
+import { normalizeApiPool, PoolAdmission } from './pair-catalog.mjs'
+import { classifyRpcError, errorText } from './policy.mjs'
 
 export const BoardStatus = Object.freeze({
   DISCOVERED: 'DISCOVERED_UNQUOTED',
@@ -12,6 +15,19 @@ export const BoardStatus = Object.freeze({
 })
 
 const POSITIVE_STATUS = BoardStatus.SCREENED_POSITIVE
+const EVENT_LEDGER_SCHEMA_VERSION = 2
+
+export const EpisodeState = Object.freeze({
+  NONE: 'NONE',
+  OPEN: 'OPEN',
+  CLOSED: 'CLOSED',
+})
+
+export const EpisodeObservation = Object.freeze({
+  CONFIRMED_POSITIVE: 'CONFIRMED_POSITIVE',
+  CONFIRMED_NON_POSITIVE: 'CONFIRMED_NON_POSITIVE',
+  UNKNOWN: 'UNKNOWN',
+})
 
 /** @param {unknown} value */
 export function finiteNumber(value) {
@@ -54,55 +70,30 @@ export function canonicalAddress(value) {
 
 /**
  * Convert one PAIR API token into a deterministic, read-only candidate.
- * Invalid, hidden, flagged and shallow pools are retained only in the counters,
- * never promoted into a quote route.
+ * Invalid, hidden and flagged tokens never enter the board. Structurally valid
+ * pools with unknown API depth or a disabled quote asset remain visible to the
+ * signer-free shadow scanner; each pool carries an explicit execution
+ * admission so metadata never silently becomes live authority.
  *
  * @param {Record<string, any>} token
- * @param {{minDepthUsd: number, stockAddresses?: Set<string>}} options
+ * @param {{minDepthUsd: number, stockAddresses?: Set<string>, quoteAssetAddresses?: Set<string>, chainAttestations?: Map<string, Record<string, any>>}} options
  */
 export function normalizePairCandidate(token, options) {
   const tokenAddress = canonicalAddress(token.address)
   if (!tokenAddress || token.hidden === true || token.flagged === true) return null
 
-  const pools = (Array.isArray(token.pairs) ? token.pairs : [])
-    .map((pair) => {
-      const quoteAddress = canonicalAddress(pair?.quoteToken?.address)
-      const hookAddress = canonicalAddress(pair?.hookAddress)
-      const depthUsd = finiteNumber(pair?.activeVirtualSwapDepthUsd ?? pair?.totalDepthUsd ?? pair?.liquidityUsd)
-      const fee = Number(pair?.poolFee)
-      const tickSpacing = Number(pair?.tickSpacing)
-      if (
-        !quoteAddress ||
-        !hookAddress ||
-        typeof pair?.poolId !== 'string' ||
-        !/^0x[0-9a-f]{64}$/i.test(pair.poolId) ||
-        pair.canonical !== true ||
-        pair.ammVersion !== 'V4_MULTI' ||
-        pair?.quoteToken?.enabled === false ||
-        !Number.isSafeInteger(fee) ||
-        fee < 0 ||
-        !Number.isSafeInteger(tickSpacing) ||
-        depthUsd === null ||
-        depthUsd < options.minDepthUsd
-      ) {
-        return null
-      }
-      return {
-        poolId: pair.poolId.toLowerCase(),
-        tokenAddress,
-        quoteAddress,
-        quoteSymbol: String(pair.quoteToken.symbol || 'UNKNOWN'),
-        quoteDecimals: Number.isSafeInteger(Number(pair.quoteToken.decimals)) ? Number(pair.quoteToken.decimals) : 18,
-        quoteKind: options.stockAddresses?.has(quoteAddress.toLowerCase()) ? 'ROBINHOOD_ASSET' : 'TOKEN',
-        fee,
-        tickSpacing,
-        hookAddress,
-        depthUsd,
-        impliedPriceUsd: finiteNumber(pair.impliedPriceUsd),
-      }
-    })
+  const quoteAssetAddresses = options.quoteAssetAddresses || options.stockAddresses
+  const catalogPools = (Array.isArray(token.pairs) ? token.pairs : [])
+    .map((pair) =>
+      normalizeApiPool(tokenAddress, pair, {
+        minDepthUsd: options.minDepthUsd,
+        quoteAssetAddresses,
+        chainAttestations: options.chainAttestations,
+      }),
+    )
     .filter(Boolean)
     .sort((left, right) => left.quoteAddress.localeCompare(right.quoteAddress))
+  const pools = catalogPools.filter((pool) => pool.shadowEligible)
 
   if (pools.length < 2) return null
   const prices = pools.map((pool) => pool.impliedPriceUsd).filter((value) => value !== null && value > 0)
@@ -118,6 +109,10 @@ export function normalizePairCandidate(token, options) {
     totalDepthUsd: finiteNumber(token.totalDepthUsd),
     volume24hUsd: finiteNumber(token.combinedVolume24hUsd ?? token.volume24hUsd),
     indicativeGapPct,
+    strategyEligibility: 'MULTI_POOL_SHADOW_ELIGIBLE',
+    liveCompatiblePoolCount: pools.filter((pool) => pool.executionAdmission === PoolAdmission.EXECUTOR_COMPATIBLE)
+      .length,
+    quarantinedPoolCount: catalogPools.filter((pool) => !pool.shadowEligible).length,
     pools,
   }
 }
@@ -153,11 +148,8 @@ export function screenRoundTrip(input) {
 
 /** @param {unknown} error */
 export function publicError(error) {
-  const object = error && typeof error === 'object' ? /** @type {Record<string, any>} */ (error) : null
-  const raw = object
-    ? String(object.shortMessage || object.message || object.details || object.name || 'UNKNOWN')
-    : String(error || 'UNKNOWN')
-  return raw
+  return `[${classifyRpcError(error)}] ${errorText(error)}`
+    .replace(/<RPC_URL_REDACTED>/g, '[redacted-endpoint]')
     .replace(/(?:https?|wss):\/\/[^\s"')]+/gi, '[redacted-endpoint]')
     .replace(/\b(?:0x)?[0-9a-f]{64}\b/gi, '[redacted-64-byte-value]')
     .replace(/\s+/g, ' ')
@@ -245,7 +237,7 @@ export function buildBoardSnapshot(input) {
   const selected = items.find((item) => item.status === BoardStatus.SCREENED_POSITIVE && item.fresh) || null
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     service: 'manga-opportunity-board',
     mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
     generatedAt: input.generatedAt,
@@ -260,13 +252,23 @@ export function buildBoardSnapshot(input) {
     },
     methodology: {
       opportunityUnit: 'USDG -> quote A -> token -> quote B -> USDG',
-      anchorPolicy: 'quote assets may use a direct V3 anchor or one WETH bridge; identity USDG anchors use zero hops',
+      anchorPolicy:
+        'quote assets may use a direct V3 anchor or one WETH bridge; each fixed block discovers a first-amount top-N shortlist before larger amounts',
       amountPolicy: 'bounded adaptive grid up to 100 USDG plus midpoint refinement around the best coarse amount',
       selectionPolicy: 'maximize absolute screened net USDG, then gross profit, then prefer less principal',
       blockPolicy: 'all anchor and V4 quotes plus the native mark share one fixed block per observation',
+      discoveryPolicy:
+        'PAIR API is merged with bounded PoolManager Initialize-log backfill; coverage before the configured start block remains unknown',
       gasPolicy: 'sum of quoter gas estimates plus fixed orchestration overhead; screening proxy only',
       positiveMeaning: 'screened positive quote, not executable simulation, transaction, receipt, or guaranteed profit',
       staleAfterMs: input.staleMs,
+      episodePolicy:
+        'an economic episode opens on a fresh positive screen, survives stale or unquotable observations, and closes only on a fresh non-positive screen',
+    },
+    eventLedger: {
+      schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
+      semantics: 'ECONOMIC_EPISODES_V2',
+      legacyHistory: 'LEGACY_BIASED_BEFORE_EPOCH',
     },
     selection: {
       status: selected ? 'SCREENED_CANDIDATE_SELECTED' : 'NO_SCREENED_NET_POSITIVE',
@@ -276,94 +278,259 @@ export function buildBoardSnapshot(input) {
       amountInUsdg: selected?.amountInUsdg || null,
       screenedNetUsdg: selected?.screenedNetUsdg || null,
       evidenceLevel: selected?.evidenceLevel || null,
+      executionAdmission: selected?.routeExecutionAdmission || 'NONE',
       executionAuthorized: false,
     },
     items,
   }
 }
 
-/** @param {Record<string, any>} snapshot */
-function positiveItems(snapshot) {
-  return new Map(
-    (snapshot?.items || [])
-      .filter((item) => item.status === POSITIVE_STATUS && item.fresh)
-      .map((item) => [item.id, item]),
-  )
+/** @param {Record<string, any>} item */
+function economicObservation(item) {
+  if (item?.status === POSITIVE_STATUS && item?.fresh === true) return EpisodeObservation.CONFIRMED_POSITIVE
+  if (item?.fresh === true && [BoardStatus.NO_EDGE, BoardStatus.GROSS_POSITIVE].includes(item?.status)) {
+    return EpisodeObservation.CONFIRMED_NON_POSITIVE
+  }
+  return EpisodeObservation.UNKNOWN
+}
+
+/** @param {string} id @param {string} openedAt */
+function economicEpisodeId(id, openedAt) {
+  return `episode:${createHash('sha256').update(`${id.toLowerCase()}:${openedAt}`).digest('hex')}`
+}
+
+/** @param {Record<string, any> | undefined} item @param {string} fallbackAt */
+function recoverOpenEpisode(item, fallbackAt) {
+  if (item?.economicEpisode?.state === EpisodeState.OPEN) return { ...item.economicEpisode }
+  const legacyPositive =
+    (item?.status === POSITIVE_STATUS && item?.fresh === true) ||
+    (item?.status === BoardStatus.STALE && item?.underlyingStatus === POSITIVE_STATUS)
+  if (!legacyPositive) return null
+  const openedAt = String(item?.quotedAt || fallbackAt)
+  return {
+    schemaVersion: 1,
+    episodeId: economicEpisodeId(String(item.id), openedAt),
+    state: EpisodeState.OPEN,
+    observation: item?.fresh === true ? EpisodeObservation.CONFIRMED_POSITIVE : EpisodeObservation.UNKNOWN,
+    openedAt,
+    lastPositiveAt: item?.quotedAt || null,
+    lastPositiveBlockNumber: item?.blockNumber || null,
+    lastPositiveBlockHash: item?.blockHash || null,
+    lastPositiveRoute: item?.route || null,
+    lastPositiveRouteKey: item?.routeKey || null,
+    lastPositiveAmountInUsdg: item?.amountInUsdg || null,
+    lastPositiveGrossProfitUsdg: item?.grossProfitUsdg || null,
+    lastPositiveGasCostProxyUsdg: item?.gasCostProxyUsdg || null,
+    lastPositiveNetUsdg: item?.screenedNetUsdg || null,
+    continuityUnknownSince: item?.fresh === true ? null : fallbackAt,
+  }
+}
+
+/** @param {Record<string, any>} item */
+function eventQuoteEvidence(item) {
+  return {
+    tokenAddress: item.tokenAddress || null,
+    route: item.route || null,
+    routeKey: item.routeKey || null,
+    amountInUsdg: item.amountInUsdg || null,
+    amountOutUsdg: item.amountOutUsdg || null,
+    grossProfitUsdg: item.grossProfitUsdg || null,
+    gasCostProxyUsdg: item.gasCostProxyUsdg || null,
+    screenedNetUsdg: item.screenedNetUsdg || null,
+    blockNumber: item.blockNumber || null,
+    blockHash: item.blockHash || null,
+    quotedAt: item.quotedAt || null,
+    evidenceLevel: item.evidenceLevel || null,
+    executionEstimate: item.executionEstimate || 'NOT_RUN',
+    receiptEvidence: item.receiptEvidence || 'NONE',
+  }
+}
+
+/** @param {Record<string, any>} episode @param {Record<string, any>} item */
+function advancePositiveEpisode(episode, item) {
+  return {
+    ...episode,
+    state: EpisodeState.OPEN,
+    observation: EpisodeObservation.CONFIRMED_POSITIVE,
+    lastPositiveAt: item.quotedAt,
+    lastPositiveBlockNumber: item.blockNumber || null,
+    lastPositiveBlockHash: item.blockHash || null,
+    lastPositiveRoute: item.route || null,
+    lastPositiveRouteKey: item.routeKey || null,
+    lastPositiveAmountInUsdg: item.amountInUsdg || null,
+    lastPositiveGrossProfitUsdg: item.grossProfitUsdg || null,
+    lastPositiveGasCostProxyUsdg: item.gasCostProxyUsdg || null,
+    lastPositiveNetUsdg: item.screenedNetUsdg || null,
+    continuityUnknownSince: null,
+  }
 }
 
 /**
- * Only changes that affect actionability are emitted. Initial census is one
- * baseline event instead of hundreds of noisy candidate-added events.
+ * Reconcile durable economic episodes separately from transport freshness.
+ * STALE, UNQUOTABLE and discovery gaps are UNKNOWN continuity: none can close
+ * an episode or cause a later fresh quote to count as another entry.
+ *
+ * @param {Record<string, any> | null} previous
+ * @param {Record<string, any>} current
+ * @param {{netDeltaUsdg?: number}} [options]
+ */
+export function reconcileOpportunityEpisodes(previous, current, options = {}) {
+  const netDeltaUsdg = options.netDeltaUsdg ?? 0.05
+  const snapshot = {
+    ...current,
+    items: (current.items || []).map((item) => ({ ...item })),
+    eventLedger: {
+      ...(current.eventLedger || {}),
+      schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
+      semantics: 'ECONOMIC_EPISODES_V2',
+      legacyHistory: 'LEGACY_BIASED_BEFORE_EPOCH',
+    },
+  }
+  if (!previous || Number(previous?.coverage?.candidateTokens || 0) === 0) {
+    for (const item of snapshot.items) {
+      if (economicObservation(item) !== EpisodeObservation.CONFIRMED_POSITIVE) continue
+      const openedAt = String(item.quotedAt || current.generatedAt)
+      item.economicEpisode = advancePositiveEpisode(
+        {
+          schemaVersion: 1,
+          episodeId: economicEpisodeId(item.id, openedAt),
+          state: EpisodeState.OPEN,
+          openedAt,
+        },
+        item,
+      )
+    }
+    return {
+      snapshot,
+      events: [
+        {
+          schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
+          type: 'BOARD_BASELINE_CREATED',
+          at: current.generatedAt,
+          candidateTokens: current.coverage.candidateTokens,
+          screenedPositive: current.coverage.counts[POSITIVE_STATUS] || 0,
+        },
+      ],
+    }
+  }
+
+  const events = []
+  const beforeItems = new Map((previous.items || []).map((item) => [item.id, item]))
+  for (const item of snapshot.items) {
+    if (!beforeItems.has(item.id)) {
+      events.push({
+        schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
+        type: 'CANDIDATE_ADDED',
+        at: current.generatedAt,
+        id: item.id,
+        tokenAddress: item.tokenAddress || null,
+        symbol: item.symbol,
+        poolCount: item.pools?.length || 0,
+      })
+    }
+
+    const previousItem = beforeItems.get(item.id)
+    let episode = recoverOpenEpisode(previousItem, previous.generatedAt || current.generatedAt)
+    const observation = economicObservation(item)
+
+    if (observation === EpisodeObservation.CONFIRMED_POSITIVE) {
+      const priorNet = episode?.lastPositiveNetUsdg ?? previousItem?.screenedNetUsdg ?? null
+      const priorRouteKey = episode?.lastPositiveRouteKey ?? previousItem?.routeKey ?? null
+      if (!episode) {
+        const openedAt = String(item.quotedAt || current.generatedAt)
+        episode = {
+          schemaVersion: 1,
+          episodeId: economicEpisodeId(item.id, openedAt),
+          state: EpisodeState.OPEN,
+          openedAt,
+        }
+        item.economicEpisode = advancePositiveEpisode(episode, item)
+        events.push({
+          schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
+          type: 'SCREENED_POSITIVE_ENTERED',
+          at: current.generatedAt,
+          id: item.id,
+          episodeId: episode.episodeId,
+          symbol: item.symbol,
+          ...eventQuoteEvidence(item),
+        })
+        continue
+      }
+
+      item.economicEpisode = advancePositiveEpisode(episode, item)
+      const delta = Math.abs(Number(item.screenedNetUsdg) - Number(priorNet))
+      const routeChanged = Boolean(priorRouteKey && item.routeKey && priorRouteKey !== item.routeKey)
+      if (routeChanged || (Number.isFinite(delta) && delta >= netDeltaUsdg)) {
+        events.push({
+          schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
+          type: 'MATERIAL_NET_CHANGE',
+          changeReason: routeChanged ? 'ROUTE_CHANGED' : 'NET_DELTA',
+          at: current.generatedAt,
+          id: item.id,
+          episodeId: episode.episodeId,
+          symbol: item.symbol,
+          previousNetUsdg: priorNet,
+          previousRouteKey: priorRouteKey,
+          ...eventQuoteEvidence(item),
+        })
+      }
+      continue
+    }
+
+    if (observation === EpisodeObservation.UNKNOWN) {
+      if (episode) {
+        item.economicEpisode = {
+          ...episode,
+          state: EpisodeState.OPEN,
+          observation: EpisodeObservation.UNKNOWN,
+          continuityUnknownSince: episode.continuityUnknownSince || current.generatedAt,
+        }
+      }
+      continue
+    }
+
+    if (episode) {
+      item.economicEpisode = {
+        ...episode,
+        state: EpisodeState.CLOSED,
+        observation: EpisodeObservation.CONFIRMED_NON_POSITIVE,
+        closedAt: current.generatedAt,
+        closeStatus: item.status,
+        closeBlockNumber: item.blockNumber || null,
+        closeBlockHash: item.blockHash || null,
+      }
+      events.push({
+        schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
+        type: 'SCREENED_POSITIVE_LEFT',
+        at: current.generatedAt,
+        id: item.id,
+        episodeId: episode.episodeId,
+        symbol: item.symbol,
+        previousNetUsdg: episode.lastPositiveNetUsdg,
+        previousRoute: episode.lastPositiveRoute,
+        previousRouteKey: episode.lastPositiveRouteKey,
+        previousAmountInUsdg: episode.lastPositiveAmountInUsdg,
+        previousGrossProfitUsdg: episode.lastPositiveGrossProfitUsdg,
+        previousGasCostProxyUsdg: episode.lastPositiveGasCostProxyUsdg,
+        currentStatus: item.status,
+        ...eventQuoteEvidence(item),
+      })
+    }
+  }
+  return { snapshot, events }
+}
+
+/**
+ * Compatibility helper for deterministic callers that only need emitted
+ * events. Runtime publication uses reconcileOpportunityEpisodes so the durable
+ * episode state is written into the snapshot.
  *
  * @param {Record<string, any> | null} previous
  * @param {Record<string, any>} current
  * @param {{netDeltaUsdg?: number}} [options]
  */
 export function materialEvents(previous, current, options = {}) {
-  const netDeltaUsdg = options.netDeltaUsdg ?? 0.05
-  if (!previous || Number(previous?.coverage?.candidateTokens || 0) === 0) {
-    return [
-      {
-        type: 'BOARD_BASELINE_CREATED',
-        at: current.generatedAt,
-        candidateTokens: current.coverage.candidateTokens,
-        screenedPositive: current.coverage.counts[POSITIVE_STATUS] || 0,
-      },
-    ]
-  }
-
-  const events = []
-  const beforeItems = new Map((previous.items || []).map((item) => [item.id, item]))
-  const beforePositive = positiveItems(previous)
-  const afterPositive = positiveItems(current)
-
-  for (const item of current.items || []) {
-    if (!beforeItems.has(item.id)) {
-      events.push({ type: 'CANDIDATE_ADDED', at: current.generatedAt, id: item.id, symbol: item.symbol })
-    }
-  }
-  for (const [id, item] of afterPositive) {
-    const before = beforePositive.get(id)
-    if (!before) {
-      events.push({
-        type: 'SCREENED_POSITIVE_ENTERED',
-        at: current.generatedAt,
-        id,
-        symbol: item.symbol,
-        route: item.route,
-        screenedNetUsdg: item.screenedNetUsdg,
-        blockNumber: item.blockNumber,
-      })
-      continue
-    }
-    const delta = Math.abs(Number(item.screenedNetUsdg) - Number(before.screenedNetUsdg))
-    if (Number.isFinite(delta) && delta >= netDeltaUsdg) {
-      events.push({
-        type: 'MATERIAL_NET_CHANGE',
-        at: current.generatedAt,
-        id,
-        symbol: item.symbol,
-        previousNetUsdg: before.screenedNetUsdg,
-        screenedNetUsdg: item.screenedNetUsdg,
-        route: item.route,
-        blockNumber: item.blockNumber,
-      })
-    }
-  }
-  for (const [id, item] of beforePositive) {
-    const currentItem = (current.items || []).find((candidate) => candidate.id === id)
-    if (afterPositive.has(id) || !currentItem || currentItem.status === BoardStatus.STALE) continue
-    events.push({
-      type: 'SCREENED_POSITIVE_LEFT',
-      at: current.generatedAt,
-      id,
-      symbol: item.symbol,
-      previousNetUsdg: item.screenedNetUsdg,
-      currentStatus: currentItem.status,
-      blockNumber: currentItem.blockNumber,
-    })
-  }
-  return events
+  return reconcileOpportunityEpisodes(previous, current, options).events
 }
 
 /** @param {string} file @param {unknown} value */

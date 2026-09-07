@@ -632,6 +632,7 @@
                   <th>筛选净值</th>
                   <th>最浅深度</th>
                   <th>区块 / 年龄</th>
+                  <th>执行边界</th>
                   <th>状态</th>
                 </tr>
               </thead>
@@ -652,7 +653,8 @@
           <div class="method">
             <strong>筛选闭环</strong><br />
             USDG → 配对资产 A → meme → 配对资产 B → USDG<br /><br />
-            每条观察的四段报价与 ETH/USDG 标价使用同一固定区块。榜单持续轮询优先候选，并分片覆盖剩余多池代币。
+            池事件通过公共 HTTP 增量日志唤醒受影响候选；金额仍由同一固定区块的四段 Quoter
+            重新计算。低频分片轮询负责补足事件依赖盲区。
           </div>
         </aside>
       </section>
@@ -728,7 +730,7 @@
         address.href = `https://robinhoodchain.blockscout.com/token/${encodeURIComponent(item.tokenAddress)}`
         address.target = '_blank'
         address.rel = 'noreferrer'
-        address.textContent = `${shortAddress(item.tokenAddress)} · ${item.pools.length} pools`
+        address.textContent = `${shortAddress(item.tokenAddress)} · ${item.pools.length} pools · ${item.liveCompatiblePoolCount || 0} live-compatible`
         details.append(symbol, address)
         wrap.append(mark, details)
         return wrap
@@ -751,7 +753,8 @@
         const query = byId('search').value.trim().toLowerCase()
         const filter = byId('status-filter').value
         const items = state.snapshot.items.filter((item) => {
-          const text = `${item.symbol} ${item.name} ${item.tokenAddress} ${item.route || ''}`.toLowerCase()
+          const quotes = (item.pools || []).map((pool) => pool.quoteSymbol).join(' ')
+          const text = `${item.symbol} ${item.name} ${item.tokenAddress} ${item.route || ''} ${quotes}`.toLowerCase()
           return (filter === 'ALL' || item.status === filter) && (!query || text.includes(query))
         })
         byId('empty').hidden = items.length > 0
@@ -771,6 +774,7 @@
           else if (Number(item.screenedNetUsdg) < 0) netCell.className = 'negative-number'
           cell(row, item.minimumRouteDepthUsd ? `$${number(item.minimumRouteDepthUsd, 0)}` : '—')
           cell(row, item.blockNumber ? `${item.blockNumber} / ${age(item.ageMs)}` : '—')
+          cell(row, item.routeExecutionAdmission || 'SHADOW_ONLY')
           cell(row, statusNode(item.status))
           rows.append(row)
         }
@@ -781,16 +785,18 @@
         const healthy = ['RUNNING', 'SCANNING'].includes(snapshot.health.status)
         byId('live-dot').classList.toggle('bad', !healthy)
         byId('service-status').textContent = snapshot.health.status
+        const eventState = snapshot.health.eventDrivenShadow || {}
         byId('updated-at').textContent =
-          `更新 ${new Date(snapshot.generatedAt).toLocaleString('zh-CN')} · cycle ${snapshot.health.cycleNumber}`
+          `更新 ${new Date(snapshot.generatedAt).toLocaleString('zh-CN')} · cycle ${snapshot.health.cycleNumber} · event ${eventState.lastCycleTrigger || 'STARTING'}`
         byId('discovered').textContent = number(snapshot.source.discoveredTokens, 0)
         byId('candidates').textContent = number(snapshot.coverage.candidateTokens, 0)
         byId('fresh-quotes').textContent = number(snapshot.coverage.freshQuotedTokens, 0)
         byId('positive-count').textContent = number(snapshot.coverage.counts.SCREENED_NET_POSITIVE || 0, 0)
         byId('coverage').textContent = `${number(snapshot.coverage.quoteCoveragePct, 1)}%`
         byId('block-policy').textContent = snapshot.methodology.blockPolicy
+        const chainCatalog = snapshot.source.chainCatalog || {}
         byId('source-note').textContent =
-          `${snapshot.source.discovery} · ${snapshot.source.quoteRpc} · catalog ${snapshot.source.catalogComplete ? 'complete' : 'partial'}`
+          `${snapshot.source.discovery} · ${snapshot.source.quoteRpc} · API ${snapshot.source.catalogComplete ? 'complete' : 'partial'} · chain ${chainCatalog.status || 'unknown'} (${chainCatalog.poolCount || 0} pools)`
         renderRows()
       }
 
@@ -798,7 +804,7 @@
         if (event.type === 'SCREENED_POSITIVE_ENTERED')
           return [
             `${event.symbol} 进入净正区`,
-            `${event.route || '未知路径'} · +${event.screenedNetUsdg} U · block ${event.blockNumber}`,
+            `${event.route || '未知路径'} · gross ${event.grossProfitUsdg} U − gas ${event.gasCostProxyUsdg} U = net ${event.screenedNetUsdg} U · block ${event.blockNumber}`,
           ]
         if (event.type === 'SCREENED_POSITIVE_LEFT')
           return [`${event.symbol} 离开净正区`, `${event.currentStatus} · previous ${event.previousNetUsdg} U`]
@@ -810,6 +816,8 @@
         if (event.type === 'CANDIDATE_ADDED') return [`新增多池候选 ${event.symbol}`, shortAddress(event.id)]
         if (event.type === 'BOARD_BASELINE_CREATED')
           return ['榜单基线建立', `${event.candidateTokens} 个候选 · ${event.screenedPositive} 个净正`]
+        if (event.type === 'EVENT_LEDGER_EPOCH_STARTED')
+          return ['经济机会账本 v2 启用', `此前事件保留为 legacy；此后按连续经济 episode 计数`]
         return [event.type, '']
       }
 

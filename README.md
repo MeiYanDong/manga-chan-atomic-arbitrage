@@ -19,9 +19,11 @@ USDG -> quote A (V3 direct or one WETH bridge) -> target (PAIR V4)
 
 The edge is stale relative pricing across the two MANGA quote pools and their USDG conversion pools. It does not depend on MSFT or NVDA being stock tokens; the same mechanism can exist when the quote assets are AI or meme tokens.
 
-This repository also contains a separate read-only opportunity board. It continuously discovers PAIR multi-pool tokens,
-quotes the best observed `USDG -> quote A -> token -> quote B -> USDG` loop at one fixed block, subtracts a gas proxy and
-adds material changes to an append-only event ledger. The board has no wallet, signer or broadcast path.
+This repository also contains a separate read-only opportunity board. It merges PAIR API discovery with bounded
+PoolManager `Initialize`-log backfill, quotes the best observed
+`USDG -> quote A -> token -> quote B -> USDG` loop at one fixed block, subtracts a gas proxy and records continuous
+economic opportunity episodes. Pool events wake affected candidates between slower coverage sweeps. The board has no
+wallet, signer or broadcast path.
 
 ## Honest status
 
@@ -49,11 +51,17 @@ adds material changes to an append-only event ledger. The board has no wallet, s
   exhausted execution RPC is replaced, the previously exposed endpoint credential is rotated and a fresh bounded
   authorization is explicitly approved.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
+- The event-driven board and chain catalog are implemented and locally tested on this branch. Until a commit-addressed
+  production release and loopback readback are recorded, their production runtime and measured RPC reduction remain
+  `UNKNOWN`.
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
 See [`docs/evidence/2026-09-06-signed-attempt-recovery.md`](docs/evidence/2026-09-06-signed-attempt-recovery.md)
 for the lifecycle root cause, repaired release, two-reader terminal recovery and current restart blockers.
+See
+[`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
+for the signer-free public-RPC optimization trials and final local schema-v3 readback.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 
@@ -139,7 +147,8 @@ No command automatically deploys and trades in one step. Deployment remains a se
 The board's evidence ladder is intentionally narrower than the executor's:
 
 ```text
-PAIR metadata -> fixed-block four-leg Quoter screen -> gas proxy
+PAIR metadata + PoolKey check + bounded Initialize-log catalog
+              -> fixed-block four-leg Quoter screen + same-block pool attestation -> gas proxy
               -> bounded typed candidate set
               -> new-generation and arm gate (no chain RPC while idle)
               -> targeted generic preflight: exact eth_call + estimateGas
@@ -150,8 +159,13 @@ Rows can be `DISCOVERED_UNQUOTED`, `UNQUOTABLE`, `NO_EDGE`, `GROSS_POSITIVE_NET_
 `SCREENED_NET_POSITIVE` or `STALE`. A screened-positive row is still a research candidate, not a risk-free or executable
 trade. Only the exact generic preflight can promote a bounded candidate to `GENERIC_READY_TO_EXECUTE`, and even that is
 not a receipt or guaranteed inclusion. Manual execution and the autonomous watcher share the same exact preflight,
-immutable plan, raw-before-broadcast journal and UNKNOWN barrier. The first adapter covers PAIR's first-party multi-pool
-catalog; arbitrary external V4 pools are not claimed as a complete census.
+immutable plan, raw-before-broadcast journal and UNKNOWN barrier. Disabled quote assets, null API depth and unsupported
+hooks remain shadow-only. Chain discovery reports completeness only from its configured start block; arbitrary earlier
+V4 history is not claimed as covered.
+
+The hot path uses bounded public-HTTP `eth_getLogs` ranges for PoolManager and previously quoted V3 pools. Events only
+choose what to requote; they never substitute a local price calculation for the fixed-block Quoter result. Runtime
+evidence is available at `/api/event-metrics` and `/api/chain-catalog` through the same loopback-only SSH tunnel.
 
 Use a dedicated protected configuration based on [`deploy/opportunity-board.env.example`](deploy/opportunity-board.env.example).
 The supported service binds to `127.0.0.1:8788`; open it privately with:

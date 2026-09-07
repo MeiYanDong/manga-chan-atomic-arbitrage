@@ -13,6 +13,7 @@ import {
   pairPoolId,
 } from '../src/generic-plan.mjs'
 import { BoardStatus } from '../src/opportunity-board.mjs'
+import { PoolAdmission, PoolEvidence } from '../src/pair-catalog.mjs'
 
 const root = nodePath.resolve(nodePath.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -99,6 +100,22 @@ function snapshotFixture(overrides = {}) {
   }
 }
 
+function schema3SnapshotFixture(overrides = {}) {
+  const fixture = snapshotFixture(overrides)
+  fixture.schemaVersion = 3
+  for (const pool of fixture.items[0].pools) {
+    pool.poolIdEvidence = PoolEvidence.POOL_KEY_MATCHED
+    pool.executionAdmission = PoolAdmission.EXECUTOR_COMPATIBLE
+    pool.chainAttestation = {
+      status: PoolEvidence.INITIALIZED_QUOTER_CONFIRMED,
+      blockNumber: fixture.items[0].blockNumber,
+      blockHash: fixture.items[0].blockHash,
+    }
+  }
+  ;/** @type {any} */ (fixture.items[0]).economicEpisode = { episodeId: 'episode:test', state: 'OPEN' }
+  return fixture
+}
+
 test('V3 path decoding supports direct and one-WETH-bridge anchors', () => {
   assert.deepEqual(decodeV3Path(path([GENERIC_USDG, ENTRY], [500])), {
     tokens: [GENERIC_USDG, ENTRY],
@@ -123,6 +140,28 @@ test('fresh global selection becomes a typed bounded generic execution candidate
   assert.equal(candidate.route.entryV4Pool.hooks, GENERIC_PAIR_HOOK)
   assert.match(candidate.executionKey, /^0x[0-9a-f]{64}$/)
   assert.match(candidate.candidateHash, /^0x[0-9a-f]{64}$/)
+})
+
+test('schema-v3 execution plans require same-block executable pool attestations', () => {
+  const candidate = buildGenericExecutionCandidate(schema3SnapshotFixture(), {
+    nowMs: Date.parse('2026-09-05T00:00:10.000Z'),
+  })
+  assert.equal(candidate.economicEpisodeId, 'episode:test')
+  assert.equal(candidate.opportunityRevisionId, candidate.opportunityId)
+
+  const missing = schema3SnapshotFixture()
+  missing.items[0].pools[0].chainAttestation = null
+  assert.throws(
+    () => buildGenericExecutionCandidate(missing, { nowMs: Date.parse('2026-09-05T00:00:10.000Z') }),
+    /same-block executable chain attestation/,
+  )
+
+  const older = schema3SnapshotFixture()
+  older.items[0].pools[0].chainAttestation.blockNumber = '54999999'
+  assert.throws(
+    () => buildGenericExecutionCandidate(older, { nowMs: Date.parse('2026-09-05T00:00:10.000Z') }),
+    /same-block executable chain attestation/,
+  )
 })
 
 test('typed preflight set keeps profitable amount variants and deduplicates execution payloads', () => {

@@ -31,6 +31,26 @@ test('keeps a business invariant distinct from transport failures', () => {
   assert.equal(classifyRpcError(new Error('429 Too Many Requests')), RpcErrorClass.THROTTLED)
 })
 
+test('classifies an identity-only unknown RPC wrapper as incomplete network evidence', () => {
+  const inner = new Error('An unknown RPC error occurred.')
+  inner.name = 'UnknownRpcError'
+  const outer = new Error('contract call failed')
+  outer.cause = inner
+  assert.equal(classifyRpcError(outer), RpcErrorClass.NETWORK)
+})
+
+test('keeps an EVM quote revert distinct from its lower RPC transport wrapper', () => {
+  const rpc = new Error('execution reverted: SPL')
+  rpc.name = 'RpcRequestError'
+  const reverted = new Error('Execution reverted with reason: SPL.')
+  reverted.name = 'ExecutionRevertedError'
+  reverted.cause = rpc
+  const outer = new Error('The contract function reverted')
+  outer.name = 'ContractFunctionRevertedError'
+  outer.cause = reverted
+  assert.equal(classifyRpcError(outer), RpcErrorClass.INVARIANT)
+})
+
 test('redacts credentialized RPC URLs before errors enter logs', () => {
   const error = new Error('HTTP request failed\nURL: https://node.example/v1/private-token?key=secret')
   assert.equal(errorText(error), 'HTTP request failed\nURL: <RPC_URL_REDACTED>')

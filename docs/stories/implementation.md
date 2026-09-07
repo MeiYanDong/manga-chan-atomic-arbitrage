@@ -152,3 +152,44 @@ Status: implementation, regression tests, protected-branch CI, commit-addressed 
 raw reconciliation are complete. The watcher remains disabled because the old arm is exhausted and the configured
 execution RPC exhausted its monthly quota. Provider credential rotation, a working execution RPC and a fresh human
 authorization remain required before the watcher can resume.
+
+## S14 — Economic opportunity episodes
+
+Acceptance:
+
+- one fresh positive opens a stable episode identity independent of block hash and route revision;
+- stale, unquotable and missing observations cannot close or duplicate that episode;
+- only a fresh economic negative closes it;
+- entry, material change and exit records preserve gross, Gas proxy, net, block and evidence fields;
+- a durable epoch marker distinguishes legacy biased history.
+
+Status: implemented and covered by deterministic unit tests; production epoch readback pending.
+
+## S15 — Pool identity and chain catalog
+
+Acceptance:
+
+- every API pool recomputes its PoolKey hash before shadow admission;
+- disabled quote assets and null depth remain observable without becoming live-compatible;
+- undocumented or unsupported hooks fail closed at the generic plan boundary;
+- bounded PoolManager `Initialize` backfill persists a cursor and lists multi-pool, singleton and ambiguous groups;
+- completeness is reported only from the configured start block.
+
+Status: implemented and locally smoke-tested against the public RPC; historical backfill completion and production
+readback pending.
+
+## S16 — Event-driven shadow wake
+
+Acceptance:
+
+- PoolManager and previously quoted V3 swap events map to only affected candidates;
+- logs are deduplicated, cursor advancement is durable, rate-limit failure does not advance it and a block-hash mismatch
+  rewinds a bounded lookback;
+- event state never substitutes for a fixed-block quote;
+- a slow round-robin reconciliation remains enabled for dependency coverage;
+- runtime exposes event wakes, exact candidate count, Quoter-call totals and observed-log-to-quote latency.
+- same-block anchor requests are deduplicated, HTTP batches are bounded and an incomplete RPC set trips one cycle-level
+  circuit instead of being cached as pool absence or retried across every candidate amount.
+
+Status: implementation, deterministic tests and one successful public-RPC local cycle are complete; deployed latency
+and RPC-reduction targets remain unproven.

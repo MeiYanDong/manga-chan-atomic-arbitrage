@@ -2257,7 +2257,7 @@ async function genericRuntimeVerify() {
   ])
   if (wallet.nonceLatest !== wallet.noncePending) throw new Error('wallet latest and pending nonce have not converged')
   if (
-    board?.schemaVersion !== 2 ||
+    ![2, 3].includes(board?.schemaVersion) ||
     board.service !== 'manga-opportunity-board' ||
     board.mode !== 'READ_ONLY_NO_SIGNING_NO_BROADCAST' ||
     board.selection?.executionAuthorized !== false
