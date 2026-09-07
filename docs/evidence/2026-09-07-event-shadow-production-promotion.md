@@ -83,6 +83,13 @@ Examples include ASS at 10 USDG (`+0.289527` gross, `0.412066` Gas proxy, `-0.12
 USDG (`+0.165428` gross, `0.414322` Gas proxy, `-0.248894` screened net). The closest retained SIGMA row was already stale
 and also net-negative. No live candidate, signature, broadcast, receipt or realized profit resulted from this promotion.
 
+A later readback at `2026-09-07T05:24:31.019Z` observed one fixed-block net-positive shadow row: RETARDIO through
+`AMC -> RETARDIO -> TSLA`, with 10 USDG input, `+0.540713` gross, `0.428885` Gas proxy and `+0.111828` screened net at
+block `56,580,086`. Both selected PAIR pools had matching PoolKeys, the documented hook and successful same-block V4
+Quoter attestations, but API depth was unknown. The route therefore remained `SHADOW_ONLY_DEPTH_UNKNOWN`, the global
+selection kept `executionAuthorized=false`, and no exact executor preflight, signature or broadcast occurred. This is a
+timestamped observation, not a claim that the opportunity remained available later.
+
 ## Still open
 
 - Chain-catalog backfill is only partial from configured block 45,000,000; no claim is made for earlier blocks or

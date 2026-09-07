@@ -1370,7 +1370,7 @@ class OpportunityBoard {
       failures,
       v3RoutePolicy: `FIXED_BLOCK_FIRST_AMOUNT_TOP_${this.config.v3ShortlistSize}_SHORTLIST`,
       evidenceLevel: 'FIXED_BLOCK_QUOTER_SCREEN_WITH_POOL_ATTESTATION_AND_V3_SHORTLIST',
-      executionEstimate: 'NOT_RUN_GENERIC_EXECUTOR_NOT_DEPLOYED',
+      executionEstimate: 'NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED',
       receiptEvidence: 'NONE',
     }
   }
