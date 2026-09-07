@@ -1,6 +1,6 @@
 # ADR 0018: restart-safe feed and streamed source projection
 
-- Status: Accepted from production failure evidence; production soak pending
+- Status: Accepted and production-verified
 - Date: 2026-09-08
 
 ## Context
@@ -41,8 +41,8 @@ halts.
 5. The watcher classifies only `ENOENT` and `ESTALE` while reading the configured feed as board availability failures.
    The board phase retries those failures indefinitely without loading the execution RPC or signer. `EACCES`, unsafe
    permissions, symlinks, non-regular files, oversized files and malformed JSON remain hard invariants.
-6. Keep `MemoryHigh=448M` and `MemoryMax=512M`. A production soak must cross the observed failure window before this ADR
-   is marked production-verified.
+6. Keep `MemoryHigh=448M` and `MemoryMax=512M`. Production acceptance requires a controlled board restart plus a soak
+   that crosses the observed failure window without a service restart, cgroup OOM, signer error or transaction attempt.
 
 ## Consequences
 
@@ -56,3 +56,14 @@ halts.
 - The board database and append-only ledger are not deleted, compacted or vacuumed by this change.
 - Continuous authority still does not bypass nonce, identity, unresolved-mutation, profit, balance, reserve, failed-Gas
   or invariant breakers.
+
+## Production verification
+
+Release `b8ab13509be6f9c033d51054759162eaff5f34a1` preserved the last complete execution feed across a controlled
+board-only restart while the watcher retained its process and `RUNNING` state. A 38-sample, 30-second-interval soak
+then ran from `2026-09-07T19:58:58Z` through `20:17:30Z`, beyond the previous failure interval. Both units remained
+active with zero post-cutover restarts; feed generations advanced, and cgroup counters recorded no max, OOM or OOM-kill
+event. No exact preflight, signature, broadcast, Gas spend or chain-state mutation occurred during the verification.
+
+The detailed artifact, service, memory and economic-boundary evidence is recorded in
+[`../evidence/2026-09-08-board-restart-resilience-production-promotion.md`](../evidence/2026-09-08-board-restart-resilience-production-promotion.md).
