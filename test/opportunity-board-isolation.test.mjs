@@ -25,6 +25,8 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /advanceChainCatalog/)
   assert.match(source, /INDIVIDUAL_FALLBACK/)
   assert.match(source, /activateUnbatchedTransport/)
+  assert.match(source, /NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED/)
+  assert.doesNotMatch(source, /GENERIC_EXECUTOR_NOT_DEPLOYED/)
 })
 
 test('systemd unit keeps the board in a separate loopback-only identity without credentials', () => {

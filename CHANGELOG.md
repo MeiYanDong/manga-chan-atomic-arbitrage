@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.3 — 2026-09-07
+
+- Describe board-only screens as requiring an exact executor preflight instead of incorrectly claiming that the already
+  deployed generic executor does not exist.
+
 ## 0.5.2 — 2026-09-07
 
 - Put a hard deadline around event waiting so a continuously busy pool-event stream cannot starve periodic catalog
