@@ -38,8 +38,9 @@ wallet, signer or broadcast path.
   opportunity frequency or race-win probability.
 - The server watcher is currently stopped. Its fifth attempt exposed a lifecycle defect: the transaction was signed
   and durably recorded, then the post-sign budget check counted that same attempt as a new attempt and stopped before
-  broadcast. Active server release `24c1d869ff82e912dc3ab85c147476f039247a93` repairs that boundary, redacts
-  provider URLs from terminal diagnostics and derives operational counters from the audit ledger. Two independent
+  broadcast. The repair first promoted in `24c1d869ff82e912dc3ab85c147476f039247a93` is retained by the active server
+  release `1a49b15ec5cbddd74536b913eaecfb7bf46619ea`; it also redacts provider URLs from terminal diagnostics and derives
+  operational counters from the audit ledger. Two independent
   readers later proved the expired raw transaction absent with nonce `8` unconsumed, and the audit ledger closed it as
   `EXPIRED_NOT_OBSERVED` without broadcasting it.
 - The one-time deployment Gas was marked at `2.322841 USDG`; deployment plus the four confirmed executions therefore
@@ -51,9 +52,10 @@ wallet, signer or broadcast path.
   exhausted execution RPC is replaced, the previously exposed endpoint credential is rotated and a fresh bounded
   authorization is explicitly approved.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The event-driven board and chain catalog are implemented and locally tested on this branch. Until a commit-addressed
-  production release and loopback readback are recorded, their production runtime and measured RPC reduction remain
-  `UNKNOWN`.
+- The signer-free event board is deployed from release `1a49b15ec5cbddd74536b913eaecfb7bf46619ea`. Production
+  readback exercised its one-time fallback from malformed public-RPC batches to bounded individual requests, retained
+  HTTP 200 health and proved a mandatory reconciliation/backfill cycle under continuous event traffic. Backfill
+  completeness, steady-state latency, opportunity frequency and race outcomes remain unproven.
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
@@ -62,6 +64,9 @@ for the lifecycle root cause, repaired release, two-reader terminal recovery and
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
+See
+[`docs/evidence/2026-09-07-event-shadow-production-promotion.md`](docs/evidence/2026-09-07-event-shadow-production-promotion.md)
+for the failed v0.5.0 promotion, rollback, public-RPC fallback and accepted v0.5.2 runtime readback.
 
 Atomic settlement removes intermediate-token inventory exposure if the transaction reverts. It does **not** remove failed gas, latency, sequencer ordering, provider, nonce, implementation, or key-custody risk.
 

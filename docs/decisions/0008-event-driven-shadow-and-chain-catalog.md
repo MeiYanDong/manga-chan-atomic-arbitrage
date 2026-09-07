@@ -1,6 +1,6 @@
 # ADR 0008: event-driven shadow and evidence-bearing chain catalog
 
-- Status: Accepted for implementation; production readback pending
+- Status: Accepted and promoted to signer-free production observation
 - Date: 2026-09-07
 
 ## Context
