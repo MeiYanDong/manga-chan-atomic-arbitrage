@@ -251,7 +251,7 @@ export function buildBoardSnapshot(input) {
   const selected = items.find((item) => item.status === BoardStatus.SCREENED_POSITIVE && item.fresh) || null
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     service: 'manga-opportunity-board',
     mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
     generatedAt: input.generatedAt,

@@ -11,6 +11,7 @@ User=manga-board
 Group=manga-board
 WorkingDirectory=/opt/manga-chan-arbitrage/current
 EnvironmentFile=/etc/manga-opportunity-board/live.env
+EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board
 UMask=0027
 ExecStart=/usr/bin/env npm run board

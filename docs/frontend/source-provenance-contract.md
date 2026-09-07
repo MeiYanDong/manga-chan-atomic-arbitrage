@@ -1,6 +1,6 @@
 # Source provenance contract v1
 
-- Contract status: design only
+- Contract status: implemented and integrated into the v0.6.0 board read model; production promotion pending
 - Compatibility goal: additive migration from the current opportunity-board schema
 - Unknown-value rule: absent evidence is `null`/`UNKNOWN`, never a fabricated default
 
@@ -157,5 +157,5 @@ No phase-1 endpoint accepts `POST`, transaction calldata, wallet credentials, ar
 2. Populate new fields from deterministic adapters; leave unsupported dimensions `UNKNOWN`.
 3. Add dual-read comparison and NINECAT regression tests.
 4. Switch the private UI after projection parity and evidence invariants pass.
-5. Retain a rollback flag to the current read model for one canary window.
+5. Retain `MANGA_BOARD_READ_MODEL=legacy` as a non-destructive rollback during the canary window.
 6. Remove legacy `catalogSources` and footer-only source semantics only in a later breaking schema release.

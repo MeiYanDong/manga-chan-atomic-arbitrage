@@ -3,3 +3,5 @@ package-lock.json
 runs/
 artifacts/
 cache/
+public/dashboard/
+.playwright-cli/

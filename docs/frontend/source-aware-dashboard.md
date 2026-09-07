@@ -1,6 +1,6 @@
 # Source-aware arbitrage dashboard
 
-- Product status: architecture accepted; implementation pending
+- Product status: phase-1 implementation complete locally in v0.6.0; production canary pending
 - Initial audience: the private operator console
 - Safety mode: read-only; no wallet, signer, arm, deploy, execute or withdraw action
 
@@ -60,8 +60,9 @@ flowchart LR
   BFF --> OPS[React Ops workspace]
 ```
 
-The BFF exposes projections only. It has no private key and no arbitrary RPC proxy. The execution ledger is an input to
-the read model, not a command bus.
+The BFF exposes projections only. It has no private key and no arbitrary RPC proxy. A sanitized execution projection
+can be ingested as evidence, but the signer runtime is not mounted into the board service. Until that export is wired,
+the Execution page honestly reports `NONE` rather than reading signer files across the service boundary.
 
 ## Global header
 
@@ -184,8 +185,10 @@ pool before its platform adapter exists; the row remains useful with explicit un
 
 - add Bankr, Pons, Flap and other adapters only with verified contract registries;
 - add episode analytics and provider-pressure budgets;
-- validate responsive and accessibility behavior;
 - canary the BFF and UI separately from the scanner.
+
+Responsive desktop/mobile, keyboard focus and reduced-motion behavior are phase-1 quality gates. Production duration,
+steady-state latency and deployment evidence remain phase-2 operational work rather than being inferred from local QA.
 
 ### Explicitly out of scope
 

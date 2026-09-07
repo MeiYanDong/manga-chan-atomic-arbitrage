@@ -114,9 +114,11 @@ sudo -u manga-board env MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board npm
 The HTTP service deliberately listens only on loopback. View it through an SSH tunnel instead of opening a public
 firewall port. The supplied SSH drop-in permits only client-local forwarding to `127.0.0.1:8788`; validate it with
 `sshd -t`, reload SSH, and prove a fresh key-only session before relying on the tunnel. Runtime evidence is stored in
-`/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl`, `state.json`, `chain-catalog.json` and
-`pool-mirror.json`; none belongs in Git. `chain-catalog.json` is complete only from its recorded configured start block.
-The mirror contains event state, not a quote or execution instruction.
+`/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl`, `state.json`, `chain-catalog.json`,
+`source-catalog.json`, `board.sqlite`, `evidence.jsonl` and `pool-mirror.json`; none belongs in Git. Chain/source catalogs
+are complete only from their recorded configured start blocks. The mirror contains event state, not a quote or
+execution instruction. Keep the directory when rolling between SQLite and the legacy reader; the rollback flag never
+deletes the append-only ledger.
 
 Read the evidence surfaces separately:
 
@@ -124,7 +126,21 @@ Read the evidence surfaces separately:
 curl --fail --silent --show-error http://127.0.0.1:8788/api/snapshot | jq '{health,source,coverage,selection}'
 curl --fail --silent --show-error http://127.0.0.1:8788/api/event-metrics | jq .
 curl --fail --silent --show-error http://127.0.0.1:8788/api/chain-catalog | jq '{coverage,summary,lastBatch}'
+curl --fail --silent --show-error http://127.0.0.1:8788/api/v1/system | jq '{release,persistence,sourceSummary}'
+curl --fail --silent --show-error 'http://127.0.0.1:8788/api/v1/opportunities?platform=LONG_ROUTE' \
+  | jq '{generatedAt,count,ninecat:[.items[] | select(.target.symbol == "NINECAT")]}'
 ```
+
+Before calling a source-aware canary healthy, require all of the following:
+
+1. `/healthz` returns HTTP 200 with `readModel=sqlite`, `persistenceStatus=HEALTHY` and `persistenceParity=true`;
+2. `/api/v1/system` reports the exact installed release SHA, public RPC transport metrics and no signer capability;
+3. every source adapter exposes its own bounded coverage state; `BACKFILL_PARTIAL` is not upgraded to complete;
+4. the static root returns the v0.6 console with same-origin CSP, and mutating API methods return `405`;
+5. the signer service state, wallet nonce and audit-ledger head are unchanged across the board-only promotion.
+
+Do not copy signer runtime files into the board user merely to populate the Execution page. It remains `NONE` until a
+separately reviewed, sanitized execution-evidence export exists.
 
 On the first v0.5 start, preserve the existing `events.jsonl`. The service appends one
 `EVENT_LEDGER_EPOCH_STARTED` record and stores its timestamp in `state.json`; older event counts remain legacy evidence.

@@ -1,6 +1,6 @@
 # ADR 0009: orthogonal source provenance for the multi-platform dashboard
 
-- Status: Accepted for design; implementation and production promotion are pending
+- Status: Accepted and implemented in v0.6.0; production promotion is pending
 - Date: 2026-09-07
 
 ## Context
@@ -74,8 +74,8 @@ one another's claim dimensions.
 - Use separate **Radar** and **Ops** workspaces. Ops remains read-only in the first implementation.
 - Build a private full-evidence console first. A future public projection must be separately sanitized and is disabled
   by default.
-- Use React + Vite for the client and retain a Node read-only BFF boundary. This is a design selection, not a claim that
-  those components are deployed.
+- Use React + Vite for the client and retain a Node read-only BFF boundary. The implementation is present in v0.6.0;
+  production deployment remains a separately evidenced state.
 - Materialize current query state in SQLite and retain an append-only JSONL evidence ledger. Migration from the current
   atomic JSON snapshot must be staged and reversible.
 - Keep provider interfaces replaceable, but run the observation plane on the public Robinhood RPC until a separate
@@ -94,6 +94,6 @@ The page architecture, field contract and story-level acceptance criteria are sp
 - NINECAT displays `LONG route`, `Doppler`, `Uniswap v4` and `NINECAT/AI` as distinct facts.
 - Cross-platform coverage is measurable per adapter and time range. A PAIR-complete catalog is not described as a
   chain-complete catalog.
-- Existing `catalogSources`, `apiCanonicalClaim` and footer-only source copy are legacy discovery semantics. Runtime
-  migration must introduce the new fields before removing or renaming them.
+- Existing `catalogSources`, `apiCanonicalClaim` and footer-only source copy remain legacy discovery semantics. The
+  schema-v4 projection is additive; removing those fields requires a later breaking release.
 - This ADR changes no signer, service, RPC credential, production database, contract or wallet state.

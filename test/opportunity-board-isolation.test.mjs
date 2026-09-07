@@ -25,8 +25,30 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /advanceChainCatalog/)
   assert.match(source, /INDIVIDUAL_FALLBACK/)
   assert.match(source, /activateUnbatchedTransport/)
+  assert.match(source, /persistenceHealthy/)
+  assert.match(source, /eventWakeMaxCandidates: this\.config\.eventWakeMaxCandidates/)
+  assert.match(source, /rpcLogicalAttempts: this\.config\.rpcLogicalAttempts/)
   assert.match(source, /NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED/)
   assert.doesNotMatch(source, /GENERIC_EXECUTOR_NOT_DEPLOYED/)
+})
+
+test('dashboard client is same-origin, read-only and free of signer material', () => {
+  const app = fs.readFileSync(path.join(root, 'ui', 'src', 'App.jsx'), 'utf8')
+  const index = fs.readFileSync(path.join(root, 'ui', 'index.html'), 'utf8')
+  const styles = fs.readFileSync(path.join(root, 'ui', 'src', 'styles.css'), 'utf8')
+  const vite = fs.readFileSync(path.join(root, 'vite.config.mjs'), 'utf8')
+  const combined = `${app}\n${index}\n${styles}\n${vite}`
+  const externalUrls = (combined.match(/https?:\/\/[^\s'"`]+/g) || []).filter(
+    (value) => !/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\/?$/.test(value),
+  )
+
+  assert.deepEqual(externalUrls, [])
+  assert.doesNotMatch(combined, /MANGA_PRIVATE_KEY|createWalletClient|privateKeyToAccount|eth_sendRawTransaction/)
+  assert.doesNotMatch(combined, /fetch\([^)]*,\s*\{[^}]*method:\s*['"](?:POST|PUT|PATCH|DELETE)/s)
+  assert.match(app, /requestJson\('\/api\/v1\/system'/)
+  assert.match(app, /NO COMMAND BUS/)
+  assert.match(app, /RPC posts \/ retries \/ fallbacks/)
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/)
 })
 
 test('systemd unit keeps the board in a separate loopback-only identity without credentials', () => {
@@ -45,6 +67,8 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(example, /^MANGA_BOARD_RPC_BATCH_SIZE=20$/m)
   assert.match(example, /^MANGA_BOARD_RPC_HTTP_CONCURRENCY=1$/m)
   assert.match(example, /^MANGA_BOARD_FULL_GRID_EVERY_CYCLES=0$/m)
+  assert.match(example, /^MANGA_BOARD_READ_MODEL=sqlite$/m)
+  assert.match(example, /^MANGA_BOARD_SOURCE_CATALOG_START_BLOCK=45000000$/m)
   assert.doesNotMatch(example, /MANGA_PRIVATE_KEY|MANGA_RPC_URL=|MANGA_WS_URL=/)
 })
 
