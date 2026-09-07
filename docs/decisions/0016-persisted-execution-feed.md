@@ -19,9 +19,11 @@ once per second would avoid HTTP but waste parsing and cache bandwidth.
 The board atomically replaces a separate `execution-snapshot.json` after every published generation. The file contains
 the same compact fresh-positive projection as the HTTP execution view and is mode `0640`, owned by `manga-board`.
 
-On Linux, the signer account receives read-only membership in the board group and the board runtime directory is mode
-`0750`. The board receives no group membership or write path into the signer runtime, configuration or credential
-directories. The watcher unit selects the persisted file explicitly; loopback HTTP remains the development fallback.
+On Linux, the signer account receives read-only membership in the board group. The feed lives in a dedicated
+mode-`0750` `/run/manga-opportunity-board-feed` runtime directory; the board's SQLite/evidence directory remains private
+at mode `0700`. The board receives no group membership or write path into the signer runtime, configuration or
+credential directories. The watcher unit selects the persisted file explicitly; loopback HTTP remains the development
+fallback.
 
 The reader rejects non-regular files, symlinks, group/world-writable files and inputs larger than 16 MiB. It caches an
 unchanged inode generation and continues to apply board identity, quote freshness, typed-route, arithmetic, exact
@@ -32,7 +34,7 @@ simulation, gas, balance, authorization and nonce gates before any signature.
 - Long board computations no longer prevent the watcher from reading the most recent complete generation.
 - A stale file cannot authorize a trade because candidate quote age still fails closed.
 - Atomic rename exposes either the previous complete JSON or the next complete JSON, never a partial write.
-- The signer can read public board artifacts in `/var/lib/manga-opportunity-board`; it cannot modify them.
+- The signer can read only the published runtime feed; it cannot modify it or traverse the private board store.
 - The board still owns discovery latency. This change isolates transport availability but does not make a slow scan
   faster or prove a race advantage.
 - A missing, malformed, over-sized or permission-unsafe file remains a board-only degradation and never reaches the

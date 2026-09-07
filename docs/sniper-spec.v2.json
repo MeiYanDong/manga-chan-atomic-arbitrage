@@ -82,7 +82,7 @@
     ],
     "race_experiment": {
       "enabled": true,
-      "question": "Can loopback-board triggering plus a dedicated strategy RPC capture PAIR relative-price discrepancies before they decay while preserving the exact marked-net floor?",
+      "question": "Can persisted-board triggering plus the explicitly configured execution RPC capture PAIR relative-price discrepancies before they decay while preserving the exact marked-net floor?",
       "max_failed_cost": "0.001",
       "max_attempts": 20,
       "expires_at": "2026-10-08T00:00:00.000Z",

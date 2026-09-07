@@ -108,7 +108,9 @@ Atomic settlement removes intermediate-token inventory exposure if the transacti
   defaults. An opt-in `UNTIL_REVOKED` mode removes only the wall-clock stop and dynamically admits confirmed retained
   USDG up to the immutable 100 USDG contract cap; it does not remove failed-Gas, ETH-reserve, exact-profit, nonce,
   unresolved-mutation or manual-revocation breakers. Count limits may independently be finite or `unlimited`.
-- While idle, the generic watcher reads only the local signer-free board. A strategy-owned RPC is touched only after one new candidate clears the board gate; that exact candidate is then simulated twice before signing.
+- While idle, the generic watcher reads only the local signer-free board. The explicitly configured execution RPC is
+  touched only after one new candidate clears the board gate; that exact candidate is then simulated twice before
+  signing. Managed RPC remains the default; the official public endpoint requires a separate default-off outage flag.
 - No wallet token approvals, Universal Router, or Permit2.
 - Every mutation follows `intent -> immutable plan -> exact raw persisted -> broadcast -> receipt/effect`.
 - A receipt or nonce ambiguity becomes `UNKNOWN`; no new nonce is permitted until `reconcile` converges.
@@ -135,7 +137,8 @@ The deterministic contract test asserts the exact business result, intermediate-
 
 ## Runtime configuration
 
-Copy `.env.example` to a protected strategy-owned configuration outside this repository. Live commands refuse to sign through the public fallback RPC. The signer can be either:
+Copy `.env.example` to a protected strategy-owned configuration outside this repository. Live commands refuse to sign
+through the public fallback RPC unless the explicit emergency flag is enabled. The signer can be either:
 
 - macOS Keychain via `MANGA_KEYCHAIN_SERVICE`; or
 - a host-bound encrypted systemd credential exposed through `MANGA_PRIVATE_KEY_FILE` on Linux.
@@ -239,7 +242,7 @@ for the isolation boundary.
 ## Deployment
 
 The supported production shape is a small Linux host. The signer-free board may use the official public HTTP RPC. The
-fixed-route watcher still needs a managed HTTP/WSS pair; the generic watcher needs only a strategy-owned HTTP execution
+fixed-route watcher still needs a managed HTTP/WSS pair; the generic watcher needs one explicitly configured HTTP execution
 RPC because it consumes the local board while idle. A full node is intentionally out of scope. The release workflow
 creates a commit-addressed artifact; deployment and arm promotion to a signing host remain explicit operations using
 the systemd materials in [`deploy/systemd`](deploy/systemd).

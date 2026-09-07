@@ -14,7 +14,7 @@ WorkingDirectory=/opt/manga-chan-arbitrage/current
 EnvironmentFile=/etc/manga-chan-arbitrage/live.env
 EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
-Environment=MANGA_GENERIC_BOARD_SNAPSHOT=/var/lib/manga-opportunity-board/execution-snapshot.json
+Environment=MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
 LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
 Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
 UMask=0077

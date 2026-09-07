@@ -38,8 +38,6 @@ install -d -o root -g root -m 0755 "${prefix}/releases"
 install -d -o "${service_user}" -g "${service_group}" -m 0700 "${runtime_dir}"
 install -d -o root -g "${service_group}" -m 0750 "${config_dir}"
 install -d -o "${board_user}" -g "${board_group}" -m 0750 "${board_runtime_dir}"
-chown "${board_user}:${board_group}" "${board_runtime_dir}"
-chmod 0750 "${board_runtime_dir}"
 install -d -o root -g "${board_group}" -m 0750 "${board_config_dir}"
 install -d -o root -g root -m 0700 "${credential_dir}"
 

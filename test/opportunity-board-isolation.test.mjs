@@ -62,6 +62,12 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-opportunity-board$/m)
   assert.match(unit, /^MemoryHigh=448M$/m)
   assert.match(unit, /^MemoryMax=512M$/m)
+  assert.match(unit, /^RuntimeDirectory=manga-opportunity-board-feed$/m)
+  assert.match(unit, /^RuntimeDirectoryMode=0750$/m)
+  assert.match(
+    unit,
+    /^Environment=MANGA_BOARD_EXECUTION_SNAPSHOT=\/run\/manga-opportunity-board-feed\/execution-snapshot\.json$/m,
+  )
   assert.doesNotMatch(unit, /LoadCredential|manga-private-key|MANGA_PRIVATE_KEY/)
 
   const example = fs.readFileSync(path.join(root, 'deploy', 'opportunity-board.env.example'), 'utf8')
@@ -114,13 +120,12 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
     assert.match(unit, /^SupplementaryGroups=manga-board$/m)
     assert.match(
       unit,
-      /^Environment=MANGA_GENERIC_BOARD_SNAPSHOT=\/var\/lib\/manga-opportunity-board\/execution-snapshot\.json$/m,
+      /^Environment=MANGA_GENERIC_BOARD_SNAPSHOT=\/run\/manga-opportunity-board-feed\/execution-snapshot\.json$/m,
     )
   }
 
   const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
   assert.match(installer, /usermod --append --groups "\$\{board_group\}" "\$\{service_user\}"/)
-  assert.match(installer, /chmod 0750 "\$\{board_runtime_dir\}"/)
 })
 
 test('generic systemd services isolate the board and mutually exclude the fixed signer', () => {
