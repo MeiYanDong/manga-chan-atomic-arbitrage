@@ -181,6 +181,12 @@ Do not truncate or rewrite the historical file during deployment.
 Stopping or rolling back the board must not stop, restart, disarm or change `manga-chan-watcher.service`. Conversely,
 board health never proves the signing watcher is armed or trading.
 
+The dual watcher retries only its read-only startup chain evidence on a transport-classified failure: five total
+attempts with 1/2/4/8-second backoff. During a retry it reports `DEGRADED_STARTUP_RPC`, keeps the error endpoint
+redacted and has not loaded the private credential. An identity, bytecode, authorization, balance, nonce, ledger or
+unresolved-mutation mismatch remains terminal on its first observation. A fifth transport failure is also terminal and
+must be treated as an RPC outage, not an idle healthy signer.
+
 ## Generic-v2 staged promotion
 
 Generic-v2 may share the same Linux host as the loopback opportunity board, but not the board's Unix identity, config,

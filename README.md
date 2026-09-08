@@ -116,6 +116,9 @@ See
 [`docs/evidence/2026-09-08-post-quote-checkpoint-local-validation.md`](docs/evidence/2026-09-08-post-quote-checkpoint-local-validation.md)
 for the quote-to-feed latency diagnosis, bounded correction and pre-production test boundary.
 See
+[`docs/evidence/2026-09-08-dual-startup-rpc-retry-local-validation.md`](docs/evidence/2026-09-08-dual-startup-rpc-retry-local-validation.md)
+for the public-RPC startup throttle, safe recovery and bounded retry design.
+See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
 See
@@ -176,10 +179,14 @@ The fixed executors retain their original 15 USDG policy. Generic-v2 does not si
 - A newly quoted proxy-positive batch is checkpointed to the compact execution feed before slower catalog maintenance.
   This preserves the strict 30-second signer freshness boundary; it does not bypass the independent `0.1 USDG`
   screened/exact floor or any typed route and receipt gate.
+- The dual watcher retries only transient startup-chain reads with bounded backoff and does not load the private
+  credential until identity, deployments, balances, nonce and authorization evidence converge.
 
 See [ADR 0019](docs/decisions/0019-dual-usdg-weth-principal-execution.md) and the
 [dual-base stories](docs/stories/dual-base-execution.md). The quote-to-feed ordering decision is recorded in
 [ADR 0022](docs/decisions/0022-post-quote-execution-feed-checkpoint.md).
+Startup transport recovery is recorded in
+[ADR 0023](docs/decisions/0023-bounded-dual-startup-rpc-retry.md).
 
 See [`docs/spec.md`](docs/spec.md) for the Race Thesis, Shot Policy, state model and acceptance boundaries.
 

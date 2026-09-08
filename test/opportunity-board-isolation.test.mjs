@@ -169,4 +169,16 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualArm, /^ExecStart=\/usr\/bin\/env npm run dual:watch:arm$/m)
   assert.match(wethDeploy, /^Type=oneshot$/m)
   assert.match(wethDeploy, /^ExecStart=\/usr\/bin\/env npm run dual:weth:deploy$/m)
+
+  const dualSource = fs.readFileSync(path.join(root, 'scripts', 'dual-base-arb.mjs'), 'utf8')
+  const dualWatchSource = dualSource.slice(
+    dualSource.indexOf('async function watchDual()'),
+    dualSource.indexOf('async function dualWatchStatus()'),
+  )
+  const startupRetry = dualWatchSource.indexOf('await retryReadOnly(')
+  const signerLoad = dualWatchSource.indexOf('loadAccount()')
+  assert.ok(startupRetry >= 0, 'dual watcher must retry transient startup readback')
+  assert.ok(signerLoad > startupRetry, 'dual watcher must not load the signer before startup readback converges')
+  assert.match(dualWatchSource, /isTransientRpcError/)
+  assert.match(dualWatchSource, /DUAL_WATCH_STARTUP_RPC_RETRY/)
 })

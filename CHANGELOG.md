@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retry transient dual-watcher startup chain readback five times with bounded exponential backoff, persist degraded
+  retry telemetry, and load the private credential only after chain identity, deployments, balances and nonce converge.
+  Wrong-chain, authorization, ledger and state mismatches still fail immediately.
 - Publish a compact execution-feed checkpoint immediately after any newly quoted proxy-positive candidate and before
   slower source-catalog maintenance. This preserves the signer's 30-second freshness gate without relaxing its exact
   net-profit floor, route validation or fail-closed behavior.
