@@ -187,6 +187,66 @@ test('overview never merges proxy screens, exact-ready, receipts and realized ne
   assert.equal(model.overview.realizedNetUsdg, '0.500000')
 })
 
+test('dashboard selects a WETH-only positive lane without exposing raw nested quote fields', () => {
+  const fixture = runtimeFixture()
+  fixture.snapshot.schemaVersion = 5
+  fixture.snapshot.items = [
+    {
+      id: NINECAT.toLowerCase(),
+      tokenAddress: NINECAT,
+      symbol: 'NINECAT',
+      status: 'NO_EDGE',
+      fresh: true,
+      quotedAt: fixture.snapshot.generatedAt,
+      amountInUsdg: '25',
+      screenedNetUsdg: '-0.2',
+      preferredBaseAsset: 'WETH',
+      baseOpportunities: {
+        USDG: {
+          baseAsset: 'USDG',
+          status: 'NO_EDGE',
+          fresh: true,
+          quotedAt: fixture.snapshot.generatedAt,
+          amountInBase: '25',
+          normalizedAmountInUsdg: '25',
+          normalizedScreenedNetUsdg: '-0.2',
+          route: 'AI → NINECAT → AI',
+        },
+        WETH: {
+          baseAsset: 'WETH',
+          status: 'SCREENED_NET_POSITIVE',
+          fresh: true,
+          quotedAt: fixture.snapshot.generatedAt,
+          blockNumber: '45879015',
+          blockHash: `0x${'d'.repeat(64)}`,
+          amountInBase: '0.003019633961984217',
+          normalizedAmountInUsdg: '10',
+          normalizedGrossProfitUsdg: '0.9',
+          normalizedGasCostProxyUsdg: '0.2',
+          normalizedScreenedNetUsdg: '0.7',
+          route: 'USDG → NINECAT → AI',
+          evidenceLevel: 'FIXED_BLOCK_QUOTER_SCREEN_WITH_POOL_ATTESTATION_AND_V3_SHORTLIST',
+        },
+      },
+      pools: [],
+    },
+  ]
+
+  const [item] = projectDashboardOpportunities(fixture)
+  assert.equal(item.axes.quote, 'FRESH_PROXY_POSITIVE')
+  assert.equal(item.routeLabel, 'USDG → NINECAT → AI')
+  assert.equal(item.quote.baseAsset, 'WETH')
+  assert.equal(item.quote.bestSizeBase, '0.003019633961984217')
+  assert.equal(item.quote.bestSizeUsdg, '10')
+  assert.equal(item.quote.grossProfitUsdg, '0.9')
+  assert.equal(item.quote.gasCostProxyUsdg, '0.2')
+  assert.equal(item.quote.screenedNetUsdg, '0.7')
+  assert.equal('baseOpportunities' in item.quote, false)
+  const summary = buildDashboardModel(fixture).opportunities[0]
+  assert.equal(summary.quote.baseAsset, 'WETH')
+  assert.equal(summary.quote.bestSizeBase, '0.003019633961984217')
+})
+
 test('read-only API router exposes all v1 projections and rejects malformed detail ids', () => {
   const fixture = runtimeFixture()
   const model = buildDashboardModel(fixture)

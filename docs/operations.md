@@ -297,3 +297,99 @@ sudo systemctl disable --now manga-generic-watcher.service
 `STOPPED_POLICY` is a clean expiry or budget stop. `HALTED_RPC`, `HALTED_UNKNOWN`, `HALTED_NONCE_CONFLICT`,
 `HALTED_INVARIANT` and `HALTED_STARTUP` require investigation. Never restart a halted signer merely because the board
 still shows a positive screen; reconcile and re-run deployment-specific verification first.
+
+## Dual-v3 WETH promotion and continuous operation
+
+Dual-v3 is a controlled successor to the generic watcher, not a second concurrent bot. It keeps the deployed USDG
+executor and creates a separate WETH executor, but one process owns both bases, the wallet lock, and the nonce. Do not
+enable `manga-dual-watcher.service` while any fixed-route or generic-v2 watcher is armed or running.
+
+Before a WETH deployment or dual arm:
+
+1. deploy a release whose complete `npm run check` passes and enable `MANGA_BOARD_ENABLE_WETH_BASE=1` only in the
+   signer-free board configuration;
+2. observe at least one complete schema-v5 board publication and retain its public-RPC health/readback evidence;
+3. durably disarm and stop the current generic watcher, then require `dual:reconcile` (or the owning legacy reconciler)
+   to report `CLEAN`, with latest and pending nonce equal;
+4. set `MANGA_WETH_SEED_ETH`, `MANGA_WETH_MAX_AMOUNT_WETH`, and
+   `MANGA_WETH_MIN_GROSS_PROFIT_WETH` explicitly. The seed is a real ETH value transfer; the maximum is an immutable
+   per-transaction contract cap, not an instruction to trade that amount;
+5. run `npm run dual:weth:deploy-preflight` and record the current wallet ETH, seed, maximum deployment Gas, retained
+   ETH reserve, nonce, source hashes, and constructor bounds;
+6. require a human check that `seed + maximum deployment Gas + retained operating reserve` fits the current wallet.
+   Never infer this from a previous balance snapshot;
+7. start `manga-dual-weth-deploy.service` once, then require the canonical receipt and post-state to prove the exact
+   WETH seed, zero stranded native ETH, operator, immutable bounds, code hash, nonce, and wallet ETH delta; and
+8. run `npm run dual:runtime-verify`. It must identify both executors and a schema-v5 dual-base loopback board before an
+   arm can be created.
+
+Deployment commands are intentionally separate from arming:
+
+```bash
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run dual:weth:deploy-preflight
+
+sudo systemctl start manga-dual-weth-deploy.service
+sudo systemctl --no-pager --full status manga-dual-weth-deploy.service
+
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json \
+  npm run dual:runtime-verify
+```
+
+Dual autonomous mode accepts only the explicit policy below:
+
+```text
+MANGA_GENERIC_WATCH_AUTO_RENEW=0
+MANGA_GENERIC_WATCH_UNTIL_REVOKED=1
+MANGA_GENERIC_WATCH_MAX_EXECUTIONS=unlimited
+MANGA_GENERIC_WATCH_MAX_ATTEMPTS=unlimited
+MANGA_GENERIC_WATCH_MAX_PREFLIGHTS=unlimited
+```
+
+This removes wall-clock and count stops only. `MANGA_MAX_FAILED_GAS_WEI`, the wallet ETH reserve, common USDG net floor,
+screened-net floor, both immutable contract caps, 45-second deadline, deployment identity, nonce, durable revocation,
+and UNKNOWN mutation barrier remain authoritative. The arm captures both current executor balances. Spendable principal
+advances by summing only receipt-reconciled gross base-asset profit over those arm-time balances; the live contract
+balance is a sufficiency check, not a source of authority. Unrelated external top-ups are therefore not adopted until a
+new arm.
+
+```bash
+sudo systemctl start manga-dual-arm.service
+sudo systemctl enable --now manga-dual-watcher.service
+sudo systemctl show manga-dual-watcher.service \
+  --property=ActiveState,SubState,MainPID,NRestarts
+
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json \
+  npm run dual:watch:status
+```
+
+While idle, the service reads only the atomically published local feed. A positive screen escalates to one strategy-RPC
+batch: both base lanes are exact-called and gas-estimated at one current block, normalized conservatively, and only the
+largest net candidate can be signed. The selected on-chain minimum profit stays in USDG or WETH and includes worst-case
+Gas plus the common net floor. A board screen, exact call, running process, or arm is not profit evidence; only the
+canonical receipt plus base-balance and Gas reconciliation is.
+
+To stop it, revoke first and then disable the service:
+
+```bash
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run dual:watch:disarm
+sudo systemctl disable --now manga-dual-watcher.service
+```
+
+Use `npm run dual:reconcile` for a dual-v3 UNKNOWN. `--rebroadcast-same-raw` may reuse only the exact persisted raw;
+`--abandon-expired` is available only for an expired execution after two independent readers prove the transaction and
+nonce absent. Never create a replacement nonce while the result is `PENDING`, `PROVISIONAL`, `CONFLICT`, or `UNKNOWN`.

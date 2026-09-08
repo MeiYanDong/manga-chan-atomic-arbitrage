@@ -15,6 +15,7 @@ interface ISettlementRecorder {
 }
 
 contract MockToken {
+    address internal constant POOL_MANAGER = 0x8366a39CC670B4001A1121B8F6A443A643e40951;
     mapping(address account => uint256 amount) public balanceOf;
     mapping(address owner => mapping(address spender => uint256 amount)) public allowance;
 
@@ -26,7 +27,12 @@ contract MockToken {
         require(balanceOf[msg.sender] >= amount, "BALANCE");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
+        if (to == POOL_MANAGER) ISettlementRecorder(POOL_MANAGER).recordSettlement(amount);
         return true;
+    }
+
+    function deposit() external payable {
+        balanceOf[msg.sender] += msg.value;
     }
 
     function approve(address spender, uint256 amount) external returns (bool) {
@@ -73,9 +79,14 @@ contract MockV3Router {
     }
 
     uint256 public exitProfit;
+    address public profitToken;
 
     function configure(uint256 exitProfit_) external {
         exitProfit = exitProfit_;
+    }
+
+    function configureProfitToken(address profitToken_) external {
+        profitToken = profitToken_;
     }
 
     function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
@@ -87,7 +98,8 @@ contract MockV3Router {
             amountOut = params.amountIn;
         } else {
             require(MockToken(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "TRANSFER_FROM");
-            amountOut = tokenOut == USDG ? params.amountIn + exitProfit : params.amountIn;
+            address selectedProfitToken = profitToken == address(0) ? USDG : profitToken;
+            amountOut = tokenOut == selectedProfitToken ? params.amountIn + exitProfit : params.amountIn;
         }
         require(amountOut >= params.amountOutMinimum, "MIN_OUT");
         MockToken(tokenOut).mint(params.recipient, amountOut);
@@ -162,10 +174,15 @@ contract MockV3Pool {
 
     uint8 public mode;
     uint256 public profit;
+    address public outputToken;
 
     function configure(uint8 mode_, uint256 profit_) external {
         mode = mode_;
         profit = profit_;
+    }
+
+    function configureOutputToken(address outputToken_) external {
+        outputToken = outputToken_;
     }
 
     function swap(address recipient, bool, int256 amountSpecified, uint160, bytes calldata)
@@ -181,7 +198,7 @@ contract MockV3Pool {
         require(mode == 2, "MODE");
         uint256 output = input + profit;
         IExecutorCallbacks(msg.sender).uniswapV3SwapCallback(-int256(output), int256(input), bytes(""));
-        IMintableToken(USDG).mint(recipient, output);
+        IMintableToken(outputToken == address(0) ? USDG : outputToken).mint(recipient, output);
         return (-int256(output), int256(input));
     }
 }

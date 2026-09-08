@@ -263,8 +263,8 @@ function OpportunityTable({ items, onOpen, compact = false }) {
         <thead>
           <tr>
             <th>Target / route</th>
-            <th>Best size</th>
-            <th>Screened net</th>
+            <th>Base / best size</th>
+            <th>Screened net (USDG eq.)</th>
             <th>Platform route</th>
             <th>Protocol / venue</th>
             <th>Truth state</th>
@@ -282,7 +282,9 @@ function OpportunityTable({ items, onOpen, compact = false }) {
                 <code>{compactAddress(item.target.address)}</code>
               </td>
               <td className="numeric">
-                {item.quote.bestSizeUsdg ? `${formatMetric(item.quote.bestSizeUsdg)} U` : '—'}
+                {item.quote.bestSizeBase
+                  ? `${formatMetric(item.quote.bestSizeBase, item.quote.baseAsset === 'WETH' ? 6 : 2)} ${item.quote.baseAsset}`
+                  : '—'}
               </td>
               <td className={`numeric net-${toneForStatus(item.axes.quote)}`}>
                 {item.quote.screenedNetUsdg === null

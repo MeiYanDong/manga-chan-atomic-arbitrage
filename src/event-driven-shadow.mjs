@@ -134,8 +134,16 @@ export function selectPeriodicShadowCandidates(catalog, observations, options) {
 
   for (const id of options.priorityIds) add(byId.get(id.toLowerCase()))
   const currentPositive = [...observations.entries()]
-    .filter(([, observation]) => options.positiveStatuses.includes(observation.status))
-    .sort((left, right) => Number(right[1].screenedNetUsdg) - Number(left[1].screenedNetUsdg))
+    .filter(([, observation]) =>
+      [observation.status, ...Object.values(observation.baseOpportunities || {}).map((lane) => lane?.status)].some(
+        (status) => options.positiveStatuses.includes(status),
+      ),
+    )
+    .sort(
+      (left, right) =>
+        Number(right[1].preferredNormalizedScreenedNetUsdg ?? right[1].screenedNetUsdg) -
+        Number(left[1].preferredNormalizedScreenedNetUsdg ?? left[1].screenedNetUsdg),
+    )
     .slice(0, options.topRefreshSize)
   for (const [id] of currentPositive) add(byId.get(id))
 
@@ -284,7 +292,11 @@ export function buildShadowDependencyIndex(catalog, observations = new Map()) {
   for (const candidate of catalog || []) {
     for (const pool of candidate.pools || []) addDependency(v4PoolToCandidates, pool.poolId, candidate.id)
     const observation = observations.get(candidate.id)
-    const variants = [observation, ...(observation?.amountQuotes || [])].filter(Boolean)
+    const baseVariants = Object.values(observation?.baseOpportunities || {}).flatMap((lane) => [
+      lane,
+      ...(lane?.amountQuotes || []),
+    ])
+    const variants = [observation, ...(observation?.amountQuotes || []), ...baseVariants].filter(Boolean)
     for (const variant of variants) {
       for (const address of [...addressList(variant.entryV3Pools), ...addressList(variant.exitV3Pools)]) {
         addDependency(v3PoolToCandidates, address, candidate.id)

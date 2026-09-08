@@ -61,6 +61,9 @@ install -o root -g root -m 0644 deploy/systemd/manga-chan-watcher.service /etc/s
 install -o root -g root -m 0644 deploy/systemd/manga-generic-arm.service /etc/systemd/system/manga-generic-arm.service
 install -o root -g root -m 0644 deploy/systemd/manga-generic-deploy.service /etc/systemd/system/manga-generic-deploy.service
 install -o root -g root -m 0644 deploy/systemd/manga-generic-watcher.service /etc/systemd/system/manga-generic-watcher.service
+install -o root -g root -m 0644 deploy/systemd/manga-dual-weth-deploy.service /etc/systemd/system/manga-dual-weth-deploy.service
+install -o root -g root -m 0644 deploy/systemd/manga-dual-arm.service /etc/systemd/system/manga-dual-arm.service
+install -o root -g root -m 0644 deploy/systemd/manga-dual-watcher.service /etc/systemd/system/manga-dual-watcher.service
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
 systemctl daemon-reload

@@ -173,6 +173,7 @@ test('only an expired generic execution with two-reader absence can be abandoned
     { ...observation, source: 'secondary' },
   ]
   assert.equal(evaluateExpiredMutationAbandonment(plan, absent).allowed, true)
+  assert.equal(evaluateExpiredMutationAbandonment({ ...plan, kind: 'weth-execute' }, absent).allowed, true)
   assert.equal(
     evaluateExpiredMutationAbandonment(plan, [{ ...observation, source: 'primary' }]).reason,
     'reconciliation-unknown',
@@ -204,6 +205,7 @@ test('generic raw replay requires every reader timestamp to remain within deadli
     { source: 'secondary', headTimestamp: 99n },
   ]
   assert.equal(evaluateRawReplayDeadline(plan, observations).allowed, true)
+  assert.equal(evaluateRawReplayDeadline({ ...plan, kind: 'weth-execute' }, observations).allowed, true)
   assert.equal(
     evaluateRawReplayDeadline(plan, [{ ...observations[0], headTimestamp: 101n }, observations[1]]).reason,
     'mutation-deadline-expired',

@@ -19,12 +19,33 @@ V3 anchor is either the USDG identity, one canonical direct pool, or exactly one
 bounded grid `5, 7.5, 10, 12.5, 15, 25, 50, 75, 100 USDG`, then refines around the best coarse point. `100 USDG` is a
 hard cap, never a forced order size.
 
+Dual-v3 adds a second, independently bounded family without modifying generic-v2:
+
+```text
+g(target, A, B, x, state) = V3_B_WETH(V4_target_B(V4_A_target(V3_WETH_A(x))))
+```
+
+The WETH anchors are identity WETH, one direct V3 pool, or exactly one USDG bridge. The board converts the existing USDG
+amount grid into WETH at its fixed-block mark, rounding down. At escalation, every USDG and WETH candidate is exact-called
+and gas-estimated at one current block. WETH net is normalized to USDG with downward rounding only for ranking; the
+selected contract's amount, minimum profit, balance delta, and retained profit stay in the native base asset.
+
 A shot is economically eligible only when:
 
 ```text
 f(x, state) - x >= on-chain gross floor
 f(x, state) - x - worst-case gas in USDG >= off-chain net floor
 ```
+
+For WETH, the common USDG net floor is converted upward at the exact block mark before building the protected call:
+
+```text
+minimumNetWeth = ceil(minimumNetUsdg * markInputWeth / markOutputUsdg)
+g(x, state) - x - worst-case gas in wei >= minimumNetWeth
+```
+
+Cross-base selection maximizes `floor(WETH net * USDG mark / WETH mark input)` versus exact USDG net, then signs one
+candidate. The mark is a conservative decision input, not a claim of guaranteed execution or an on-chain oracle.
 
 The quoted asset category is irrelevant. The opportunity exists when the on-chain relative price carried through one quote path is stale against the other path after fees and price impact.
 

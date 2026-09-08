@@ -19,8 +19,8 @@ export const GENERIC_PAIR_TICK_SPACING = PAIR_TICK_SPACING
 export const GENERIC_V3_FEES = Object.freeze([100, 500, 3_000, 10_000])
 export { pairPoolId }
 
-/** @param {string} path */
-export function decodeV3Path(path) {
+/** @param {string} path @param {{bridgeToken?: string}} [options] */
+export function decodeV3Path(path, options = {}) {
   if (path === '0x') return { tokens: [], fees: [] }
   if (typeof path !== 'string' || !/^0x[0-9a-f]+$/i.test(path) || path.length % 2 !== 0) {
     throw new Error('invalid V3 path encoding')
@@ -40,7 +40,11 @@ export function decodeV3Path(path) {
     cursor += 40
   }
   if (fees.some((fee) => !GENERIC_V3_FEES.includes(fee))) throw new Error('V3 path uses a fee outside the allowlist')
-  if (fees.length === 2 && tokens[1] !== GENERIC_WETH) throw new Error('two-hop V3 path must use WETH as the bridge')
+  const bridgeToken = getAddress(options.bridgeToken || GENERIC_WETH)
+  if (fees.length === 2 && tokens[1] !== bridgeToken) {
+    const bridgeLabel = bridgeToken === GENERIC_WETH ? 'WETH' : bridgeToken === GENERIC_USDG ? 'USDG' : bridgeToken
+    throw new Error(`two-hop V3 path must use ${bridgeLabel} as the bridge`)
+  }
   return { tokens, fees }
 }
 
@@ -73,7 +77,7 @@ export function pairPoolKey(pool, targetToken) {
 /** @param {Record<string, any>} snapshot */
 export function assertGenericBoardIdentity(snapshot) {
   if (
-    ![2, 3, 4].includes(snapshot?.schemaVersion) ||
+    ![2, 3, 4, 5].includes(snapshot?.schemaVersion) ||
     snapshot.service !== 'manga-opportunity-board' ||
     snapshot.mode !== 'READ_ONLY_NO_SIGNING_NO_BROADCAST' ||
     snapshot.selection?.executionAuthorized !== false
@@ -81,6 +85,19 @@ export function assertGenericBoardIdentity(snapshot) {
     throw new Error('snapshot identity or read-only boundary is invalid')
   }
   return Number(snapshot.schemaVersion)
+}
+
+/** @param {Record<string, any>} snapshot */
+export function assertDualBoardIdentity(snapshot) {
+  const schemaVersion = assertGenericBoardIdentity(snapshot)
+  if (
+    schemaVersion < 5 ||
+    snapshot.baseSelection?.executionAuthorized !== false ||
+    snapshot.health?.signerLoaded !== false
+  ) {
+    throw new Error('snapshot has no reviewed signer-free dual-base boundary')
+  }
+  return schemaVersion
 }
 
 /**

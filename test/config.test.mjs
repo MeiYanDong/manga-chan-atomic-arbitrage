@@ -29,6 +29,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'MANGA_GENERIC_WATCH_MAX_EXECUTIONS=unlimited',
       'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS=unlimited',
       'MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0.25',
+      'MANGA_WETH_SEED_ETH=0.001',
+      'MANGA_WETH_MAX_AMOUNT_WETH=0.5',
+      'MANGA_WETH_MIN_GROSS_PROFIT_WETH=0.000002',
     ].join('\n'),
     { mode: 0o600 },
   )
@@ -51,6 +54,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.genericWatchMaxExecutions, null)
   assert.equal(config.genericWatchMaxPreflights, null)
   assert.equal(config.genericWatchMinScreenedNetUsdg, '0.25')
+  assert.equal(config.wethSeedEth, '0.001')
+  assert.equal(config.wethMaxAmountWeth, '0.5')
+  assert.equal(config.wethMinGrossProfitWeth, '0.000002')
   assert.doesNotThrow(() => assertLiveTransport(config, { requireWss: true }))
 })
 

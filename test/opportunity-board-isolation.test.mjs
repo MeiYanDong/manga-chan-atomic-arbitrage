@@ -131,29 +131,42 @@ test('generic signer keeps the board read-only and uses a bounded loopback-escal
   assert.match(installer, /usermod --append --groups "\$\{board_group\}" "\$\{service_user\}"/)
 })
 
-test('generic systemd services isolate the board and mutually exclude the fixed signer', () => {
+test('generic and dual systemd services isolate the board and mutually exclude signer generations', () => {
   const watcher = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-generic-watcher.service'), 'utf8')
   const arm = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-generic-arm.service'), 'utf8')
   const deploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-generic-deploy.service'), 'utf8')
   const fixed = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-chan-watcher.service'), 'utf8')
+  const dualWatcher = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-watcher.service'), 'utf8')
+  const dualArm = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-arm.service'), 'utf8')
+  const wethDeploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-weth-deploy.service'), 'utf8')
 
-  for (const unit of [watcher, arm, deploy]) {
+  for (const unit of [watcher, arm, deploy, dualWatcher, dualArm, wethDeploy]) {
     assert.match(unit, /^User=manga-chan-arb$/m)
     assert.match(unit, /^LoadCredentialEncrypted=manga-private-key:/m)
     assert.match(unit, /^Environment=MANGA_RUN_DIR=\/var\/lib\/manga-chan-arbitrage$/m)
     assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-chan-arbitrage$/m)
   }
-  assert.match(watcher, /^Conflicts=manga-chan-watcher\.service$/m)
-  assert.match(arm, /^Conflicts=manga-chan-watcher\.service$/m)
+  assert.match(watcher, /^Conflicts=.*manga-chan-watcher\.service.*manga-dual-watcher\.service/m)
+  assert.match(arm, /^Conflicts=.*manga-chan-watcher\.service.*manga-dual-watcher\.service/m)
   assert.match(watcher, /^ExecStart=\/usr\/bin\/env npm run generic:watch$/m)
   assert.match(arm, /^Type=oneshot$/m)
   assert.match(arm, /^ExecStart=\/usr\/bin\/env npm run generic:watch:arm$/m)
   assert.match(deploy, /^Type=oneshot$/m)
   assert.match(deploy, /^ExecStart=\/usr\/bin\/env npm run generic:deploy$/m)
   assert.match(deploy, /^TimeoutStartSec=180$/m)
-  assert.match(deploy, /^Conflicts=manga-chan-watcher\.service manga-generic-watcher\.service$/m)
+  assert.match(
+    deploy,
+    /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service.*manga-dual-watcher\.service/m,
+  )
   assert.match(
     fixed,
-    /^Conflicts=manga-generic-watcher\.service manga-generic-arm\.service manga-generic-deploy\.service$/m,
+    /^Conflicts=.*manga-generic-watcher\.service.*manga-dual-watcher\.service.*manga-dual-arm\.service.*manga-dual-weth-deploy\.service/m,
   )
+  assert.match(dualWatcher, /^SupplementaryGroups=manga-board$/m)
+  assert.match(dualWatcher, /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service/m)
+  assert.match(dualWatcher, /^ExecStart=\/usr\/bin\/env npm run dual:watch$/m)
+  assert.match(dualArm, /^Type=oneshot$/m)
+  assert.match(dualArm, /^ExecStart=\/usr\/bin\/env npm run dual:watch:arm$/m)
+  assert.match(wethDeploy, /^Type=oneshot$/m)
+  assert.match(wethDeploy, /^ExecStart=\/usr\/bin\/env npm run dual:weth:deploy$/m)
 })

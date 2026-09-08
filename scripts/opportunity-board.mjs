@@ -2,7 +2,17 @@ import fs from 'node:fs'
 import httpServer from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPublicClient, defineChain, encodePacked, getAddress, http, parseAbi, parseEther, toHex } from 'viem'
+import {
+  createPublicClient,
+  defineChain,
+  encodePacked,
+  formatUnits,
+  getAddress,
+  http,
+  parseAbi,
+  parseEther,
+  toHex,
+} from 'viem'
 import {
   AsyncConcurrencyGate,
   CandidateWakeQueue,
@@ -23,6 +33,7 @@ import {
   appendEvents,
   buildBoardSnapshot,
   catalogIsComplete,
+  chooseBestBaseOpportunity,
   compactExecutionBoardSnapshot,
   nextCycleDelay,
   normalizePairCandidate,
@@ -30,6 +41,7 @@ import {
   publicError,
   reconcileOpportunityEpisodes,
   screenRoundTrip,
+  screenWethRoundTrip,
   usdg,
   writeExecutionBoardSnapshot,
   writeJsonAtomic,
@@ -55,6 +67,7 @@ import {
   DEFAULT_AMOUNT_GRID_USDG,
   DEFAULT_PROBE_AMOUNTS_USDG,
   chooseBestAmountQuote,
+  equivalentWethAmountGrid,
   formatAmountGrid,
   parseUsdgAmountGrid,
   refinementAmounts,
@@ -101,6 +114,10 @@ const LONG_LAUNCHER = getAddress('0x22e99278308b393ea1260859b181ad7e78f5eeed')
 const DOPPLER_AIRLOCK = getAddress('0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862')
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 const V3_FEES = [100, 500, 3_000, 10_000]
+const BASE_ASSETS = Object.freeze({
+  USDG: Object.freeze({ symbol: 'USDG', token: USDG, bridgeToken: WETH, decimals: 6 }),
+  WETH: Object.freeze({ symbol: 'WETH', token: WETH, bridgeToken: USDG, decimals: 18 }),
+})
 const INITIAL_PRIORITY = [
   '0x7aAd9Faa5Ee27bDEeb17D5A8c1870278824C4C59', // SIGMA
   '0x2FAa763726C4a1D0D9E6a768899D147aC4c42183', // FUND
@@ -181,6 +198,14 @@ function numberValue(value, fallback) {
   return parsed
 }
 
+/** @param {string | undefined} value @param {boolean} fallback */
+function booleanFlag(value, fallback) {
+  if (value === undefined || value === '') return fallback
+  if (value === '1') return true
+  if (value === '0') return false
+  throw new Error(`invalid boolean flag: ${value}`)
+}
+
 function loadConfig() {
   const runDir = path.resolve(process.env.MANGA_BOARD_RUN_DIR || path.join(ROOT, 'runs', 'opportunity-board'))
   const executionSnapshotPath = path.resolve(
@@ -220,6 +245,7 @@ function loadConfig() {
     fullGridRefreshMs: integer(process.env.MANGA_BOARD_FULL_GRID_REFRESH_MS, 300_000),
     blockLag: BigInt(integer(process.env.MANGA_BOARD_BLOCK_LAG, 1, 0)),
     minDepthUsd: numberValue(process.env.MANGA_BOARD_MIN_DEPTH_USD, 100),
+    wethBaseEnabled: booleanFlag(process.env.MANGA_BOARD_ENABLE_WETH_BASE, false),
     amountGrid,
     probeAmounts,
     overheadGas: BigInt(integer(process.env.MANGA_BOARD_OVERHEAD_GAS, 100_000, 0)),
@@ -295,6 +321,67 @@ function v3Path(tokens, fees) {
   return encodePacked(types, values)
 }
 
+/** @param {bigint} amountWei @param {Record<string, any>} fixed */
+function normalizeWethToUsdg(amountWei, fixed) {
+  if (amountWei < 0n) {
+    const absolute = -amountWei
+    return -((absolute * fixed.nativeMark.amountOut + fixed.nativeMarkIn - 1n) / fixed.nativeMarkIn)
+  }
+  return (amountWei * fixed.nativeMark.amountOut) / fixed.nativeMarkIn
+}
+
+/** @param {bigint | null | undefined} value @param {number} decimals */
+function formatBaseAmount(value, decimals) {
+  return value === null || value === undefined ? null : formatUnits(value, decimals)
+}
+
+/** @param {Record<string, any>} lane */
+function legacyUsdgLane(lane) {
+  return {
+    status: lane.status,
+    quotedAt: lane.quotedAt,
+    blockNumber: lane.blockNumber,
+    blockHash: lane.blockHash,
+    route: lane.route,
+    routeKey: lane.routeKey,
+    amountInUsdg: lane.amountInBase,
+    amountOutUsdg: lane.amountOutBase,
+    grossProfitUsdg: lane.grossProfitBase,
+    gasCostProxyUsdg: lane.gasCostProxyBase,
+    screenedNetUsdg: lane.screenedNetBase,
+    gasPriceWei: lane.gasPriceWei,
+    gasUnitsProxy: lane.gasUnitsProxy,
+    quoterGasUnits: lane.quoterGasUnits,
+    minimumRouteDepthUsd: lane.minimumRouteDepthUsd,
+    routeExecutionAdmission: lane.routeExecutionAdmission,
+    amountQuotes: (lane.amountQuotes || []).map((quote) => ({
+      ...quote,
+      amountInUsdg: quote.amountInBase,
+      amountOutUsdg: quote.amountOutBase,
+      grossProfitUsdg: quote.grossProfitBase,
+      gasCostProxyUsdg: quote.gasCostProxyBase,
+      screenedNetUsdg: quote.screenedNetBase,
+    })),
+    amountGridUsdg: lane.amountGridBase,
+    optimizationMode: lane.optimizationMode,
+    fullGridAt: lane.fullGridAt,
+    entryV3Path: lane.entryV3Path,
+    exitV3Path: lane.exitV3Path,
+    entryV3Tokens: lane.entryV3Tokens,
+    exitV3Tokens: lane.exitV3Tokens,
+    entryV3Pools: lane.entryV3Pools,
+    exitV3Pools: lane.exitV3Pools,
+    entryV3Fees: lane.entryV3Fees,
+    exitV3Fees: lane.exitV3Fees,
+    legs: lane.legs,
+    failures: lane.failures,
+    v3RoutePolicy: lane.v3RoutePolicy,
+    evidenceLevel: lane.evidenceLevel,
+    executionEstimate: lane.executionEstimate,
+    receiptEvidence: lane.receiptEvidence,
+  }
+}
+
 /** @param {string} file */
 function readJson(file) {
   if (!fs.existsSync(file)) return null
@@ -344,6 +431,9 @@ function observationFromItem(item) {
     'quoteTrigger',
     'routeExecutionAdmission',
     'v3RoutePolicy',
+    'baseOpportunities',
+    'preferredBaseAsset',
+    'preferredNormalizedScreenedNetUsdg',
   ]
   return Object.fromEntries(keys.filter((key) => item[key] !== undefined).map((key) => [key, item[key]]))
 }
@@ -1562,24 +1652,24 @@ class OpportunityBoard {
     return true
   }
 
-  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
-  async quoteBestV3(tokenIn, tokenOut, amountIn, blockNumber) {
-    const cacheKey = `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}:${amountIn.toString()}`
+  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber @param {string} [bridgeToken] */
+  async quoteBestV3(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken = WETH) {
+    const cacheKey = `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}:${bridgeToken.toLowerCase()}:${amountIn.toString()}`
     const cached = this.v3QuoteCache.getOrCreate(blockNumber, cacheKey, () =>
-      this.quoteBestV3Uncached(tokenIn, tokenOut, amountIn, blockNumber),
+      this.quoteBestV3Uncached(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken),
     )
     if (cached.hit) this.quoteRpcMetrics.v3QuoterCacheHits += 1
     return cached.promise
   }
 
-  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
-  async quoteBestV3Uncached(tokenIn, tokenOut, amountIn, blockNumber) {
+  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber @param {string} bridgeToken */
+  async quoteBestV3Uncached(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken) {
     if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
       return { amountOut: amountIn, gasEstimate: 0n, fees: [], tokens: [tokenIn], poolAddresses: [], path: '0x' }
     }
-    const directionKey = `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`
+    const directionKey = `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}:${bridgeToken.toLowerCase()}`
     const shortlist = this.v3RouteShortlistCache.getOrCreate(blockNumber, directionKey, () =>
-      this.discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber),
+      this.discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken),
     )
     if (shortlist.hit) this.quoteRpcMetrics.v3ShortlistHits += 1
     const discovery = await shortlist.promise
@@ -1589,8 +1679,8 @@ class OpportunityBoard {
     return successful[0]
   }
 
-  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber */
-  async discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber) {
+  /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber @param {string} bridgeToken */
+  async discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken) {
     this.quoteRpcMetrics.v3ShortlistDiscoveries += 1
     const candidates = []
     const directPools = await this.availableV3Pools(tokenIn, tokenOut, blockNumber)
@@ -1603,25 +1693,27 @@ class OpportunityBoard {
       })
     }
 
-    if (tokenIn.toLowerCase() !== WETH.toLowerCase() && tokenOut.toLowerCase() !== WETH.toLowerCase()) {
+    if (tokenIn.toLowerCase() !== bridgeToken.toLowerCase() && tokenOut.toLowerCase() !== bridgeToken.toLowerCase()) {
       const [entryPools, exitPools] = await Promise.all([
-        this.availableV3Pools(tokenIn, WETH, blockNumber),
-        this.availableV3Pools(WETH, tokenOut, blockNumber),
+        this.availableV3Pools(tokenIn, bridgeToken, blockNumber),
+        this.availableV3Pools(bridgeToken, tokenOut, blockNumber),
       ])
       for (const entryPool of entryPools) {
         for (const exitPool of exitPools) {
+          const tokens = [tokenIn, bridgeToken, tokenOut]
+          const fees = [entryPool.fee, exitPool.fee]
           candidates.push({
-            tokens: [tokenIn, WETH, tokenOut],
-            fees: [entryPool.fee, exitPool.fee],
+            tokens,
+            fees,
             poolAddresses: [entryPool.address, exitPool.address],
-            path: v3Path([tokenIn, WETH, tokenOut], [entryPool.fee, exitPool.fee]),
+            path: v3Path(tokens, fees),
           })
         }
       }
     }
 
     const successful = await this.quoteV3Routes(candidates, amountIn, blockNumber)
-    if (successful.length === 0) throw new Error('no quotable direct-or-WETH V3 anchor route')
+    if (successful.length === 0) throw new Error('no quotable direct-or-approved-bridge V3 anchor route')
     const routes = successful.slice(0, this.config.v3ShortlistSize).map((result) => ({
       tokens: result.tokens,
       fees: result.fees,
@@ -1715,14 +1807,20 @@ class OpportunityBoard {
     return { amountOut: result[0], gasEstimate: result[1] }
   }
 
-  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn */
-  async quoteCandidateAmount(candidate, fixed, amountIn) {
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base */
+  async quoteCandidateBaseAmount(candidate, fixed, amountIn, base) {
     if (this.cycleRpcFailure) throw this.cycleRpcFailure
     const failures = []
     const entries = (
       await mapLimit(this.config.legConcurrency, candidate.pools, async (pool) => {
         try {
-          const anchor = await this.quoteBestV3(USDG, pool.quoteAddress, amountIn, fixed.blockNumber)
+          const anchor = await this.quoteBestV3(
+            base.token,
+            pool.quoteAddress,
+            amountIn,
+            fixed.blockNumber,
+            base.bridgeToken,
+          )
           const tokenQuote = await this.quoteV4(
             pool,
             pool.quoteAddress,
@@ -1734,7 +1832,7 @@ class OpportunityBoard {
         } catch (error) {
           if (quoteTransportIsIncomplete(error))
             this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
-          failures.push({ leg: `USDG_TO_${pool.quoteSymbol}_TO_TOKEN`, reason: publicError(error) })
+          failures.push({ leg: `${base.symbol}_TO_${pool.quoteSymbol}_TO_TOKEN`, reason: publicError(error) })
           return null
         }
       })
@@ -1756,8 +1854,14 @@ class OpportunityBoard {
             fixed.blockNumber,
             fixed.block.hash,
           )
-          const anchor = await this.quoteBestV3(pool.quoteAddress, USDG, quoteAsset.amountOut, fixed.blockNumber)
-          const screening = screenRoundTrip({
+          const anchor = await this.quoteBestV3(
+            pool.quoteAddress,
+            base.token,
+            quoteAsset.amountOut,
+            fixed.blockNumber,
+            base.bridgeToken,
+          )
+          const screeningInput = {
             amountIn,
             amountOut: anchor.amountOut,
             quoterGas: [
@@ -1770,12 +1874,14 @@ class OpportunityBoard {
             gasPriceWei: fixed.gasPrice,
             nativeMarkInWei: fixed.nativeMarkIn,
             nativeMarkOutUsdg: fixed.nativeMark.amountOut,
-          })
+          }
+          const screening =
+            base.symbol === 'USDG' ? screenRoundTrip(screeningInput) : screenWethRoundTrip(screeningInput)
           return { entry, exitPool: pool, quoteAsset, exitAnchor: anchor, screening }
         } catch (error) {
           if (quoteTransportIsIncomplete(error))
             this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
-          failures.push({ leg: `TOKEN_TO_${pool.quoteSymbol}_TO_USDG`, reason: publicError(error) })
+          failures.push({ leg: `TOKEN_TO_${pool.quoteSymbol}_TO_${base.symbol}`, reason: publicError(error) })
           return null
         }
       })
@@ -1791,34 +1897,66 @@ class OpportunityBoard {
       }
     }
 
-    routes.sort((left, right) => (left.screening.screenedNetUsdg > right.screening.screenedNetUsdg ? -1 : 1))
+    routes.sort((left, right) => {
+      const leftNet = left.screening.normalizedScreenedNetUsdg ?? left.screening.screenedNetUsdg
+      const rightNet = right.screening.normalizedScreenedNetUsdg ?? right.screening.screenedNetUsdg
+      return leftNet > rightNet ? -1 : 1
+    })
     const best = routes[0]
+    const normalizedGrossProfitUsdg = best.screening.normalizedGrossProfitUsdg ?? best.screening.grossProfitUsdg
+    const normalizedGasCostUsdg = best.screening.normalizedGasCostUsdg ?? best.screening.gasCostUsdg
+    const normalizedScreenedNetUsdg = best.screening.normalizedScreenedNetUsdg ?? best.screening.screenedNetUsdg
     return {
       ...best,
       amountIn,
-      grossProfitUsdg: best.screening.grossProfitUsdg,
-      screenedNetUsdg: best.screening.screenedNetUsdg,
+      baseAsset: base.symbol,
+      normalizedGrossProfitUsdg,
+      normalizedGasCostUsdg,
+      normalizedScreenedNetUsdg,
+      ...(base.symbol === 'USDG'
+        ? {
+            grossProfitUsdg: best.screening.grossProfitUsdg,
+            screenedNetUsdg: best.screening.screenedNetUsdg,
+          }
+        : {
+            grossProfitWei: best.screening.grossProfitWei,
+            screenedNetWei: best.screening.screenedNetWei,
+          }),
       failures: failures.slice(0, 12),
     }
   }
 
-  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed */
-  async quoteCandidate(candidate, fixed) {
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn */
+  quoteCandidateAmount(candidate, fixed, amountIn) {
+    return this.quoteCandidateBaseAmount(candidate, fixed, amountIn, BASE_ASSETS.USDG)
+  }
+
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base */
+  async quoteCandidateLane(candidate, fixed, base) {
     if (this.cycleRpcFailure) throw this.cycleRpcFailure
+    const amountGrid =
+      base.symbol === 'USDG'
+        ? this.config.amountGrid
+        : equivalentWethAmountGrid(this.config.amountGrid, fixed.nativeMarkIn, fixed.nativeMark.amountOut)
+    const configuredProbes =
+      base.symbol === 'USDG'
+        ? this.config.probeAmounts
+        : equivalentWethAmountGrid(this.config.probeAmounts, fixed.nativeMarkIn, fixed.nativeMark.amountOut)
     const evaluate = (amounts) =>
       mapLimit(this.config.amountQuoteConcurrency, amounts, (amount) =>
-        this.quoteCandidateAmount(candidate, fixed, amount),
+        this.quoteCandidateBaseAmount(candidate, fixed, amount, base),
       )
-    const probeAmounts = [...new Set(this.config.probeAmounts.map((amount) => amount.toString()))].map((amount) =>
+    const probeAmounts = [...new Set(configuredProbes.map((amount) => amount.toString()))].map((amount) =>
       BigInt(amount),
     )
     const evaluated = await evaluate(probeAmounts)
     const previousObservation = this.observations.get(candidate.id) || null
-    const previousStatus = previousObservation?.status || null
+    const previousLane =
+      previousObservation?.baseOpportunities?.[base.symbol] || (base.symbol === 'USDG' ? previousObservation : null)
     const expandGrid = shouldExpandAmountGrid({
       probeQuotes: evaluated,
-      previousStatus,
-      previousFullGridAt: previousObservation?.fullGridAt || null,
+      previousStatus: previousLane?.status || null,
+      previousFullGridAt: previousLane?.fullGridAt || null,
       priority: false,
       cycleNumber: this.cycleNumber,
       fullGridEveryCycles: this.config.fullGridEveryCycles,
@@ -1826,7 +1964,7 @@ class OpportunityBoard {
     })
     if (expandGrid) {
       const evaluatedAmounts = new Set(evaluated.map((quote) => quote.amountIn.toString()))
-      const remaining = this.config.amountGrid.filter((amount) => !evaluatedAmounts.has(amount.toString()))
+      const remaining = amountGrid.filter((amount) => !evaluatedAmounts.has(amount.toString()))
       evaluated.push(...(await evaluate(remaining)))
     }
 
@@ -1834,80 +1972,114 @@ class OpportunityBoard {
     let refinements = []
     if (expandGrid && best) {
       const evaluatedAmounts = new Set(evaluated.map((quote) => quote.amountIn.toString()))
-      refinements = refinementAmounts(this.config.amountGrid, best.amountIn).filter(
+      refinements = refinementAmounts(amountGrid, best.amountIn).filter(
         (amount) => !evaluatedAmounts.has(amount.toString()),
       )
       evaluated.push(...(await evaluate(refinements)))
       best = chooseBestAmountQuote(evaluated)
     }
 
+    const normalizedAmount = (value) => (base.symbol === 'USDG' ? value : normalizeWethToUsdg(value, fixed))
+    const formatQuote = (quote) => {
+      if (quote.error) {
+        return {
+          baseAsset: base.symbol,
+          amountInBase: formatBaseAmount(quote.amountIn, base.decimals),
+          normalizedAmountInUsdg: usdg(normalizedAmount(quote.amountIn)),
+          status: BoardStatus.UNQUOTABLE,
+          amountOutBase: null,
+          grossProfitBase: null,
+          gasCostProxyBase: null,
+          screenedNetBase: null,
+          normalizedGrossProfitUsdg: null,
+          normalizedGasCostProxyUsdg: null,
+          normalizedScreenedNetUsdg: null,
+        }
+      }
+      const screening = quote.screening
+      const grossBase = base.symbol === 'USDG' ? screening.grossProfitUsdg : screening.grossProfitWei
+      const gasBase = base.symbol === 'USDG' ? screening.gasCostUsdg : screening.gasCostWei
+      const netBase = base.symbol === 'USDG' ? screening.screenedNetUsdg : screening.screenedNetWei
+      return {
+        baseAsset: base.symbol,
+        amountInBase: formatBaseAmount(quote.amountIn, base.decimals),
+        amountOutBase: formatBaseAmount(quote.exitAnchor.amountOut, base.decimals),
+        grossProfitBase: formatBaseAmount(grossBase, base.decimals),
+        gasCostProxyBase: formatBaseAmount(gasBase, base.decimals),
+        screenedNetBase: formatBaseAmount(netBase, base.decimals),
+        normalizedAmountInUsdg: usdg(normalizedAmount(quote.amountIn)),
+        normalizedAmountOutUsdg: usdg(normalizedAmount(quote.exitAnchor.amountOut)),
+        normalizedGrossProfitUsdg: usdg(quote.normalizedGrossProfitUsdg),
+        normalizedGasCostProxyUsdg: usdg(quote.normalizedGasCostUsdg),
+        normalizedScreenedNetUsdg: usdg(quote.normalizedScreenedNetUsdg),
+        status: screening.status,
+        route: `${quote.entry.pool.quoteSymbol} → ${candidate.symbol} → ${quote.exitPool.quoteSymbol}`,
+        routeKey: `${quote.entry.pool.poolId}:${quote.exitPool.poolId}`,
+        gasUnitsProxy: screening.gasUnitsProxy.toString(),
+        quoterGasUnits: screening.routeGas.toString(),
+        entryV3Path: quote.entry.anchor.path,
+        exitV3Path: quote.exitAnchor.path,
+        entryV3Tokens: quote.entry.anchor.tokens,
+        exitV3Tokens: quote.exitAnchor.tokens,
+        entryV3Pools: quote.entry.anchor.poolAddresses,
+        exitV3Pools: quote.exitAnchor.poolAddresses,
+        legs: {
+          entryPoolId: quote.entry.pool.poolId,
+          entryV3Fees: quote.entry.anchor.fees,
+          entryV3Hops: quote.entry.anchor.fees.length,
+          exitPoolId: quote.exitPool.poolId,
+          exitV3Fees: quote.exitAnchor.fees,
+          exitV3Hops: quote.exitAnchor.fees.length,
+        },
+      }
+    }
+
     evaluated.sort((left, right) => (left.amountIn < right.amountIn ? -1 : 1))
-    const amountQuotes = evaluated.map((quote) =>
-      quote.error
-        ? {
-            amountInUsdg: usdg(quote.amountIn),
-            status: BoardStatus.UNQUOTABLE,
-            grossProfitUsdg: null,
-            screenedNetUsdg: null,
-          }
-        : {
-            amountInUsdg: usdg(quote.amountIn),
-            status: quote.screening.status,
-            route: `${quote.entry.pool.quoteSymbol} → ${candidate.symbol} → ${quote.exitPool.quoteSymbol}`,
-            routeKey: `${quote.entry.pool.poolId}:${quote.exitPool.poolId}`,
-            amountOutUsdg: usdg(quote.exitAnchor.amountOut),
-            grossProfitUsdg: usdg(quote.screening.grossProfitUsdg),
-            gasCostProxyUsdg: usdg(quote.screening.gasCostUsdg),
-            screenedNetUsdg: usdg(quote.screening.screenedNetUsdg),
-            gasUnitsProxy: quote.screening.gasUnitsProxy.toString(),
-            quoterGasUnits: quote.screening.routeGas.toString(),
-            entryV3Path: quote.entry.anchor.path,
-            exitV3Path: quote.exitAnchor.path,
-            entryV3Tokens: quote.entry.anchor.tokens,
-            exitV3Tokens: quote.exitAnchor.tokens,
-            entryV3Pools: quote.entry.anchor.poolAddresses,
-            exitV3Pools: quote.exitAnchor.poolAddresses,
-            legs: {
-              entryPoolId: quote.entry.pool.poolId,
-              entryV3Fees: quote.entry.anchor.fees,
-              entryV3Hops: quote.entry.anchor.fees.length,
-              exitPoolId: quote.exitPool.poolId,
-              exitV3Fees: quote.exitAnchor.fees,
-              exitV3Hops: quote.exitAnchor.fees.length,
-            },
-          },
-    )
+    const amountQuotes = evaluated.map(formatQuote)
     const failures = evaluated.flatMap((quote) => quote.failures || []).slice(0, 12)
     const optimizationMode = expandGrid
       ? refinements.length > 0
         ? 'ADAPTIVE_GRID_REFINED'
         : 'ADAPTIVE_GRID'
       : 'PROBE_ONLY'
-    const fullGridAt = expandGrid ? new Date().toISOString() : previousObservation?.fullGridAt || null
+    const fullGridAt = expandGrid ? new Date().toISOString() : previousLane?.fullGridAt || null
+    const shared = {
+      baseAsset: base.symbol,
+      baseToken: base.token,
+      baseDecimals: base.decimals,
+      quotedAt: new Date().toISOString(),
+      blockNumber: fixed.blockNumber.toString(),
+      blockHash: fixed.block.hash,
+      amountQuotes,
+      amountGridBase: formatAmountGrid(amountGrid, base.decimals),
+      optimizationMode,
+      fullGridAt,
+      failures,
+      v3RoutePolicy: `DIRECT_OR_ONE_${base.bridgeToken === WETH ? 'WETH' : 'USDG'}_BRIDGE_TOP_${this.config.v3ShortlistSize}`,
+      receiptEvidence: 'NONE',
+    }
     if (!best) {
       return {
+        ...shared,
         status: BoardStatus.UNQUOTABLE,
-        quotedAt: new Date().toISOString(),
-        blockNumber: fixed.blockNumber.toString(),
-        blockHash: fixed.block.hash,
         route: null,
-        amountInUsdg: null,
-        amountOutUsdg: null,
-        grossProfitUsdg: null,
-        gasCostProxyUsdg: null,
-        screenedNetUsdg: null,
-        amountQuotes,
-        amountGridUsdg: formatAmountGrid(this.config.amountGrid),
-        optimizationMode,
-        fullGridAt,
-        failures,
-        v3RoutePolicy: `FIXED_BLOCK_FIRST_AMOUNT_TOP_${this.config.v3ShortlistSize}_SHORTLIST`,
+        routeKey: null,
+        amountInBase: null,
+        amountOutBase: null,
+        grossProfitBase: null,
+        gasCostProxyBase: null,
+        screenedNetBase: null,
+        normalizedAmountInUsdg: null,
+        normalizedAmountOutUsdg: null,
+        normalizedGrossProfitUsdg: null,
+        normalizedGasCostProxyUsdg: null,
+        normalizedScreenedNetUsdg: null,
         evidenceLevel: 'FIXED_BLOCK_QUOTE_FAILED',
         executionEstimate: 'NOT_RUN',
-        receiptEvidence: 'NONE',
       }
     }
 
+    const formattedBest = formatQuote(best)
     const routeDepths = [best.entry.pool.depthUsd, best.exitPool.depthUsd]
     const minimumRouteDepthUsd = routeDepths.every((value) => Number.isFinite(value)) ? Math.min(...routeDepths) : null
     const routeExecutionAdmission = [best.entry.pool, best.exitPool].every(
@@ -1916,53 +2088,63 @@ class OpportunityBoard {
       ? PoolAdmission.EXECUTOR_COMPATIBLE
       : 'SHADOW_ONLY'
     return {
-      status: best.screening.status,
-      quotedAt: new Date().toISOString(),
-      blockNumber: fixed.blockNumber.toString(),
-      blockHash: fixed.block.hash,
-      route: `${best.entry.pool.quoteSymbol} → ${candidate.symbol} → ${best.exitPool.quoteSymbol}`,
-      routeKey: `${best.entry.pool.poolId}:${best.exitPool.poolId}`,
-      amountInUsdg: usdg(best.amountIn),
-      amountOutUsdg: usdg(best.exitAnchor.amountOut),
-      grossProfitUsdg: usdg(best.screening.grossProfitUsdg),
-      gasCostProxyUsdg: usdg(best.screening.gasCostUsdg),
-      screenedNetUsdg: usdg(best.screening.screenedNetUsdg),
+      ...shared,
+      ...formattedBest,
       gasPriceWei: fixed.gasPrice.toString(),
-      gasUnitsProxy: best.screening.gasUnitsProxy.toString(),
-      quoterGasUnits: best.screening.routeGas.toString(),
       minimumRouteDepthUsd,
       routeExecutionAdmission,
-      amountQuotes,
-      amountGridUsdg: formatAmountGrid(this.config.amountGrid),
-      optimizationMode,
-      fullGridAt,
-      entryV3Path: best.entry.anchor.path,
-      exitV3Path: best.exitAnchor.path,
-      entryV3Tokens: best.entry.anchor.tokens,
-      exitV3Tokens: best.exitAnchor.tokens,
-      entryV3Pools: best.entry.anchor.poolAddresses,
-      exitV3Pools: best.exitAnchor.poolAddresses,
       entryV3Fees: best.entry.anchor.fees,
       exitV3Fees: best.exitAnchor.fees,
       legs: {
+        ...formattedBest.legs,
         entryV3Fee: best.entry.anchor.fees.length === 1 ? best.entry.anchor.fees[0] : null,
-        entryV3Fees: best.entry.anchor.fees,
         entryV3Pools: best.entry.anchor.poolAddresses,
-        entryV3Hops: best.entry.anchor.fees.length,
-        entryPoolId: best.entry.pool.poolId,
         entryV4Fee: best.entry.pool.fee,
-        exitPoolId: best.exitPool.poolId,
         exitV4Fee: best.exitPool.fee,
         exitV3Fee: best.exitAnchor.fees.length === 1 ? best.exitAnchor.fees[0] : null,
-        exitV3Fees: best.exitAnchor.fees,
         exitV3Pools: best.exitAnchor.poolAddresses,
-        exitV3Hops: best.exitAnchor.fees.length,
       },
-      failures,
-      v3RoutePolicy: `FIXED_BLOCK_FIRST_AMOUNT_TOP_${this.config.v3ShortlistSize}_SHORTLIST`,
       evidenceLevel: 'FIXED_BLOCK_QUOTER_SCREEN_WITH_POOL_ATTESTATION_AND_V3_SHORTLIST',
       executionEstimate: 'NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED',
-      receiptEvidence: 'NONE',
+    }
+  }
+
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed */
+  async quoteCandidate(candidate, fixed) {
+    const usdgLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.USDG)
+    let wethLane = null
+    if (this.config.wethBaseEnabled) {
+      const priorFailure = this.cycleRpcFailure
+      try {
+        wethLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.WETH)
+      } catch (error) {
+        if (!priorFailure) this.cycleRpcFailure = null
+        wethLane = {
+          baseAsset: 'WETH',
+          baseToken: WETH,
+          baseDecimals: 18,
+          status: BoardStatus.UNQUOTABLE,
+          quotedAt: new Date().toISOString(),
+          blockNumber: fixed.blockNumber.toString(),
+          blockHash: fixed.block.hash,
+          route: null,
+          normalizedScreenedNetUsdg: null,
+          evidenceLevel: 'WETH_LANE_FIXED_BLOCK_QUOTE_INCOMPLETE',
+          executionEstimate: 'NOT_RUN',
+          receiptEvidence: 'NONE',
+          failures: [{ leg: 'WETH_LANE', reason: publicError(error) }],
+        }
+      }
+    }
+    const baseOpportunities = { USDG: usdgLane, ...(wethLane ? { WETH: wethLane } : {}) }
+    const preferred = chooseBestBaseOpportunity(
+      Object.values(baseOpportunities).map((lane) => ({ ...lane, fresh: true })),
+    )
+    return {
+      ...legacyUsdgLane(usdgLane),
+      baseOpportunities,
+      preferredBaseAsset: preferred?.baseAsset || null,
+      preferredNormalizedScreenedNetUsdg: preferred?.normalizedScreenedNetUsdg || null,
     }
   }
 

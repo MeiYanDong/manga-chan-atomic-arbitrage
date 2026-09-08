@@ -20,8 +20,12 @@ fi
 if [[ -f /var/lib/manga-chan-arbitrage/generic-state.json ]]; then
   runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run generic:runtime-verify
 fi
+if [[ -f /var/lib/manga-chan-arbitrage/weth-state.json ]]; then
+  runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run dual:runtime-verify
+fi
 systemctl --no-pager --full status manga-chan-watcher.service || true
 systemctl --no-pager --full status manga-generic-watcher.service || true
+systemctl --no-pager --full status manga-dual-watcher.service || true
 
 if [[ -f /etc/manga-opportunity-board/live.env ]]; then
   runuser -u manga-board -- /usr/bin/env -i \

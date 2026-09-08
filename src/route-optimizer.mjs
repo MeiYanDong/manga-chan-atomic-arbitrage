@@ -5,6 +5,26 @@ export const DEFAULT_AMOUNT_GRID_USDG = Object.freeze(['5', '10', '25', '50', '1
 export const DEFAULT_PROBE_AMOUNTS_USDG = Object.freeze(['5', '10'])
 
 /**
+ * Convert the USDG risk grid to equivalent WETH amounts using one same-block
+ * WETH -> USDG mark. Rounding down never expands the requested risk.
+ *
+ * @param {bigint[]} usdgAmounts
+ * @param {bigint} nativeMarkInWei
+ * @param {bigint} nativeMarkOutUsdg
+ */
+export function equivalentWethAmountGrid(usdgAmounts, nativeMarkInWei, nativeMarkOutUsdg) {
+  if (nativeMarkInWei <= 0n || nativeMarkOutUsdg <= 0n) throw new Error('native mark must be positive')
+  const unique = new Set()
+  for (const amount of usdgAmounts) {
+    if (amount <= 0n) throw new Error('USDG equivalent amount must be positive')
+    const wethAmount = (amount * nativeMarkInWei) / nativeMarkOutUsdg
+    if (wethAmount <= 0n) throw new Error('USDG equivalent amount rounds to zero WETH')
+    unique.add(wethAmount.toString())
+  }
+  return [...unique].map((amount) => BigInt(amount)).sort((left, right) => (left < right ? -1 : 1))
+}
+
+/**
  * @param {string | undefined} value
  * @param {readonly string[]} fallback
  * @param {bigint} [maximum]
@@ -32,15 +52,19 @@ export function chooseBestAmountQuote(quotes) {
     (quote) =>
       quote &&
       quote.error === undefined &&
-      typeof quote.screenedNetUsdg === 'bigint' &&
-      typeof quote.grossProfitUsdg === 'bigint' &&
+      typeof (quote.normalizedScreenedNetUsdg ?? quote.screenedNetUsdg) === 'bigint' &&
+      typeof (quote.normalizedGrossProfitUsdg ?? quote.grossProfitUsdg) === 'bigint' &&
       typeof quote.amountIn === 'bigint',
   )
   viable.sort((left, right) => {
-    if (left.screenedNetUsdg !== right.screenedNetUsdg) {
-      return left.screenedNetUsdg > right.screenedNetUsdg ? -1 : 1
+    const leftNet = left.normalizedScreenedNetUsdg ?? left.screenedNetUsdg
+    const rightNet = right.normalizedScreenedNetUsdg ?? right.screenedNetUsdg
+    if (leftNet !== rightNet) {
+      return leftNet > rightNet ? -1 : 1
     }
-    if (left.grossProfitUsdg !== right.grossProfitUsdg) return left.grossProfitUsdg > right.grossProfitUsdg ? -1 : 1
+    const leftGross = left.normalizedGrossProfitUsdg ?? left.grossProfitUsdg
+    const rightGross = right.normalizedGrossProfitUsdg ?? right.grossProfitUsdg
+    if (leftGross !== rightGross) return leftGross > rightGross ? -1 : 1
     return left.amountIn < right.amountIn ? -1 : left.amountIn > right.amountIn ? 1 : 0
   })
   return viable[0] || null
@@ -86,13 +110,14 @@ export function shouldExpandAmountGrid(input) {
   const previousActionable = ['SCREENED_NET_POSITIVE', 'GROSS_POSITIVE_NET_NEGATIVE'].includes(
     input.previousStatus || '',
   )
-  const probeHasGrossEdge = input.probeQuotes.some(
-    (quote) => typeof quote?.grossProfitUsdg === 'bigint' && quote.grossProfitUsdg > 0n,
-  )
+  const probeHasGrossEdge = input.probeQuotes.some((quote) => {
+    const gross = quote?.normalizedGrossProfitUsdg ?? quote?.grossProfitUsdg
+    return typeof gross === 'bigint' && gross > 0n
+  })
   return Boolean(input.priority || previousActionable || probeHasGrossEdge)
 }
 
-/** @param {bigint[]} amounts */
-export function formatAmountGrid(amounts) {
-  return amounts.map((amount) => formatUnits(amount, 6))
+/** @param {bigint[]} amounts @param {number} [decimals] */
+export function formatAmountGrid(amounts, decimals = 6) {
+  return amounts.map((amount) => formatUnits(amount, decimals))
 }

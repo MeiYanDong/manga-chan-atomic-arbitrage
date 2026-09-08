@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   DEFAULT_AMOUNT_GRID_USDG,
   chooseBestAmountQuote,
+  equivalentWethAmountGrid,
   parseUsdgAmountGrid,
   refinementAmounts,
   shouldExpandAmountGrid,
@@ -12,6 +13,28 @@ test('amount grid is sorted, deduplicated and capped at 100 USDG', () => {
   assert.deepEqual(parseUsdgAmountGrid('25,5,12.5,5', DEFAULT_AMOUNT_GRID_USDG), [5_000_000n, 12_500_000n, 25_000_000n])
   assert.throws(() => parseUsdgAmountGrid('0', DEFAULT_AMOUNT_GRID_USDG), /greater than zero/)
   assert.throws(() => parseUsdgAmountGrid('100.000001', DEFAULT_AMOUNT_GRID_USDG), /at most 100/)
+})
+
+test('USDG risk grid converts to same-block WETH equivalents without rounding risk upward', () => {
+  const result = equivalentWethAmountGrid([5_000_000n, 10_000_000n, 25_000_000n], 4_000_000_000_000_000n, 10_000_000n)
+  assert.deepEqual(result, [2_000_000_000_000_000n, 4_000_000_000_000_000n, 10_000_000_000_000_000n])
+  assert.throws(() => equivalentWethAmountGrid([1n], 0n, 1n), /native mark/)
+})
+
+test('selection compares WETH candidates by normalized net USDG', () => {
+  const selected = chooseBestAmountQuote([
+    {
+      amountIn: 2_000_000_000_000_000n,
+      normalizedGrossProfitUsdg: 600_000n,
+      normalizedScreenedNetUsdg: 300_000n,
+    },
+    {
+      amountIn: 4_000_000_000_000_000n,
+      normalizedGrossProfitUsdg: 800_000n,
+      normalizedScreenedNetUsdg: 500_000n,
+    },
+  ])
+  assert.equal(selected.amountIn, 4_000_000_000_000_000n)
 })
 
 test('selection maximizes absolute net profit instead of ROI or input size', () => {

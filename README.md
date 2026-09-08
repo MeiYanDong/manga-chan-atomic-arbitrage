@@ -5,10 +5,13 @@
 > generations retain separate contracts and state; only one may own the wallet's
 > signing lane at a time.
 
-The repository now has two deliberately separate execution generations:
+The repository has two deployed execution generations and one production-pending successor:
 
 - the deployed fixed-route canaries, including `USDG -> AAPL -> SPX -> NVDA -> USDG`; and
-- generic-v2, a typed bounded executor for any admitted PAIR token with two quote pools, whether the quote assets are stocks, AI tokens or memes.
+- generic-v2, a typed bounded USDG executor for any admitted PAIR token with two quote pools, whether the quote assets
+  are stocks, AI tokens or memes; and
+- dual-v3, which retains generic-v2 and adds a separately bounded WETH-principal executor behind one shared signer and
+  nonce lane. Dual-v3 is implemented locally but is not described as deployed or live until production evidence exists.
 
 The generic economic unit is:
 
@@ -18,6 +21,16 @@ USDG -> quote A (V3 direct or one WETH bridge) -> target (PAIR V4)
 ```
 
 The edge is stale relative pricing across the two MANGA quote pools and their USDG conversion pools. It does not depend on MSFT or NVDA being stock tokens; the same mechanism can exist when the quote assets are AI or meme tokens.
+
+Dual-v3 also evaluates the symmetric WETH economic unit:
+
+```text
+WETH -> quote A (V3 direct or one USDG bridge) -> target (PAIR V4)
+     -> quote B (PAIR V4) -> WETH (V3 direct or one USDG bridge)
+```
+
+Both lanes are screened at one fixed block and exact-simulated at one current block. WETH net profit is converted to a
+conservative USDG comparison value only to choose a winner; the transaction and retained profit remain in WETH.
 
 This repository also contains a separate read-only opportunity board. It combines independent PAIR-listing,
 LongLauncher, Doppler, PoolManager and Robinhood-asset adapters, quotes the best observed
@@ -32,6 +45,12 @@ independent. See [ADR 0009](docs/decisions/0009-orthogonal-source-provenance.md)
 is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-correction.md) and is not PAIR.
 
 ## Honest status
+
+- Dual-v3/WETH is currently code and deterministic-test evidence only in this checkout. No WETH executor address,
+  deployment receipt, production arm, systemd runtime, live transaction, or WETH profit is claimed yet. The existing
+  generic-v2 service remains the production signer until an explicit evidence-gated cutover. The exact local and
+  signer-free public-RPC results are recorded in
+  [`docs/evidence/2026-09-08-dual-base-local-validation.md`](docs/evidence/2026-09-08-dual-base-local-validation.md).
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
   disabled while generic-v2 owns the wallet lane. Their public evidence is under [`deployments`](deployments).
@@ -133,6 +152,25 @@ Atomic settlement removes intermediate-token inventory exposure if the transacti
 
 The fixed executors retain their original 15 USDG policy. Generic-v2 does not silently change or replace a deployed contract.
 
+## Dual-v3 additions
+
+- Native ETH can enter the WETH executor only as a deployment seed and is wrapped immediately; runtime profit is WETH,
+  while the wallet keeps native ETH for Gas.
+- The board's WETH amount grid is derived from the USDG risk grid at the same block, rather than introducing an
+  unrelated notional policy.
+- One exact-preflight batch evaluates both bases at one block. USDG Gas conversion rounds cost up; WETH profit
+  normalization rounds value down. Only the largest normalized exact net can reach signing.
+- The selected contract independently enforces a base-local profit floor that covers worst-case Gas plus the common
+  USDG minimum net value. A comparison mark never becomes an arbitrary on-chain price oracle.
+- Unlimited time and count settings do not mean unconditional transactions: failed Gas, wallet ETH reserve, exact net,
+  immutable principal cap, confirmed-balance compounding, nonce, deadline, revocation, code identity and UNKNOWN remain
+  blockers.
+- The USDG and WETH contracts keep separate principal and accounting ledgers but use exactly one signer process, wallet
+  lock and nonce baseline.
+
+See [ADR 0019](docs/decisions/0019-dual-usdg-weth-principal-execution.md) and the
+[dual-base stories](docs/stories/dual-base-execution.md).
+
 See [`docs/spec.md`](docs/spec.md) for the Race Thesis, Shot Policy, state model and acceptance boundaries.
 
 ## Local quality gate
@@ -190,6 +228,19 @@ npm run generic:watch:arm  # explicit deployment-bound authorization
 npm run generic:watch      # autonomous loopback-board watcher
 npm run generic:watch:status
 npm run generic:watch:disarm
+npm run dual:status                # local dual ledgers + signer-free board; no chain read
+npm run dual:plan                  # canonical quote-block validation; no executor simulation
+npm run dual:weth:deploy-preflight # constructor call + gas estimate; no signature
+npm run dual:weth:deploy           # separate guarded WETH deployment mutation
+npm run dual:runtime-verify        # both deployments + schema-v5 board readback
+npm run dual:preflight             # same-block exact USDG/WETH comparison; no signature
+npm run dual:execute               # signs only the exact normalized-net winner
+npm run dual:reconcile             # converges a dual-v3 UNKNOWN mutation
+npm run dual:watch:arm             # explicit until-revoked, unlimited-count authorization
+npm run dual:watch                 # one continuous server loop for both bases
+npm run dual:watch:status
+npm run dual:watch:disarm
+npm run dual:weth:withdraw
 ```
 
 No command automatically deploys and trades in one step. Deployment remains a separate one-shot mutation. The generic

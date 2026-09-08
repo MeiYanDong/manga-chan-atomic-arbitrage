@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { formatUnits, getAddress } from 'viem'
+import { formatUnits, getAddress, parseUnits } from 'viem'
 import { normalizeApiPool, PoolAdmission } from './pair-catalog.mjs'
 import { classifyRpcError, errorText } from './policy.mjs'
 
@@ -40,7 +40,19 @@ export function normalizeExecutionEvidence(item) {
 /** @param {Record<string, any> | null} snapshot */
 export function normalizePersistedBoardSnapshot(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) return snapshot
-  return { ...snapshot, items: snapshot.items.map((item) => normalizeExecutionEvidence(item)) }
+  return {
+    ...snapshot,
+    items: snapshot.items.map((item) => {
+      const normalized = normalizeExecutionEvidence(item)
+      if (!item.baseOpportunities) return normalized
+      return {
+        ...normalized,
+        baseOpportunities: Object.fromEntries(
+          Object.entries(item.baseOpportunities).map(([base, lane]) => [base, normalizeExecutionEvidence(lane)]),
+        ),
+      }
+    }),
+  }
 }
 
 /**
@@ -54,7 +66,13 @@ export function compactExecutionBoardSnapshot(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) return snapshot
   return {
     ...snapshot,
-    items: snapshot.items.filter((item) => item.status === BoardStatus.SCREENED_POSITIVE && item.fresh === true),
+    items: snapshot.items.filter(
+      (item) =>
+        (item.status === BoardStatus.SCREENED_POSITIVE && item.fresh === true) ||
+        Object.values(item.baseOpportunities || {}).some(
+          (lane) => lane?.status === BoardStatus.SCREENED_POSITIVE && lane?.fresh === true,
+        ),
+    ),
   }
 }
 
@@ -189,6 +207,69 @@ export function screenRoundTrip(input) {
   return { routeGas, gasUnitsProxy, gasCostUsdg, grossProfitUsdg, screenedNetUsdg, status }
 }
 
+/**
+ * Screen a WETH-denominated cycle. Gross profit and Gas are both measured in
+ * wei; the same-block native mark is used only to compare this lane with USDG.
+ * USDG normalization is conservative: profit rounds down and Gas rounds up.
+ *
+ * @param {{amountIn: bigint, amountOut: bigint, quoterGas: bigint[], overheadGas: bigint, gasPriceWei: bigint, nativeMarkInWei: bigint, nativeMarkOutUsdg: bigint}} input
+ */
+export function screenWethRoundTrip(input) {
+  if (input.nativeMarkInWei <= 0n || input.nativeMarkOutUsdg <= 0n) throw new Error('native mark must be positive')
+  const routeGas = input.quoterGas.reduce((sum, value) => sum + value, 0n)
+  const gasUnitsProxy = routeGas + input.overheadGas
+  const gasCostWei = gasUnitsProxy * input.gasPriceWei
+  const grossProfitWei = input.amountOut - input.amountIn
+  const screenedNetWei = grossProfitWei - gasCostWei
+  const normalizedGrossProfitUsdg =
+    grossProfitWei >= 0n
+      ? (grossProfitWei * input.nativeMarkOutUsdg) / input.nativeMarkInWei
+      : -ceilDiv(-grossProfitWei * input.nativeMarkOutUsdg, input.nativeMarkInWei)
+  const normalizedGasCostUsdg = ceilDiv(gasCostWei * input.nativeMarkOutUsdg, input.nativeMarkInWei)
+  const normalizedScreenedNetUsdg = normalizedGrossProfitUsdg - normalizedGasCostUsdg
+  const status =
+    grossProfitWei <= 0n
+      ? BoardStatus.NO_EDGE
+      : screenedNetWei > 0n && normalizedScreenedNetUsdg > 0n
+        ? BoardStatus.SCREENED_POSITIVE
+        : BoardStatus.GROSS_POSITIVE
+  return {
+    routeGas,
+    gasUnitsProxy,
+    gasCostWei,
+    grossProfitWei,
+    screenedNetWei,
+    normalizedGrossProfitUsdg,
+    normalizedGasCostUsdg,
+    normalizedScreenedNetUsdg,
+    status,
+  }
+}
+
+/** @param {Record<string, any>[]} opportunities */
+export function chooseBestBaseOpportunity(opportunities) {
+  const viable = opportunities.flatMap((item) => {
+    if (item?.status !== BoardStatus.SCREENED_POSITIVE || item?.fresh !== true) return []
+    try {
+      const normalized = {
+        item,
+        net: parseUnits(String(item.normalizedScreenedNetUsdg), 6),
+        gross: parseUnits(String(item.normalizedGrossProfitUsdg), 6),
+        amountIn: parseUnits(String(item.normalizedAmountInUsdg), 6),
+      }
+      return normalized.net > 0n && normalized.gross > 0n && normalized.amountIn > 0n ? [normalized] : []
+    } catch {
+      return []
+    }
+  })
+  viable.sort((left, right) => {
+    if (left.net !== right.net) return left.net > right.net ? -1 : 1
+    if (left.gross !== right.gross) return left.gross > right.gross ? -1 : 1
+    return left.amountIn < right.amountIn ? -1 : left.amountIn > right.amountIn ? 1 : 0
+  })
+  return viable[0]?.item || null
+}
+
 /** @param {unknown} error */
 export function publicError(error) {
   return `[${classifyRpcError(error)}] ${errorText(error)}`
@@ -216,6 +297,22 @@ export function applyFreshness(item, nowMs, staleMs) {
   const ageMs = Math.max(0, nowMs - Date.parse(item.quotedAt))
   if (ageMs <= staleMs) return { ...output, ageMs, fresh: true }
   return { ...output, underlyingStatus: item.status, status: BoardStatus.STALE, ageMs, fresh: false }
+}
+
+/** @param {Record<string, any>} item @param {number} nowMs @param {number} staleMs */
+function applyOpportunityFreshness(item, nowMs, staleMs) {
+  const topLevel = applyFreshness(item, nowMs, staleMs)
+  if (!item.baseOpportunities) return topLevel
+  const baseOpportunities = Object.fromEntries(
+    Object.entries(item.baseOpportunities).map(([base, lane]) => [base, applyFreshness(lane, nowMs, staleMs)]),
+  )
+  const preferred = chooseBestBaseOpportunity(Object.values(baseOpportunities))
+  return {
+    ...topLevel,
+    baseOpportunities,
+    preferredBaseAsset: preferred?.baseAsset || null,
+    preferredNormalizedScreenedNetUsdg: preferred?.normalizedScreenedNetUsdg || null,
+  }
 }
 
 /** @param {string} status */
@@ -256,7 +353,7 @@ export function buildBoardSnapshot(input) {
           executionEstimate: 'NOT_RUN',
           receiptEvidence: 'NONE',
         }
-    return applyFreshness(normalizeExecutionEvidence(base), nowMs, input.staleMs)
+    return applyOpportunityFreshness(normalizeExecutionEvidence(base), nowMs, input.staleMs)
   })
 
   items.sort((left, right) => {
@@ -278,9 +375,14 @@ export function buildBoardSnapshot(input) {
   const quoted = items.filter((item) => item.quotedAt !== null).length
   const freshQuoted = items.filter((item) => item.quotedAt !== null && item.fresh).length
   const selected = items.find((item) => item.status === BoardStatus.SCREENED_POSITIVE && item.fresh) || null
+  const baseSelected = chooseBestBaseOpportunity(
+    items.flatMap((item) =>
+      Object.values(item.baseOpportunities || {}).map((lane) => ({ ...lane, id: item.id, symbol: item.symbol })),
+    ),
+  )
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     service: 'manga-opportunity-board',
     mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
     generatedAt: input.generatedAt,
@@ -294,11 +396,13 @@ export function buildBoardSnapshot(input) {
       counts,
     },
     methodology: {
-      opportunityUnit: 'USDG -> quote A -> token -> quote B -> USDG',
+      opportunityUnit: 'USDG or WETH -> quote A -> token -> quote B -> same base asset',
       anchorPolicy:
-        'quote assets may use a direct V3 anchor or one WETH bridge; each fixed block discovers a first-amount top-N shortlist before larger amounts',
-      amountPolicy: 'bounded adaptive grid up to 100 USDG plus midpoint refinement around the best coarse amount',
-      selectionPolicy: 'maximize absolute screened net USDG, then gross profit, then prefer less principal',
+        'quote assets may use a direct V3 anchor or one approved bridge (WETH for USDG base, USDG for WETH base); each fixed block discovers a first-amount top-N shortlist before larger amounts',
+      amountPolicy:
+        'bounded adaptive USDG grid up to 100 USDG; WETH uses same-block USDG-equivalent sizes plus midpoint refinement',
+      selectionPolicy:
+        'select within each base, then compare USDG and WETH by conservative same-block normalized screened net USDG',
       blockPolicy: 'all anchor and V4 quotes plus the native mark share one fixed block per observation',
       discoveryPolicy:
         'PAIR API is merged with bounded PoolManager Initialize-log backfill; coverage before the configured start block remains unknown',
@@ -324,13 +428,69 @@ export function buildBoardSnapshot(input) {
       executionAdmission: selected?.routeExecutionAdmission || 'NONE',
       executionAuthorized: false,
     },
+    baseSelection: {
+      status: baseSelected ? 'SCREENED_BASE_CANDIDATE_SELECTED' : 'NO_SCREENED_BASE_NET_POSITIVE',
+      id: baseSelected?.id || null,
+      symbol: baseSelected?.symbol || null,
+      baseAsset: baseSelected?.baseAsset || null,
+      route: baseSelected?.route || null,
+      amountInBase: baseSelected?.amountInBase || null,
+      normalizedScreenedNetUsdg: baseSelected?.normalizedScreenedNetUsdg || null,
+      evidenceLevel: baseSelected?.evidenceLevel || null,
+      executionAdmission: baseSelected?.routeExecutionAdmission || 'NONE',
+      executionAuthorized: false,
+    },
     items,
   }
 }
 
+/** @param {Record<string, any>} lane */
+function normalizedLaneNet(lane) {
+  return finiteNumber(lane?.normalizedScreenedNetUsdg ?? lane?.screenedNetUsdg)
+}
+
+/** @param {Record<string, any>} item */
+function positiveEconomicLane(item) {
+  const lanes = Object.values(item?.baseOpportunities || {}).filter(
+    (lane) =>
+      lane?.status === POSITIVE_STATUS &&
+      lane?.fresh === true &&
+      normalizedLaneNet(lane) !== null &&
+      normalizedLaneNet(lane) > 0,
+  )
+  if (lanes.length > 0) {
+    return lanes.toSorted((left, right) => normalizedLaneNet(right) - normalizedLaneNet(left))[0]
+  }
+  return item?.status === POSITIVE_STATUS && item?.fresh === true ? item : null
+}
+
+/** @param {Record<string, any>} item */
+function representativeEconomicLane(item) {
+  const positive = positiveEconomicLane(item)
+  if (positive) return positive
+  const lanes = Object.values(item?.baseOpportunities || {}).filter(Boolean)
+  if (lanes.length === 0) return item
+  return lanes.toSorted((left, right) => {
+    if (left.fresh !== right.fresh) return right.fresh === true ? 1 : -1
+    const leftNet = normalizedLaneNet(left)
+    const rightNet = normalizedLaneNet(right)
+    if (leftNet === null) return rightNet === null ? 0 : 1
+    if (rightNet === null) return -1
+    return rightNet - leftNet
+  })[0]
+}
+
 /** @param {Record<string, any>} item */
 function economicObservation(item) {
-  if (item?.status === POSITIVE_STATUS && item?.fresh === true) return EpisodeObservation.CONFIRMED_POSITIVE
+  if (positiveEconomicLane(item)) return EpisodeObservation.CONFIRMED_POSITIVE
+  const lanes = Object.values(item?.baseOpportunities || {}).filter(Boolean)
+  if (lanes.length > 0) {
+    return lanes.every(
+      (lane) => lane.fresh === true && [BoardStatus.NO_EDGE, BoardStatus.GROSS_POSITIVE].includes(lane.status),
+    )
+      ? EpisodeObservation.CONFIRMED_NON_POSITIVE
+      : EpisodeObservation.UNKNOWN
+  }
   if (item?.fresh === true && [BoardStatus.NO_EDGE, BoardStatus.GROSS_POSITIVE].includes(item?.status)) {
     return EpisodeObservation.CONFIRMED_NON_POSITIVE
   }
@@ -345,65 +505,78 @@ function economicEpisodeId(id, openedAt) {
 /** @param {Record<string, any> | undefined} item @param {string} fallbackAt */
 function recoverOpenEpisode(item, fallbackAt) {
   if (item?.economicEpisode?.state === EpisodeState.OPEN) return { ...item.economicEpisode }
-  const legacyPositive =
-    (item?.status === POSITIVE_STATUS && item?.fresh === true) ||
-    (item?.status === BoardStatus.STALE && item?.underlyingStatus === POSITIVE_STATUS)
-  if (!legacyPositive) return null
-  const openedAt = String(item?.quotedAt || fallbackAt)
+  const stalePositive = Object.values(item?.baseOpportunities || {}).find(
+    (lane) => lane?.status === BoardStatus.STALE && lane?.underlyingStatus === POSITIVE_STATUS,
+  )
+  const positive = positiveEconomicLane(item) || stalePositive
+  const legacyPositive = item?.status === BoardStatus.STALE && item?.underlyingStatus === POSITIVE_STATUS ? item : null
+  const lane = positive || legacyPositive
+  if (!lane) return null
+  const quote = eventQuoteEvidence(item, lane)
+  const openedAt = String(quote.quotedAt || fallbackAt)
   return {
     schemaVersion: 1,
     episodeId: economicEpisodeId(String(item.id), openedAt),
     state: EpisodeState.OPEN,
-    observation: item?.fresh === true ? EpisodeObservation.CONFIRMED_POSITIVE : EpisodeObservation.UNKNOWN,
+    observation: lane?.fresh === true ? EpisodeObservation.CONFIRMED_POSITIVE : EpisodeObservation.UNKNOWN,
     openedAt,
-    lastPositiveAt: item?.quotedAt || null,
-    lastPositiveBlockNumber: item?.blockNumber || null,
-    lastPositiveBlockHash: item?.blockHash || null,
-    lastPositiveRoute: item?.route || null,
-    lastPositiveRouteKey: item?.routeKey || null,
-    lastPositiveAmountInUsdg: item?.amountInUsdg || null,
-    lastPositiveGrossProfitUsdg: item?.grossProfitUsdg || null,
-    lastPositiveGasCostProxyUsdg: item?.gasCostProxyUsdg || null,
-    lastPositiveNetUsdg: item?.screenedNetUsdg || null,
-    continuityUnknownSince: item?.fresh === true ? null : fallbackAt,
+    lastPositiveAt: quote.quotedAt,
+    lastPositiveBlockNumber: quote.blockNumber,
+    lastPositiveBlockHash: quote.blockHash,
+    lastPositiveBaseAsset: quote.baseAsset,
+    lastPositiveRoute: quote.route,
+    lastPositiveRouteKey: quote.routeKey,
+    lastPositiveAmountInBase: quote.amountInBase,
+    lastPositiveAmountInUsdg: quote.amountInUsdg,
+    lastPositiveGrossProfitUsdg: quote.grossProfitUsdg,
+    lastPositiveGasCostProxyUsdg: quote.gasCostProxyUsdg,
+    lastPositiveNetUsdg: quote.screenedNetUsdg,
+    continuityUnknownSince: lane?.fresh === true ? null : fallbackAt,
   }
 }
 
-/** @param {Record<string, any>} item */
-function eventQuoteEvidence(item) {
+/** @param {Record<string, any>} item @param {Record<string, any>} [selectedLane] */
+function eventQuoteEvidence(item, selectedLane = representativeEconomicLane(item)) {
+  const lane = selectedLane || item || {}
   return {
     tokenAddress: item.tokenAddress || null,
-    route: item.route || null,
-    routeKey: item.routeKey || null,
-    amountInUsdg: item.amountInUsdg || null,
-    amountOutUsdg: item.amountOutUsdg || null,
-    grossProfitUsdg: item.grossProfitUsdg || null,
-    gasCostProxyUsdg: item.gasCostProxyUsdg || null,
-    screenedNetUsdg: item.screenedNetUsdg || null,
-    blockNumber: item.blockNumber || null,
-    blockHash: item.blockHash || null,
-    quotedAt: item.quotedAt || null,
-    evidenceLevel: item.evidenceLevel || null,
-    executionEstimate: item.executionEstimate || 'NOT_RUN',
-    receiptEvidence: item.receiptEvidence || 'NONE',
+    baseAsset: lane.baseAsset || 'USDG',
+    route: lane.route || null,
+    routeKey: lane.routeKey || null,
+    amountInBase: lane.amountInBase ?? lane.amountInUsdg ?? null,
+    amountOutBase: lane.amountOutBase ?? lane.amountOutUsdg ?? null,
+    amountInUsdg: lane.normalizedAmountInUsdg ?? lane.amountInUsdg ?? null,
+    amountOutUsdg: lane.normalizedAmountOutUsdg ?? lane.amountOutUsdg ?? null,
+    grossProfitUsdg: lane.normalizedGrossProfitUsdg ?? lane.grossProfitUsdg ?? null,
+    gasCostProxyUsdg: lane.normalizedGasCostProxyUsdg ?? lane.gasCostProxyUsdg ?? null,
+    screenedNetUsdg: lane.normalizedScreenedNetUsdg ?? lane.screenedNetUsdg ?? null,
+    blockNumber: lane.blockNumber || null,
+    blockHash: lane.blockHash || null,
+    quotedAt: lane.quotedAt || null,
+    evidenceLevel: lane.evidenceLevel || null,
+    executionEstimate: lane.executionEstimate || 'NOT_RUN',
+    receiptEvidence: lane.receiptEvidence || 'NONE',
   }
 }
 
 /** @param {Record<string, any>} episode @param {Record<string, any>} item */
 function advancePositiveEpisode(episode, item) {
+  const quote = eventQuoteEvidence(item, positiveEconomicLane(item))
   return {
     ...episode,
     state: EpisodeState.OPEN,
     observation: EpisodeObservation.CONFIRMED_POSITIVE,
-    lastPositiveAt: item.quotedAt,
-    lastPositiveBlockNumber: item.blockNumber || null,
-    lastPositiveBlockHash: item.blockHash || null,
-    lastPositiveRoute: item.route || null,
-    lastPositiveRouteKey: item.routeKey || null,
-    lastPositiveAmountInUsdg: item.amountInUsdg || null,
-    lastPositiveGrossProfitUsdg: item.grossProfitUsdg || null,
-    lastPositiveGasCostProxyUsdg: item.gasCostProxyUsdg || null,
-    lastPositiveNetUsdg: item.screenedNetUsdg || null,
+    lastPositiveAt: quote.quotedAt,
+    lastPositiveBlockNumber: quote.blockNumber,
+    lastPositiveBlockHash: quote.blockHash,
+    lastPositiveBaseAsset: quote.baseAsset,
+    lastPositiveRoute: quote.route,
+    lastPositiveRouteKey: quote.routeKey,
+    lastPositiveAmountInBase: quote.amountInBase,
+    lastPositiveAmountInUsdg: quote.amountInUsdg,
+    lastPositiveGrossProfitUsdg: quote.grossProfitUsdg,
+    lastPositiveGasCostProxyUsdg: quote.gasCostProxyUsdg,
+    lastPositiveNetUsdg: quote.screenedNetUsdg,
     continuityUnknownSince: null,
   }
 }
@@ -432,7 +605,7 @@ export function reconcileOpportunityEpisodes(previous, current, options = {}) {
   if (!previous || Number(previous?.coverage?.candidateTokens || 0) === 0) {
     for (const item of snapshot.items) {
       if (economicObservation(item) !== EpisodeObservation.CONFIRMED_POSITIVE) continue
-      const openedAt = String(item.quotedAt || current.generatedAt)
+      const openedAt = String(eventQuoteEvidence(item).quotedAt || current.generatedAt)
       item.economicEpisode = advancePositiveEpisode(
         {
           schemaVersion: 1,
@@ -451,7 +624,9 @@ export function reconcileOpportunityEpisodes(previous, current, options = {}) {
           type: 'BOARD_BASELINE_CREATED',
           at: current.generatedAt,
           candidateTokens: current.coverage.candidateTokens,
-          screenedPositive: current.coverage.counts[POSITIVE_STATUS] || 0,
+          screenedPositive: snapshot.items.filter(
+            (item) => economicObservation(item) === EpisodeObservation.CONFIRMED_POSITIVE,
+          ).length,
         },
       ],
     }
@@ -477,10 +652,13 @@ export function reconcileOpportunityEpisodes(previous, current, options = {}) {
     const observation = economicObservation(item)
 
     if (observation === EpisodeObservation.CONFIRMED_POSITIVE) {
-      const priorNet = episode?.lastPositiveNetUsdg ?? previousItem?.screenedNetUsdg ?? null
-      const priorRouteKey = episode?.lastPositiveRouteKey ?? previousItem?.routeKey ?? null
+      const quote = eventQuoteEvidence(item, positiveEconomicLane(item))
+      const priorQuote = previousItem ? eventQuoteEvidence(previousItem) : null
+      const priorNet = episode?.lastPositiveNetUsdg ?? priorQuote?.screenedNetUsdg ?? null
+      const priorRouteKey = episode?.lastPositiveRouteKey ?? priorQuote?.routeKey ?? null
+      const priorBaseAsset = episode?.lastPositiveBaseAsset ?? priorQuote?.baseAsset ?? null
       if (!episode) {
-        const openedAt = String(item.quotedAt || current.generatedAt)
+        const openedAt = String(quote.quotedAt || current.generatedAt)
         episode = {
           schemaVersion: 1,
           episodeId: economicEpisodeId(item.id, openedAt),
@@ -495,26 +673,28 @@ export function reconcileOpportunityEpisodes(previous, current, options = {}) {
           id: item.id,
           episodeId: episode.episodeId,
           symbol: item.symbol,
-          ...eventQuoteEvidence(item),
+          ...quote,
         })
         continue
       }
 
       item.economicEpisode = advancePositiveEpisode(episode, item)
-      const delta = Math.abs(Number(item.screenedNetUsdg) - Number(priorNet))
-      const routeChanged = Boolean(priorRouteKey && item.routeKey && priorRouteKey !== item.routeKey)
-      if (routeChanged || (Number.isFinite(delta) && delta >= netDeltaUsdg)) {
+      const delta = Math.abs(Number(quote.screenedNetUsdg) - Number(priorNet))
+      const baseChanged = Boolean(priorBaseAsset && priorBaseAsset !== quote.baseAsset)
+      const routeChanged = Boolean(priorRouteKey && quote.routeKey && priorRouteKey !== quote.routeKey)
+      if (baseChanged || routeChanged || (Number.isFinite(delta) && delta >= netDeltaUsdg)) {
         events.push({
           schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
           type: 'MATERIAL_NET_CHANGE',
-          changeReason: routeChanged ? 'ROUTE_CHANGED' : 'NET_DELTA',
+          changeReason: baseChanged ? 'BASE_CHANGED' : routeChanged ? 'ROUTE_CHANGED' : 'NET_DELTA',
           at: current.generatedAt,
           id: item.id,
           episodeId: episode.episodeId,
           symbol: item.symbol,
           previousNetUsdg: priorNet,
+          previousBaseAsset: priorBaseAsset,
           previousRouteKey: priorRouteKey,
-          ...eventQuoteEvidence(item),
+          ...quote,
         })
       }
       continue
@@ -533,14 +713,17 @@ export function reconcileOpportunityEpisodes(previous, current, options = {}) {
     }
 
     if (episode) {
+      const quote = eventQuoteEvidence(item)
+      const selectedLane = representativeEconomicLane(item)
+      const hasBaseLanes = Object.keys(item.baseOpportunities || {}).length > 0
       item.economicEpisode = {
         ...episode,
         state: EpisodeState.CLOSED,
         observation: EpisodeObservation.CONFIRMED_NON_POSITIVE,
         closedAt: current.generatedAt,
-        closeStatus: item.status,
-        closeBlockNumber: item.blockNumber || null,
-        closeBlockHash: item.blockHash || null,
+        closeStatus: hasBaseLanes ? `${quote.baseAsset}:${selectedLane?.status}` : item.status,
+        closeBlockNumber: quote.blockNumber,
+        closeBlockHash: quote.blockHash,
       }
       events.push({
         schemaVersion: EVENT_LEDGER_SCHEMA_VERSION,
@@ -552,11 +735,13 @@ export function reconcileOpportunityEpisodes(previous, current, options = {}) {
         previousNetUsdg: episode.lastPositiveNetUsdg,
         previousRoute: episode.lastPositiveRoute,
         previousRouteKey: episode.lastPositiveRouteKey,
+        previousBaseAsset: episode.lastPositiveBaseAsset,
+        previousAmountInBase: episode.lastPositiveAmountInBase,
         previousAmountInUsdg: episode.lastPositiveAmountInUsdg,
         previousGrossProfitUsdg: episode.lastPositiveGrossProfitUsdg,
         previousGasCostProxyUsdg: episode.lastPositiveGasCostProxyUsdg,
-        currentStatus: item.status,
-        ...eventQuoteEvidence(item),
+        currentStatus: selectedLane?.status || item.status,
+        ...quote,
       })
     }
   }

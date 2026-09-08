@@ -33,6 +33,9 @@ const CONFIG_KEYS = new Set([
   'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS',
   'MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG',
   'MANGA_GENERIC_WATCH_MAX_CONSECUTIVE_ERRORS',
+  'MANGA_WETH_SEED_ETH',
+  'MANGA_WETH_MAX_AMOUNT_WETH',
+  'MANGA_WETH_MIN_GROSS_PROFIT_WETH',
 ])
 
 /** @param {string} file */
@@ -111,6 +114,9 @@ export function loadRuntimeConfig(environment = process.env) {
       10,
       100,
     ),
+    wethSeedEth: value('MANGA_WETH_SEED_ETH') || '0',
+    wethMaxAmountWeth: value('MANGA_WETH_MAX_AMOUNT_WETH') || '1',
+    wethMinGrossProfitWeth: value('MANGA_WETH_MIN_GROSS_PROFIT_WETH') || '0.000001',
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
 }
