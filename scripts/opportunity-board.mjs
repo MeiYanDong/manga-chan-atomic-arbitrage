@@ -76,6 +76,7 @@ import {
 } from '../src/route-optimizer.mjs'
 import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
 import { BoardStore } from '../src/board-store.mjs'
+import { readPublicBusinessSnapshot } from '../src/business-operations.mjs'
 import {
   buildDashboardModel,
   dashboardApiNeedsOpportunityDetails,
@@ -222,6 +223,9 @@ function loadConfig() {
   const executionSnapshotPath = path.resolve(
     process.env.MANGA_BOARD_EXECUTION_SNAPSHOT || path.join(runDir, 'execution-snapshot.json'),
   )
+  const businessSnapshotPath = path.resolve(
+    process.env.MANGA_BOARD_BUSINESS_SNAPSHOT || path.join(runDir, 'business-snapshot.json'),
+  )
   const host = process.env.MANGA_BOARD_HOST || '127.0.0.1'
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('opportunity board must bind to loopback')
   const amountGrid = parseUsdgAmountGrid(process.env.MANGA_BOARD_AMOUNT_GRID_USDG, DEFAULT_AMOUNT_GRID_USDG)
@@ -237,6 +241,7 @@ function loadConfig() {
     providerLabel: process.env.MANGA_BOARD_PROVIDER_LABEL || 'read-only-provider',
     runDir,
     executionSnapshotPath,
+    businessSnapshotPath,
     host,
     port: integer(process.env.MANGA_BOARD_PORT, 8_788),
     readModel,
@@ -2531,6 +2536,17 @@ class OpportunityBoard {
       }
       if (requestUrl.pathname === '/api/event-metrics') {
         return this.respondJson(response, 200, this.serviceState().eventDrivenShadow)
+      }
+      if (requestUrl.pathname === '/api/v1/business') {
+        try {
+          return this.respondJson(
+            response,
+            200,
+            readPublicBusinessSnapshot(this.config.businessSnapshotPath, { maxAgeMs: 15 * 60 * 1_000 }),
+          )
+        } catch {
+          return this.respondJson(response, 503, { status: 'BUSINESS_SNAPSHOT_NOT_READY' })
+        }
       }
       if (requestUrl.pathname.startsWith('/api/v1/')) {
         const includeOpportunities = dashboardApiNeedsOpportunityProjection(requestUrl.pathname)

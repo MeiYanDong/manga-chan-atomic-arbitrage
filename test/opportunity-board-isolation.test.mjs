@@ -43,15 +43,18 @@ test('dashboard client is same-origin, read-only and free of signer material', (
   const vite = fs.readFileSync(path.join(root, 'vite.config.mjs'), 'utf8')
   const combined = `${app}\n${index}\n${styles}\n${vite}`
   const externalUrls = (combined.match(/https?:\/\/[^\s'"`]+/g) || []).filter(
-    (value) => !/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\/?$/.test(value),
+    (value) =>
+      !/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\/?$/.test(value) &&
+      value !== 'https://robinhoodchain.blockscout.com/tx/${item.transactionHash}',
   )
 
   assert.deepEqual(externalUrls, [])
   assert.doesNotMatch(combined, /MANGA_PRIVATE_KEY|createWalletClient|privateKeyToAccount|eth_sendRawTransaction/)
   assert.doesNotMatch(combined, /fetch\([^)]*,\s*\{[^}]*method:\s*['"](?:POST|PUT|PATCH|DELETE)/s)
   assert.match(app, /requestJson\('\/api\/v1\/system'/)
-  assert.match(app, /NO COMMAND BUS/)
-  assert.match(app, /RPC posts \/ retries \/ fallbacks/)
+  assert.match(app, /requestOptionalJson\('\/api\/v1\/business'/)
+  assert.match(app, /不能授权、签名或发起交易/)
+  assert.match(app, /RPC 自动重试 \/ 降级/)
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/)
 })
 
@@ -71,6 +74,10 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
     unit,
     /^Environment=MANGA_BOARD_EXECUTION_SNAPSHOT=\/run\/manga-opportunity-board-feed\/execution-snapshot\.json$/m,
   )
+  assert.match(
+    unit,
+    /^Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=\/var\/lib\/manga-business-report\/business-snapshot\.json$/m,
+  )
   assert.doesNotMatch(unit, /LoadCredential|manga-private-key|MANGA_PRIVATE_KEY/)
 
   const example = fs.readFileSync(path.join(root, 'deploy', 'opportunity-board.env.example'), 'utf8')
@@ -83,6 +90,37 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(example, /^MANGA_BOARD_READ_MODEL=sqlite$/m)
   assert.match(example, /^MANGA_BOARD_SOURCE_CATALOG_START_BLOCK=45000000$/m)
   assert.doesNotMatch(example, /MANGA_PRIVATE_KEY|MANGA_RPC_URL=|MANGA_WS_URL=/)
+})
+
+test('business reporter can read ledgers but cannot sign or write trading state', () => {
+  const service = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-business-report.service'), 'utf8')
+  const timer = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-business-report.timer'), 'utf8')
+  const source = fs.readFileSync(path.join(root, 'scripts', 'business-report.mjs'), 'utf8')
+  const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
+
+  assert.match(service, /^Type=oneshot$/m)
+  assert.match(service, /^User=manga-chan-arb$/m)
+  assert.match(service, /^Group=manga-board$/m)
+  assert.match(service, /^StateDirectory=manga-business-report$/m)
+  assert.match(service, /^StateDirectoryMode=0750$/m)
+  assert.match(service, /^ProtectSystem=strict$/m)
+  assert.match(service, /^ReadWritePaths=\/var\/lib\/manga-business-report$/m)
+  assert.match(
+    service,
+    /^LoadCredentialEncrypted=manga-feishu-webhook:\/etc\/credstore\.encrypted\/manga-feishu-webhook$/m,
+  )
+  assert.match(service, /^Environment=MANGA_FEISHU_WEBHOOK_FILE=%d\/manga-feishu-webhook$/m)
+  assert.doesNotMatch(service, /manga-private-key|MANGA_PRIVATE_KEY|MANGA_RPC_URL|MANGA_WS_URL/)
+  assert.doesNotMatch(source, /createWalletClient|privateKeyToAccount|eth_sendRawTransaction/)
+  assert.match(source, /status: 'DELIVERED'/)
+  assert.match(source, /receipt\?\.periodKey === schedule\.periodKey/)
+  assert.match(source, /deriveDeliveryState/)
+  assert.match(source, /fs\.fsyncSync\(descriptor\)/)
+  assert.match(timer, /^OnBootSec=2min$/m)
+  assert.match(timer, /^OnCalendar=\*-\*-\* \*:0\/5:00$/m)
+  assert.match(timer, /^Persistent=true$/m)
+  assert.match(installer, /manga-business-report\.service/)
+  assert.match(installer, /manga-business-report\.timer/)
 })
 
 test('SSH access permits only a client-local forward to the loopback board', () => {

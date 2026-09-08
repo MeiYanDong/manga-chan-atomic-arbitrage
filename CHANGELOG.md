@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add a private business-first dashboard with Beijing-day receipt economics, authorized USDG/WETH reinvestment,
+  seven-day results, source separation and Blockscout-linked transactions. Publish it through a validated sanitized
+  snapshot that expires after 15 minutes and retains the board's no-signer, no-mutation boundary.
+- Add an independent 09:05 Beijing Feishu daily report backed by an encrypted systemd credential, a five-minute retry
+  timer, period-keyed fsynced delivery receipts and crash recovery. Reporting can read canonical ledgers but cannot load
+  the trading key, write trading state or affect trading-service success.
 - Retry transient dual-watcher startup chain readback five times with bounded exponential backoff, persist degraded
   retry telemetry, and load the private credential only after chain identity, deployments, balances and nonce converge.
   Wrong-chain, authorization, ledger and state mismatches still fail immediately.

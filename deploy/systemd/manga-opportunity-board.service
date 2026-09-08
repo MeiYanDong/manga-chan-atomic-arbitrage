@@ -14,6 +14,7 @@ EnvironmentFile=/etc/manga-opportunity-board/live.env
 EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board
 Environment=MANGA_BOARD_EXECUTION_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
+Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=/var/lib/manga-business-report/business-snapshot.json
 UMask=0027
 ExecStart=/usr/bin/env npm run board
 Restart=on-failure

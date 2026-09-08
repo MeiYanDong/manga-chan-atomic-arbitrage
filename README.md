@@ -37,6 +37,13 @@ LongLauncher, Doppler, PoolManager and Robinhood-asset adapters, quotes the best
 economic opportunity episodes. Pool events wake affected candidates between slower coverage sweeps. The board has no
 wallet, signer or broadcast path.
 
+The same loopback service hosts a private business dashboard. Its primary view reports Beijing-day receipt-verified
+execution net, failed Gas, authorized USDG/WETH reinvestment, seven-day history, source separation and recent
+Blockscout-linked transactions. A separate one-shot reporter can send the previous completed Beijing day to a Feishu
+custom bot at 09:05, retrying every five minutes until one durable success receipt exists. Neither path can sign or
+broadcast a transaction, and neither turns a quote or process heartbeat into profit evidence. See
+[ADR 0024](docs/decisions/0024-sanitized-business-dashboard-and-feishu-reporting.md).
+
 `PAIR API` in that sentence is a discovery boundary, not an issuer label. The accepted multi-platform dashboard design
 keeps discovery, listing, platform route, launch protocol, liquidity venue, asset class, quote and execution provenance
 independent. See [ADR 0009](docs/decisions/0009-orthogonal-source-provenance.md) and the
@@ -240,6 +247,8 @@ npm run withdraw
 npm run board:once         # one read-only catalog + quote batch
 npm run board              # continuous scanner and loopback dashboard
 npm run board:status       # persisted read-only snapshot
+npm run business:report:preview  # render the prior Beijing-day report without sending
+npm run business:report:status   # read the sanitized business snapshot
 npm run generic:plan       # typed top candidate set; board evidence only
 npm run generic:status     # local generic state and current board candidate
 npm run generic:runtime-verify  # canonical deployment + loopback-board readback
@@ -314,7 +323,24 @@ GET /api/v1/sources
 GET /api/v1/episodes
 GET /api/v1/executions
 GET /api/v1/system
+GET /api/v1/business
 ```
+
+The dashboard remains private. Forward the host's loopback port and then open `http://127.0.0.1:18788/`:
+
+```bash
+ssh -N -L 18788:127.0.0.1:8788 <production-host>
+```
+
+On Linux, enter the Feishu webhook through standard input so it never becomes a shell argument, then enable the timer:
+
+```bash
+sudo systemd-creds encrypt --name=manga-feishu-webhook - /etc/credstore.encrypted/manga-feishu-webhook
+sudo systemctl enable --now manga-business-report.timer
+```
+
+The reporter accepts only the exact `https://open.feishu.cn/open-apis/bot/v2/hook/...` boundary. The encrypted
+credential, delivery state and business snapshot stay outside Git.
 
 `POST`, wallet actions and arbitrary RPC proxying are not part of this surface. SQLite is the default bounded current
 read model; JSONL retains append-only source facts, economic events, material positive observations and checkpoint

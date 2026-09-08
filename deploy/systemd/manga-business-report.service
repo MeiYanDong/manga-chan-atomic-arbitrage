@@ -1,0 +1,45 @@
+[Unit]
+Description=MANGA sanitized business snapshot and Feishu daily report
+Wants=network-online.target manga-opportunity-board.service
+After=network-online.target manga-opportunity-board.service
+OnFailure=manga-chan-alert@%n.service
+
+[Service]
+Type=oneshot
+User=manga-chan-arb
+Group=manga-board
+WorkingDirectory=/opt/manga-chan-arbitrage/current
+EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
+Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
+Environment=MANGA_BUSINESS_REPORT_DIR=/var/lib/manga-business-report
+Environment=MANGA_BUSINESS_SNAPSHOT_PATH=/var/lib/manga-business-report/business-snapshot.json
+Environment=MANGA_BUSINESS_BOARD_URL=http://127.0.0.1:8788
+Environment=MANGA_BUSINESS_REPORT_HOUR=9
+Environment=MANGA_BUSINESS_REPORT_MINUTE=5
+LoadCredentialEncrypted=manga-feishu-webhook:/etc/credstore.encrypted/manga-feishu-webhook
+Environment=MANGA_FEISHU_WEBHOOK_FILE=%d/manga-feishu-webhook
+UMask=0027
+ExecStart=/usr/bin/env npm run business:report:tick
+TimeoutStartSec=45
+StateDirectory=manga-business-report
+StateDirectoryMode=0750
+MemoryMax=128M
+TasksMax=16
+CPUWeight=50
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/manga-business-report
+
