@@ -21,7 +21,9 @@ provider response limits but cannot make a serial scheduler real-time while a di
    cadence; transient errors use the existing capped exponential backoff.
 5. A newly populated queue releases the main scheduler's wait immediately. Event state remains wake evidence only; each
    candidate still needs a fresh canonical fixed-block quote and the separate signer exact preflight.
-6. Graceful shutdown stops and joins the poll task before closing the durable store.
+6. Each quote cycle rebuilds the dependency index from the current catalog and persisted observations before selecting
+   its fixed block. Events that arrive during a slow quote therefore retain candidate routing even on the first cycle.
+7. Graceful shutdown stops and joins the poll task before closing the durable store.
 
 ## Consequences
 

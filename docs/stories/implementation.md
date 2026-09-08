@@ -203,6 +203,7 @@ Acceptance:
   configured four candidates per quote cycle;
 - successful polls retain a fixed cadence, while public-RPC failures remain visible and use bounded exponential backoff;
 - a newly queued wake releases the main scheduler's wait without waiting for the next full polling interval;
+- the current catalog and persisted observations rebuild the dependency index before the cycle's fixed block;
 - shutdown wakes both scheduler sleeps, joins the poll task and closes durable storage only after polling has stopped;
 - production readback across a complete slow reconciliation shows advancing poll counts, head lag within the configured
   bound and no new stale-cursor fast-forward.

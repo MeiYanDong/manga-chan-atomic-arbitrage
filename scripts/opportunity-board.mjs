@@ -2380,6 +2380,10 @@ class OpportunityBoard {
         await this.refreshCatalog({ full: fullCatalogDue })
         this.catalogRefreshRequested = false
       }
+      // The background hot poller may advance while this cycle awaits quotes.
+      // Build routing before the fixed-block boundary so every later event in
+      // the same cycle can wake the candidates represented by that snapshot.
+      this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
       this.publish('SCANNING')
       const fixed = await this.fixedBlock()
       if (this.hotCursor.nextBlock === null) {

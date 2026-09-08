@@ -27,6 +27,13 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /await this\.pollHotEvents\(\)/)
   assert.match(source, /if \(this\.eventQueue\.size > 0\)/)
   assert.doesNotMatch(source, /pollBeforeDrainingWakeQueue/)
+  const cycleStart = source.indexOf('async cycle(options = {})')
+  const dependencyBuild = source.indexOf(
+    'this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)',
+    cycleStart,
+  )
+  const fixedBlock = source.indexOf('const fixed = await this.fixedBlock()', cycleStart)
+  assert.ok(cycleStart >= 0 && dependencyBuild > cycleStart && dependencyBuild < fixedBlock)
   assert.match(source, /advanceChainCatalog/)
   assert.match(source, /advanceSourcePoolCatalog/)
   assert.match(source, /pair\.chain-catalog\.v1/)
