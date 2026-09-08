@@ -194,19 +194,22 @@ Status: implementation, deterministic tests and signer-free production promotion
 the malformed-batch fallback and non-starvable periodic deadline; steady-state latency and RPC-reduction targets remain
 unproven.
 
-## S17 — Hot-cursor progress under quote backlog
+## S17 — Hot-cursor progress independent of quote latency
 
 Acceptance:
 
-- every event cycle attempts one bounded hot-log poll before consuming an existing candidate backlog;
-- the poll can coalesce a fresher revision, but no cycle selects more than the configured four candidates for quoting;
-- a public-RPC poll failure remains visible without discarding or indefinitely blocking already-observed wakes;
-- a reorg-created replacement queue cannot leak stale pre-reorg wakes through the fallback drain;
-- production readback shows both `lastPollAt` and the hot cursor advancing while `pendingCandidates` remains nonzero.
+- one serial hot-poll task remains active while periodic and event-driven quote cycles await RPC responses;
+- the poller advances the cursor and coalesces the queue but never drains it; the main scheduler consumes at most the
+  configured four candidates per quote cycle;
+- successful polls retain a fixed cadence, while public-RPC failures remain visible and use bounded exponential backoff;
+- a newly queued wake releases the main scheduler's wait without waiting for the next full polling interval;
+- shutdown wakes both scheduler sleeps, joins the poll task and closes durable storage only after polling has stopped;
+- production readback across a complete slow reconciliation shows advancing poll counts, head lag within the configured
+  bound and no new stale-cursor fast-forward.
 
-Status: accepted for the v0.6.2 signer-free production board. Five consecutive bounded polls advanced exactly 2,000
-blocks each while approximately 248 candidates remained queued. Historical catch-up and steady-state latency remain
-open operational evidence, not completed acceptance claims.
+Status: implemented and deterministically tested for v0.7.1; production acceptance is pending a complete slow-cycle
+observation. The earlier v0.6.2 poll-before-drain scheduler was insufficient because a single periodic quote cycle could
+still block log polling for several minutes.
 
 ## S18 — Rolling live lease without risk reset
 
