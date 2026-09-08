@@ -1764,14 +1764,18 @@ async function reconcile() {
   }
 }
 
-function screenedBoardCandidates(limit = 32) {
-  return loadBoardSnapshot().then((snapshot) => ({
-    snapshot,
-    candidates: buildDualBaseExecutionCandidates(snapshot, {
+async function screenedBoardCandidates(limit = 32) {
+  const snapshot = await loadBoardSnapshot()
+  let candidates = []
+  try {
+    candidates = buildDualBaseExecutionCandidates(snapshot, {
       maxAgeMs: RUNTIME_CONFIG.genericMaxQuoteAgeMs,
       limit,
-    }),
-  }))
+    })
+  } catch (error) {
+    if (!/snapshot has no fresh typed dual-base screened-positive candidate/i.test(errorText(error))) throw error
+  }
+  return { snapshot, candidates }
 }
 
 function refreshDeploymentLedgers(deployments) {
@@ -2027,6 +2031,9 @@ async function watchDual() {
       consecutiveBoardErrors: 0,
       consecutiveExecutionRpcErrors: 0,
       processedBoardGenerations: 0,
+      screenedPositiveBoardGenerations: 0,
+      lastBoardGeneratedAt: null,
+      lastBoardCandidateCount: 0,
       lastDecision: 'STARTING',
     }
     writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
@@ -2059,30 +2066,35 @@ async function watchDual() {
         const currentUsage = assertDualAuthorization(currentArm, deployments)
         const unresolvedNow = latestUnresolved()
         if (unresolvedNow) throw new Error(`unresolved ${unresolvedNow.kind} mutation ${unresolvedNow.hash}`)
-        let board
-        try {
-          board = await screenedBoardCandidates(32)
-        } catch (error) {
-          if (/no fresh typed dual-base screened-positive candidate/.test(errorText(error))) {
-            watchState = {
-              ...watchState,
-              status: 'RUNNING',
-              updatedAt: new Date().toISOString(),
-              usage: watcherUsageView(currentUsage),
-              consecutiveBoardErrors: 0,
-              lastDecision: 'NO_SCREENED_OPPORTUNITY',
-              reason: null,
-            }
-            writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
-            await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
-            continue
-          }
-          throw error
+        const board = await screenedBoardCandidates(32)
+        if (!board.snapshot?.generatedAt || !Number.isFinite(Date.parse(board.snapshot.generatedAt))) {
+          throw new Error('loopback board snapshot has no valid generation timestamp')
         }
         if (board.snapshot.generatedAt !== lastGeneration) {
           lastGeneration = board.snapshot.generatedAt
           attemptedHashes = new Set()
-          watchState.processedBoardGenerations += 1
+          watchState = {
+            ...watchState,
+            processedBoardGenerations: watchState.processedBoardGenerations + 1,
+            screenedPositiveBoardGenerations:
+              watchState.screenedPositiveBoardGenerations + (board.candidates.length > 0 ? 1 : 0),
+            lastBoardGeneratedAt: lastGeneration,
+            lastBoardCandidateCount: board.candidates.length,
+          }
+        }
+        if (board.candidates.length === 0) {
+          watchState = {
+            ...watchState,
+            status: 'RUNNING',
+            updatedAt: new Date().toISOString(),
+            usage: watcherUsageView(currentUsage),
+            consecutiveBoardErrors: 0,
+            lastDecision: 'NO_SCREENED_OPPORTUNITY',
+            reason: null,
+          }
+          writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+          continue
         }
         const candidate = board.candidates.find((item) => {
           if (attemptedHashes.has(item.candidateHash)) return false

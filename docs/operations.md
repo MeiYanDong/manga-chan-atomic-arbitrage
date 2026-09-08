@@ -404,6 +404,12 @@ largest net candidate can be signed. The selected on-chain minimum profit stays 
 Gas plus the common net floor. A board screen, exact call, running process, or arm is not profit evidence; only the
 canonical receipt plus base-balance and Gas reconciliation is.
 
+`processedBoardGenerations` counts every distinct valid execution-feed generation the dual watcher has observed,
+including an empty generation. `screenedPositiveBoardGenerations` counts only generations that contained at least one
+typed proxy-positive candidate. `lastBoardCandidateCount=0` together with `lastDecision=NO_SCREENED_OPPORTUNITY` means
+the watcher is current and correctly idle; it does not mean the loop failed or that a profitable transaction was
+missed. Neither counter is receipt or realized-profit evidence.
+
 To stop it, revoke first and then disable the service:
 
 ```bash
