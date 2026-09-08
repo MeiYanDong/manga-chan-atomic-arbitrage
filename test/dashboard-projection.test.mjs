@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   buildDashboardModel,
+  dashboardApiNeedsOpportunityDetails,
+  dashboardApiNeedsOpportunityProjection,
   filterDashboardOpportunities,
   projectDashboardOpportunities,
   routeDashboardApi,
@@ -273,6 +275,66 @@ test('dashboard selects a WETH-only positive lane without exposing raw nested qu
   const summary = buildDashboardModel(fixture).opportunities[0]
   assert.equal(summary.quote.baseAsset, 'WETH')
   assert.equal(summary.quote.bestSizeBase, '0.003019633961984217')
+})
+
+test('runtime opportunity projection excludes discovery-only rows and omits detail payloads', () => {
+  const fixture = runtimeFixture()
+  assert.equal(
+    buildDashboardModel({
+      ...fixture,
+      includeSourceOnly: false,
+    }).opportunities.length,
+    0,
+  )
+  fixture.snapshot.items = [
+    {
+      id: NINECAT.toLowerCase(),
+      tokenAddress: NINECAT,
+      symbol: 'NINECAT',
+      status: 'NO_EDGE',
+      fresh: true,
+      quotedAt: fixture.snapshot.generatedAt,
+      pools: [],
+    },
+  ]
+  const model = buildDashboardModel({
+    ...fixture,
+    includeSourceOnly: false,
+    includeOpportunityDetails: false,
+  })
+  assert.equal(model.opportunities.length, 1)
+  assert.deepEqual(model.opportunities[0].evidenceTimeline, [])
+  assert.deepEqual(model.opportunities[0].pools, [])
+  assert.deepEqual(model.opportunities[0].provenance.listings, [])
+  assert.equal(model.opportunities[0].provenance.platformAttribution.platformId, 'LONG_ROUTE')
+})
+
+test('control-plane projection computes overview without materializing opportunities', () => {
+  const fixture = runtimeFixture()
+  fixture.snapshot.items = [
+    {
+      id: NINECAT.toLowerCase(),
+      tokenAddress: NINECAT,
+      status: 'SCREENED_NET_POSITIVE',
+      fresh: true,
+      quotedAt: fixture.snapshot.generatedAt,
+      pools: [],
+    },
+  ]
+  const model = buildDashboardModel({
+    ...fixture,
+    includeOpportunities: false,
+  })
+  assert.deepEqual(model.opportunities, [])
+  assert.equal(model.overview.freshCandidates, 1)
+  assert.equal(model.overview.screenedPositive, 1)
+})
+
+test('dashboard API declares whether a route needs summaries or claim-level details', () => {
+  assert.equal(dashboardApiNeedsOpportunityProjection('/api/v1/system'), false)
+  assert.equal(dashboardApiNeedsOpportunityProjection('/api/v1/opportunities'), true)
+  assert.equal(dashboardApiNeedsOpportunityDetails('/api/v1/opportunities'), false)
+  assert.equal(dashboardApiNeedsOpportunityDetails(`/api/v1/opportunities/${NINECAT}`), true)
 })
 
 test('read-only API router exposes all v1 projections and rejects malformed detail ids', () => {

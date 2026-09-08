@@ -146,6 +146,12 @@ hash-valid immutable receipt payload in SQLite. Require unchanged collection cou
 receipt before starting the signer-free board. The schema-v5 runtime file keeps evidence links and exact route fields;
 full receipt-log payloads remain in `evidence.jsonl` and `board.sqlite`.
 
+Dashboard projections have three separate allocation boundaries. Control-plane endpoints never build opportunity
+rows; the list builds semantic summaries only for candidates admitted to the current board snapshot; and a detail
+request builds claim-level evidence only for its requested ID. Do not reintroduce source-only facts into the Radar list
+or use one shared eager model for every `/api/v1/*` route. The complete discovery census remains available through
+source summaries and the streamed `/api/source-catalog` file.
+
 Read the evidence surfaces separately:
 
 ```bash

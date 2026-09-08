@@ -75,7 +75,12 @@ import {
 } from '../src/route-optimizer.mjs'
 import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
 import { BoardStore } from '../src/board-store.mjs'
-import { buildDashboardModel, routeDashboardApi } from '../src/dashboard-projection.mjs'
+import {
+  buildDashboardModel,
+  dashboardApiNeedsOpportunityDetails,
+  dashboardApiNeedsOpportunityProjection,
+  routeDashboardApi,
+} from '../src/dashboard-projection.mjs'
 import { resolveDashboardAsset } from '../src/dashboard-static.mjs'
 import {
   AdapterRunStatus,
@@ -89,6 +94,7 @@ import {
   boundSourceCatalogPools,
   compactSourceCatalogProjectionInPlace,
   compactSourceFact,
+  countVisibleDopplerLaunches,
   decodeDopplerCreateLog,
   decodeLongLauncherLog,
   markAdapterAttempt,
@@ -100,7 +106,6 @@ import {
   planSourceTargetPoolRange,
   retainPoolsForSourceTargets,
   restoreAdapterStates,
-  selectVisibleDopplerLaunches,
   sourceTargetAddresses,
 } from '../src/source-adapters.mjs'
 import { SOURCE_CONTRACT_REGISTRY, SOURCE_REGISTRY_VERSION, stablePayloadHash } from '../src/source-provenance.mjs'
@@ -525,6 +530,7 @@ class OpportunityBoard {
       ? persistedSourceCatalog.dopplerTargetIndex
       : []
     this.dopplerLaunches = []
+    this.visibleDopplerLaunchCount = 0
     this.pairListings = Array.isArray(persistedSourceCatalog.pairListings) ? persistedSourceCatalog.pairListings : []
     const persistedGenericPools = Array.isArray(persistedSourceCatalog.pools) ? persistedSourceCatalog.pools : []
     this.genericPools = retainPoolsForSourceTargets(
@@ -581,7 +587,7 @@ class OpportunityBoard {
     if (this.sourceAdapterCursors['uniswap-v4.pool-manager.v1'] > launchCoverageCursor) {
       this.sourceAdapterCursors['uniswap-v4.pool-manager.v1'] = launchCoverageCursor
     }
-    this.pruneDopplerLaunches()
+    this.refreshDopplerVisibility()
     this.sourceCatalogSafeHead = persistedSourceCatalog.safeHead || null
     this.chainAttestations = new Map()
     this.feeCache = new Map()
@@ -760,7 +766,7 @@ class OpportunityBoard {
         configuredStartBlock: this.config.sourceCatalogStartBlock.toString(),
         safeHead: this.sourceCatalogSafeHead,
         longLaunches: this.longLaunches.length,
-        dopplerLaunches: this.dopplerLaunches.length,
+        dopplerLaunches: this.visibleDopplerLaunchCount,
         dopplerTargetsDiscovered: this.dopplerTargetIndex.length,
         genericPools: this.genericPools.length,
         projectionBytes: this.latestSourceCatalogBytes ?? null,
@@ -806,7 +812,7 @@ class OpportunityBoard {
       summary: {
         pairListings: this.pairListings.length,
         longLaunches: this.longLaunches.length,
-        dopplerLaunches: this.dopplerLaunches.length,
+        dopplerLaunches: this.visibleDopplerLaunchCount,
         dopplerTargetsDiscovered: this.dopplerTargetIndex.length,
         persistedDopplerLaunchDetails: 0,
         genericPools: this.genericPools.length,
@@ -1030,7 +1036,7 @@ class OpportunityBoard {
       prunedPools: poolsBeforeRetention - this.genericPools.length,
       reason: 'PAIR_CATALOG_REFRESH',
     }
-    this.pruneDopplerLaunches()
+    this.refreshDopplerVisibility()
     this.rebuildCatalogFromSources()
     this.lastCatalogAt = new Date().toISOString()
     this.writeSourceCatalog()
@@ -1050,14 +1056,15 @@ class OpportunityBoard {
     this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
   }
 
-  pruneDopplerLaunches() {
-    this.dopplerLaunches = selectVisibleDopplerLaunches({
+  refreshDopplerVisibility() {
+    this.visibleDopplerLaunchCount = countVisibleDopplerLaunches({
       dopplerTargetIndex: this.dopplerTargetIndex,
       pools: this.genericPools,
       pairListings: this.pairListings,
       longLaunches: this.longLaunches,
       poolCursor: this.sourceAdapterCursors?.['uniswap-v4.pool-manager.v1'] || this.config.sourceCatalogStartBlock,
     })
+    this.dopplerLaunches = []
   }
 
   /** @param {Record<string, any>} filter */
@@ -1087,10 +1094,12 @@ class OpportunityBoard {
     if (genericFacts.length > 0) this.store.ingest(genericFacts.map((fact) => fact.evidence))
     const compactGenericFacts = genericFacts.map((fact) => compactSourceFact(fact))
     const genericBeforeCount = this.genericPools.length
-    this.genericPools = retainPoolsForSourceTargets(
-      mergeSourceFacts(this.genericPools, compactGenericFacts, (item) => item.poolId.toLowerCase()),
-      sourceTargets,
-    )
+    if (compactGenericFacts.length > 0) {
+      this.genericPools = retainPoolsForSourceTargets(
+        mergeSourceFacts(this.genericPools, compactGenericFacts, (item) => item.poolId.toLowerCase()),
+        sourceTargets,
+      )
+    }
     this.sourcePoolRetention = {
       policy: 'SOURCE_TARGET_CURRENCY_ONLY',
       sourceTargets: sourceTargets.size,
@@ -1173,6 +1182,7 @@ class OpportunityBoard {
     let batches = 0
     let logsSeen = 0
     let discoveredPools = 0
+    let discoveredGenericPools = 0
     let ambiguities = 0
     let lastFromBlock = null
     let lastToBlock = null
@@ -1190,6 +1200,7 @@ class OpportunityBoard {
       const ingested = this.ingestInitializeEvents(events)
       logsSeen += logs.length
       discoveredPools += ingested.discoveredPools
+      discoveredGenericPools += ingested.discoveredGenericPools
       ambiguities += ingested.ambiguities
       batches += 1
       lastFromBlock = fromBlock
@@ -1201,6 +1212,7 @@ class OpportunityBoard {
       batches,
       logsSeen,
       discoveredPools,
+      discoveredGenericPools,
       ambiguities,
       fromBlock: lastFromBlock?.toString() || null,
       toBlock: lastToBlock?.toString() || null,
@@ -1219,6 +1231,7 @@ class OpportunityBoard {
       },
       attemptAt,
     )
+    if (discoveredGenericPools > 0) this.refreshDopplerVisibility()
     this.writeSourceCatalog(safeHead)
     if (discoveredPools > 0) this.rebuildCatalogFromSources()
     this.persistState(lastBatch.at)
@@ -1242,15 +1255,12 @@ class OpportunityBoard {
         address: DOPPLER_AIRLOCK,
         topic: DOPPLER_CREATE_TOPIC,
         decode: (log) => decodeDopplerCreateLog(log),
-        current: () => this.dopplerLaunches,
-        assign: (value) => {
-          this.dopplerLaunches = value
-        },
       },
     ]
     let rpcLogCalls = 0
     let logsSeen = 0
     let observations = 0
+    let visibilityChanged = false
 
     for (let batch = 0; batch < this.config.sourceCatalogBatchesPerCycle; batch += 1) {
       const maximumLaunchCursor =
@@ -1311,18 +1321,22 @@ class OpportunityBoard {
                 String(log.topics?.[0] || '').toLowerCase() === definition.topic,
             )
             const decoded = matching.map((log) => definition.decode(log)).filter(Boolean)
-            if (decoded.length > 0) this.store.ingest(decoded.map((fact) => fact.evidence))
-            if (definition.adapterId === 'doppler.registry.v1') {
-              this.dopplerTargetIndex = mergeDopplerTargetFacts(this.dopplerTargetIndex, decoded)
+            if (decoded.length > 0) {
+              this.store.ingest(decoded.map((fact) => fact.evidence))
+              visibilityChanged = true
+              if (definition.adapterId === 'doppler.registry.v1') {
+                this.dopplerTargetIndex = mergeDopplerTargetFacts(this.dopplerTargetIndex, decoded)
+              } else {
+                const compactDecoded = decoded.map((fact) => compactSourceFact(fact))
+                definition.assign(
+                  mergeSourceFacts(
+                    definition.current(),
+                    compactDecoded,
+                    (item) => `${item.transactionHash || item.evidenceId}:${item.logIndex || 0}`,
+                  ),
+                )
+              }
             }
-            const compactDecoded = decoded.map((fact) => compactSourceFact(fact))
-            definition.assign(
-              mergeSourceFacts(
-                definition.current(),
-                compactDecoded,
-                (item) => `${item.transactionHash || item.evidenceId}:${item.logIndex || 0}`,
-              ),
-            )
             observations += decoded.length
             this.sourceAdapterCursors[definition.adapterId] = toBlock + 1n
             const complete = this.sourceAdapterCursors[definition.adapterId] > safeHead
@@ -1347,6 +1361,7 @@ class OpportunityBoard {
       }
     }
 
+    if (visibilityChanged) this.refreshDopplerVisibility()
     this.writeSourceCatalog(safeHead)
     this.persistState()
     return { rpcLogCalls, logsSeen, observations, safeHead: safeHead.toString() }
@@ -1420,7 +1435,7 @@ class OpportunityBoard {
       nextBlock: this.sourceAdapterCursors[adapterId].toString(),
       safeHead: safeHead.toString(),
     }
-    this.pruneDopplerLaunches()
+    this.refreshDopplerVisibility()
     this.writeSourceCatalog(safeHead)
     if (discoveredPools > 0) this.rebuildCatalogFromSources()
     this.persistState()
@@ -1521,7 +1536,7 @@ class OpportunityBoard {
       })
     }
     if (initializeResult.discoveredGenericPools > 0) {
-      this.pruneDopplerLaunches()
+      this.refreshDopplerVisibility()
       this.writeSourceCatalog(planned.safeHead)
     }
 
@@ -2404,12 +2419,24 @@ class OpportunityBoard {
       .reverse()
   }
 
-  dashboardModel() {
+  dashboardModel({ includeOpportunities = false, includeOpportunityDetails = false, opportunityId = null } = {}) {
     const sqlite = this.config.readModel === 'sqlite'
     const snapshot = sqlite ? this.store.readCurrentSnapshot({ fallback: false }) : this.snapshot
     if (!snapshot) return null
     const sourceCatalog = this.latestSourceCatalog || readJson(this.sourceCatalogPath)
+    const projectionMode = includeOpportunities
+      ? includeOpportunityDetails
+        ? `OPPORTUNITY_DETAIL:${opportunityId || 'UNKNOWN'}`
+        : 'ADMITTED_OPPORTUNITY_SUMMARIES'
+      : 'CONTROL_PLANE_ONLY'
+    const projectedSnapshot = opportunityId
+      ? {
+          ...snapshot,
+          items: (snapshot.items || []).filter((item) => item.id === opportunityId),
+        }
+      : snapshot
     const cacheKey = [
+      projectionMode,
       this.config.readModel,
       sqlite ? this.store.currentRevision() : snapshot.generatedAt,
       sourceCatalog?.generatedAt || 'NO_SOURCE_CATALOG',
@@ -2420,13 +2447,16 @@ class OpportunityBoard {
     ].join('|')
     if (this.dashboardCache?.key === cacheKey) return this.dashboardCache.model
     const model = buildDashboardModel({
-      snapshot,
+      snapshot: projectedSnapshot,
       sourceCatalog,
       episodes: this.store.listEpisodes(),
       executions: this.store.listExecutions(),
       persistence: this.persistenceState,
       release: process.env.MANGA_RELEASE_SHA || null,
       readModel: this.config.readModel,
+      includeOpportunities,
+      includeSourceOnly: false,
+      includeOpportunityDetails,
     })
     this.dashboardCache = { key: cacheKey, model }
     return model
@@ -2486,7 +2516,21 @@ class OpportunityBoard {
         return this.respondJson(response, 200, this.serviceState().eventDrivenShadow)
       }
       if (requestUrl.pathname.startsWith('/api/v1/')) {
-        const routed = routeDashboardApi(requestUrl.pathname, requestUrl.searchParams, this.dashboardModel())
+        const includeOpportunities = dashboardApiNeedsOpportunityProjection(requestUrl.pathname)
+        const includeOpportunityDetails = dashboardApiNeedsOpportunityDetails(requestUrl.pathname)
+        let opportunityId = null
+        if (includeOpportunityDetails) {
+          try {
+            opportunityId = decodeURIComponent(requestUrl.pathname.slice('/api/v1/opportunities/'.length))
+          } catch {
+            return this.respondJson(response, 400, { error: 'invalid opportunity id' })
+          }
+        }
+        const routed = routeDashboardApi(
+          requestUrl.pathname,
+          requestUrl.searchParams,
+          this.dashboardModel({ includeOpportunities, includeOpportunityDetails, opportunityId }),
+        )
         return this.respondJson(response, routed.status, routed.payload)
       }
       if (requestUrl.pathname === '/healthz') {

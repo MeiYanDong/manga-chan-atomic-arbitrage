@@ -276,8 +276,10 @@ from freezing the chain cursor without increasing the four-candidate quote cap. 
 they never substitute a local price calculation for the fixed-block Quoter result. Runtime evidence is available at
 `/api/event-metrics` and `/api/chain-catalog` through the same loopback-only SSH tunnel.
 
-The private source-aware console and read-only API are served on the same loopback listener. The Radar list uses a
-lightweight summary projection and loads full claim evidence only when a row is opened:
+The private source-aware console and read-only API are served on the same loopback listener. Control-plane endpoints do
+not construct an opportunity table. Radar contains only candidates admitted to the current quote board, uses a
+semantic summary projection, and loads full claim evidence for one ID only when a row is opened. Historical source-only
+discoveries remain in source coverage and the streamed source catalog rather than being mislabeled as opportunities:
 
 ```text
 GET /api/v1/overview
