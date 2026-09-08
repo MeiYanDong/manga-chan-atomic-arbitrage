@@ -1,6 +1,6 @@
 # ADR 0023: bounded dual startup RPC retry before signer load
 
-- Status: Accepted; production verification pending
+- Status: Accepted and deployed; normal production restart verified
 - Date: 2026-09-08
 
 ## Context
@@ -36,3 +36,16 @@ on an operator to notice and restart the service, however, violates the requeste
 - Startup can take up to 15 seconds of deliberate backoff plus RPC timeouts before becoming terminal.
 - Production acceptance requires a controlled restart with the board active, one current generation consumed, canonical
   runtime readback and unchanged nonce/balances/usage.
+
+## Production status
+
+[PR #65](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/65) merged the decision as release
+`d7f15d3f8c60aa77e8c560adfdda0c5970d23be7`. Its Linux gate passed before installation. A controlled restart with the
+board active reached `RUNNING`, consumed current generations and preserved nonce, balances, authorization and zero
+dual-era usage. `startupRpcRetries=0` on that restart, so the deployed retry branch itself remains supported by the
+pre-fix production `429` incident plus deterministic recovery tests, not by an intentionally induced production
+failure.
+
+See the
+[production promotion record](../evidence/2026-09-08-post-quote-and-startup-reliability-production-promotion.md) for
+the exact gates and runtime boundary.

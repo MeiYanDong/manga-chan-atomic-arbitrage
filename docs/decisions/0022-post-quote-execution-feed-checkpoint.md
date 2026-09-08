@@ -1,6 +1,6 @@
 # ADR 0022: post-quote execution-feed checkpoint
 
-- Status: Accepted; production verification pending
+- Status: Accepted and deployed; live positive-checkpoint observation pending
 - Date: 2026-09-08
 
 ## Context
@@ -38,3 +38,16 @@ the delay.
   signature or broadcast.
 - Production acceptance requires observing a real checkpoint or a deterministic injected positive, confirming the
   watcher sees the generation, and proving no below-floor candidate reaches exact preflight.
+
+## Production status
+
+[PR #64](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/64) merged the decision and release
+`55177b8a28807b8ef91dded6f5378d6963a66467` passed both GitHub and Linux release gates. The code is active in later
+release `d7f15d3f8c60aa77e8c560adfdda0c5970d23be7`. Production has since published healthy generations, but every new
+batch was non-positive, so `executionFeedCheckpoints=0`. Deployment and ordinary-path operation are verified; the live
+positive branch is still proved only by deterministic business tests and is not described as latency evidence from a
+real opportunity.
+
+See the
+[production promotion record](../evidence/2026-09-08-post-quote-and-startup-reliability-production-promotion.md) for
+the exact gates and runtime boundary.
