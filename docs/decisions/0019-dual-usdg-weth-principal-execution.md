@@ -1,6 +1,6 @@
 # ADR 0019: dual USDG/WETH principal execution
 
-- Status: Accepted for implementation; production promotion pending
+- Status: Accepted and production-verified
 - Date: 2026-09-08
 
 ## Context
@@ -48,3 +48,7 @@ Add a second typed contract, `WethAtomicArb`, and one dual-v3 off-chain signing 
   runtime, trade, or profit evidence.
 - WETH deployment seed and Gas both consume wallet ETH. Production promotion therefore requires a fresh balance, gas,
   nonce, current-board, and constructor preflight before any broadcast.
+
+Production verification, including the WETH deployment receipt, active authorization and zero-usage readback, is
+recorded in
+[the dual-v3 bounded-dashboard promotion evidence](../evidence/2026-09-08-dual-v3-bounded-dashboard-production-promotion.md).

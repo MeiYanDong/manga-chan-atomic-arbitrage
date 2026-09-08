@@ -1,5 +1,9 @@
 # Source-catalog schema-v5 local validation
 
+Follow-up: the schema-v5 migration and subsequent bounded dashboard runtime were later production-verified in
+[the dual-v3 bounded-dashboard production promotion](2026-09-08-dual-v3-bounded-dashboard-production-promotion.md).
+The evidence below remains the historical local checkpoint.
+
 - Date: 2026-09-08 (Asia/Shanghai)
 - Input: read-only copy of the production `source-catalog.json`
 - Production mutation: none during this validation

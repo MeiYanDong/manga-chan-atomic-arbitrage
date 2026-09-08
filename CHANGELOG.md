@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Publish a compact execution-feed checkpoint immediately after any newly quoted proxy-positive candidate and before
+  slower source-catalog maintenance. This preserves the signer's 30-second freshness gate without relaxing its exact
+  net-profit floor, route validation or fail-closed behavior.
 - Count every distinct signer-free feed generation in dual-watcher liveness telemetry, including generations with zero
   screened-positive rows. Report screened-positive generations separately so an idle-but-observing watcher cannot be
   mistaken for a stopped watcher; signing and exact-preflight behavior are unchanged.
@@ -15,7 +18,8 @@
 - Add a separate bounded WETH-principal executor and a single dual-v3 signing lane. The signer-free board can quote
   USDG and WETH cycles at one fixed block; exact candidates are re-simulated at one current block and only the largest
   conservatively normalized net profit is signed. Retained profit compounds independently, while both bases share one
-  nonce, UNKNOWN barrier, durable revocation, ETH reserve and failed-Gas breaker. Production promotion remains pending.
+  nonce, UNKNOWN barrier, durable revocation, ETH reserve and failed-Gas breaker. Production deployment and the
+  receipt-separated runtime evidence are recorded without claiming an unobserved dual-era profit.
 - Stream the growing source catalog through a bounded canonical atomic writer, reference its hash from SQLite economic
   checkpoints instead of copying the full document, preserve the signer feed across board restarts and retry transient
   `ENOENT`/`ESTALE` feed loss without weakening permission, integrity or signing gates.

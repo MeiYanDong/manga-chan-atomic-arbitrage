@@ -1,5 +1,9 @@
 # Dual-base local and public-RPC validation — 2026-09-08
 
+Follow-up: the production gates listed in this checkpoint were later closed in
+[the dual-v3 bounded-dashboard production promotion](2026-09-08-dual-v3-bounded-dashboard-production-promotion.md).
+The evidence below remains the historical pre-deployment checkpoint.
+
 ## Scope and evidence boundary
 
 This record covers source, deterministic EVM, CLI, and one signer-free public-RPC board cycle. It is not WETH executor

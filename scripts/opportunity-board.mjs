@@ -41,6 +41,7 @@ import {
   publicError,
   reconcileOpportunityEpisodes,
   screenRoundTrip,
+  screenedPositiveObservationCount,
   screenWethRoundTrip,
   usdg,
   writeExecutionBoardSnapshot,
@@ -627,6 +628,9 @@ class OpportunityBoard {
       nextPeriodicCycleAt: null,
       eventDrivenQuoterCalls: 0,
       reconciliationQuoterCalls: 0,
+      executionFeedCheckpoints: 0,
+      lastExecutionFeedCheckpointAt: null,
+      lastExecutionFeedCheckpointCandidateCount: 0,
     }
     this.quoteRpcMetrics = {
       rpcHttpPosts: 0,
@@ -2347,6 +2351,20 @@ class OpportunityBoard {
         }
       })
       if (this.cycleRpcFailure) throw this.cycleRpcFailure
+      const quotesCompletedAt = new Date().toISOString()
+      this.lastQuoteAt = quotesCompletedAt
+      const executionCheckpointCandidateCount = screenedPositiveObservationCount(
+        selected.map((candidate) => this.observations.get(candidate.id)),
+      )
+      if (executionCheckpointCandidateCount > 0) {
+        this.eventMetrics.executionFeedCheckpoints += 1
+        this.eventMetrics.lastExecutionFeedCheckpointAt = quotesCompletedAt
+        this.eventMetrics.lastExecutionFeedCheckpointCandidateCount = executionCheckpointCandidateCount
+        // Keep this checkpoint before all catalog maintenance. A valid screen
+        // must reach the signer feed while its fixed-block quote is still
+        // inside the watcher's execution-freshness horizon.
+        this.publish('SCANNING')
+      }
       if (!eventWake) {
         try {
           await this.advanceLaunchSourceCatalog(fixed.blockNumber)
@@ -2384,7 +2402,6 @@ class OpportunityBoard {
         this.eventMetrics.reconciliationQuoterCalls += cycleQuoterCalls
       }
       this.lastCycleAt = new Date().toISOString()
-      this.lastQuoteAt = this.lastCycleAt
       if (!eventWake) this.eventMetrics.lastPeriodicCycleAt = this.lastCycleAt
       this.cycleNumber += 1
       this.consecutiveErrors = 0

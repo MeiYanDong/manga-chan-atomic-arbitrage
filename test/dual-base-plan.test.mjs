@@ -131,3 +131,21 @@ test('dual-base planner degrades to the independently valid lane', () => {
   })
   assert.equal(candidate.baseAsset, 'USDG')
 })
+
+test('dual signer feed accepts a checkpoint inside 30 seconds and rejects the same quote after it ages out', () => {
+  assert.equal(
+    buildDualBaseExecutionCandidates(fixture(), {
+      nowMs: Date.parse('2026-09-08T00:00:29.999Z'),
+      maxAgeMs: 30_000,
+    }).length,
+    2,
+  )
+  assert.throws(
+    () =>
+      buildDualBaseExecutionCandidates(fixture(), {
+        nowMs: Date.parse('2026-09-08T00:00:30.001Z'),
+        maxAgeMs: 30_000,
+      }),
+    /no fresh typed dual-base screened-positive candidate/,
+  )
+})
