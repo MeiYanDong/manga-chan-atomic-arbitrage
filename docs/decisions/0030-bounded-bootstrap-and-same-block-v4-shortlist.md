@@ -1,6 +1,6 @@
 # ADR 0030: bounded V3 bootstrap and same-block V4 route-pair reuse
 
-- Status: Accepted; production verification pending
+- Status: Accepted; production verified
 - Date: 2026-09-09
 
 ## Context
@@ -39,3 +39,12 @@ one fixed block.
   remain independent and unchanged.
 - Production acceptance requires a complete healthy cycle with materially fewer than v0.7.5's 999 logical Quoter
   calls, no cursor-lag breach, and no signer usage or failed Gas absent an exact-positive candidate.
+
+## Production verification
+
+Release `e57694fb65f5c5d1c365ddd70403d75e8f477863` completed its first production reconciliation at
+`2026-09-08T20:43:25.034Z` with 516 logical Quoter calls, a 48% reduction from v0.7.5. The public-RPC cursor remained
+within 55 blocks of the safe head, `cursorFastForwards` stayed at the restart baseline of 12, Multicall recorded no
+transient stop, the service had zero restarts and the signer recorded zero signed attempts and zero failed Gas. The
+following four-candidate event cycle still took 610,315 ms from its oldest queued revision and 247 logical Quoter calls;
+that separate latency failure motivates ADR 0031 rather than invalidating the bounded-discovery decision here.

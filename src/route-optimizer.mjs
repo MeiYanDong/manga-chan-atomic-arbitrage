@@ -112,6 +112,96 @@ export function selectV4RoutePairs(routes, limit) {
 }
 
 /**
+ * Build a small event-time V4 route set without rediscovering every pool pair.
+ * A touched pool is compared with the last winning route first; when no prior
+ * route exists, a deterministic two-pool probe keeps the wake bounded. Every
+ * returned route still receives fresh same-block V4 and V3 Quoter calls.
+ *
+ * @param {Record<string, any>[]} pools
+ * @param {Record<string, any> | null} previousLane
+ * @param {string[]} touchedPoolKeys
+ * @param {number} limit
+ */
+export function selectEventV4RoutePairs(pools, previousLane, touchedPoolKeys = [], limit = 2) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('event V4 pair limit must be a positive integer')
+  const poolIds = [...new Set((pools || []).map((pool) => String(pool?.poolId || '').toLowerCase()).filter(Boolean))]
+  const available = new Set(poolIds)
+  if (poolIds.length < 2) return []
+
+  const previousEntry = String(previousLane?.legs?.entryPoolId || '').toLowerCase()
+  const previousExit = String(previousLane?.legs?.exitPoolId || '').toLowerCase()
+  const hasPrevious = available.has(previousEntry) && available.has(previousExit) && previousEntry !== previousExit
+  const touched = [...new Set(touchedPoolKeys.map((key) => String(key).toLowerCase()))].filter((key) =>
+    available.has(key),
+  )
+  const selected = []
+  const seen = new Set()
+  const add = (entryPoolId, exitPoolId) => {
+    if (!available.has(entryPoolId) || !available.has(exitPoolId) || entryPoolId === exitPoolId) return
+    const identity = `${entryPoolId}:${exitPoolId}`
+    if (seen.has(identity) || selected.length >= limit) return
+    seen.add(identity)
+    selected.push({ entryPoolId, exitPoolId })
+  }
+
+  for (const touchedPool of touched) {
+    if (hasPrevious) {
+      if (touchedPool === previousEntry || touchedPool === previousExit) {
+        add(previousEntry, previousExit)
+        add(previousExit, previousEntry)
+      } else {
+        add(touchedPool, previousExit)
+        add(previousEntry, touchedPool)
+      }
+    } else {
+      const counterpart = poolIds.find((poolId) => poolId !== touchedPool)
+      add(touchedPool, counterpart)
+      add(counterpart, touchedPool)
+    }
+    if (selected.length >= limit) return selected
+  }
+
+  if (hasPrevious) {
+    add(previousEntry, previousExit)
+    add(previousExit, previousEntry)
+  }
+  if (selected.length === 0) {
+    add(poolIds[0], poolIds[1])
+    add(poolIds[1], poolIds[0])
+  }
+  return selected
+}
+
+/**
+ * Event wakes re-quote the last useful size and the smallest configured probe.
+ * This deliberately avoids a full sizing grid while preserving a low-capital
+ * probe for the live executor.
+ *
+ * @param {bigint[]} configuredProbes
+ * @param {bigint | null} previousAmount
+ * @param {bigint} maximumAmount
+ * @param {number} limit
+ */
+export function selectEventProbeAmounts(configuredProbes, previousAmount, maximumAmount, limit = 2) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('event amount limit must be a positive integer')
+  if (typeof maximumAmount !== 'bigint' || maximumAmount <= 0n) {
+    throw new Error('event maximum amount must be positive')
+  }
+  const selected = []
+  const seen = new Set()
+  const add = (amount) => {
+    if (typeof amount !== 'bigint' || amount <= 0n || amount > maximumAmount) return
+    const key = amount.toString()
+    if (seen.has(key) || selected.length >= limit) return
+    seen.add(key)
+    selected.push(amount)
+  }
+  add(previousAmount)
+  for (const amount of [...configuredProbes].sort((left, right) => (left < right ? -1 : 1))) add(amount)
+  return selected
+}
+
+/**
  * Add at most two midpoint quotes around the best coarse-grid amount. This is
  * deterministic and bounded; it improves sizing without turning every board
  * cycle into an unbounded search.

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import httpServer from 'node:http'
 import path from 'node:path'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { fileURLToPath } from 'node:url'
 import {
   createPublicClient,
@@ -12,6 +13,7 @@ import {
   keccak256,
   parseAbi,
   parseEther,
+  parseUnits,
   toHex,
 } from 'viem'
 import {
@@ -30,6 +32,7 @@ import {
   rotatingSlice,
   routeShadowEvent,
   selectPeriodicShadowCandidates,
+  shouldPreemptPeriodicQuote,
 } from '../src/event-driven-shadow.mjs'
 import {
   BoardStatus,
@@ -75,6 +78,8 @@ import {
   formatAmountGrid,
   parseUsdgAmountGrid,
   refinementAmounts,
+  selectEventProbeAmounts,
+  selectEventV4RoutePairs,
   selectV4RoutePairs,
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
@@ -128,6 +133,14 @@ const PAIR_TOKENS_API = 'https://pair.fund/api/tokens'
 const PAIR_STOCK_TOKENS_API = 'https://pair.fund/api/stock-tokens'
 const ROBINHOOD_ASSETS_API = 'https://api.robinhood.com/rhj/assets'
 const PAIR_CATALOG_PAGE_SIZE = 1_000
+
+class PeriodicCyclePreempted extends Error {
+  constructor() {
+    super('periodic reconciliation yielded to a fresh pool event')
+    this.name = 'PeriodicCyclePreempted'
+  }
+}
+
 const USDG = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 const WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
 const V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
@@ -294,7 +307,10 @@ function loadConfig() {
     eventConfirmations: BigInt(integer(process.env.MANGA_BOARD_EVENT_CONFIRMATIONS, 2, 0)),
     eventMaxBlockRange: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_BLOCK_RANGE, 200)),
     eventMaxLagBlocks: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_LAG_BLOCKS, 500)),
-    eventWakeMaxCandidates: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_CANDIDATES, 4),
+    eventWakeMaxCandidates: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_CANDIDATES, 1),
+    eventWakeMaxAgeMs: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_AGE_MS, 20_000, 1_000),
+    eventV4PairLimit: integer(process.env.MANGA_BOARD_EVENT_V4_PAIR_LIMIT, 2),
+    eventAmountLimit: integer(process.env.MANGA_BOARD_EVENT_AMOUNT_LIMIT, 2),
     eventV3MaxAddresses: integer(process.env.MANGA_BOARD_EVENT_V3_MAX_ADDRESSES, 200),
     eventReorgLookback: BigInt(integer(process.env.MANGA_BOARD_EVENT_REORG_LOOKBACK, 12)),
     chainCatalogStartBlock: BigInt(integer(process.env.MANGA_BOARD_CHAIN_CATALOG_START_BLOCK, 45_000_000, 0)),
@@ -654,6 +670,14 @@ class OpportunityBoard {
       dedupedLogs: 0,
       candidateWakes: 0,
       eventQuoteCandidates: 0,
+      eventFastPathCandidates: 0,
+      eventFastPathAmounts: 0,
+      eventFastPathPairs: 0,
+      eventFastPathMisses: 0,
+      staleEventCandidateDrops: 0,
+      periodicPreemptions: 0,
+      lastPeriodicPreemptedAt: null,
+      lastPeriodicPreemptQuoterCalls: 0,
       lastPollAt: null,
       lastEventAt: null,
       lastEventToQuoteMs: null,
@@ -727,6 +751,7 @@ class OpportunityBoard {
     this.hotPollSleepTimer = null
     this.hotPollSleepResolve = null
     this.hotPollTask = null
+    this.rpcCallContext = new AsyncLocalStorage()
     this.client = null
     this.unbatchedClient = null
     this.multicallVerifiedAtBlock = null
@@ -751,6 +776,7 @@ class OpportunityBoard {
         ...(useBatch ? { batch: { batchSize: config.rpcBatchSize, wait: config.rpcBatchWaitMs } } : {}),
         fetchFn: (...args) =>
           this.rpcHttpGate.run(async () => {
+            this.throwIfPeriodicPreempted()
             this.quoteRpcMetrics.rpcHttpPosts += 1
             this.quoteRpcMetrics.rpcHttpPeakConcurrency = Math.max(
               this.quoteRpcMetrics.rpcHttpPeakConcurrency,
@@ -805,6 +831,9 @@ class OpportunityBoard {
         reorgCount: Number(this.hotCursor.reorgCount || 0),
         limits: {
           eventWakeMaxCandidates: this.config.eventWakeMaxCandidates,
+          eventWakeMaxAgeMs: this.config.eventWakeMaxAgeMs,
+          eventV4PairLimit: this.config.eventV4PairLimit,
+          eventAmountLimit: this.config.eventAmountLimit,
           cycleMaxCandidates: this.config.cycleMaxCandidates,
           eventMaxBlockRange: this.config.eventMaxBlockRange.toString(),
           eventMaxLagBlocks: this.config.eventMaxLagBlocks.toString(),
@@ -1733,8 +1762,15 @@ class OpportunityBoard {
     const deadline = Date.now() + timeoutMs
     while (!this.stopping && Date.now() < deadline) {
       if (this.eventQueue.size > 0) {
-        const wake = this.eventQueue.take(this.config.eventWakeMaxCandidates)
-        return { ...wake, observedAtMs: wake.oldestObservedAtMs }
+        const wake = this.eventQueue.take(this.config.eventWakeMaxCandidates, {
+          nowMs: Date.now(),
+          maxAgeMs: this.config.eventWakeMaxAgeMs,
+          newestFirst: true,
+        })
+        this.eventMetrics.staleEventCandidateDrops += wake.staleDropped
+        if (wake.candidateIds.length > 0) {
+          return { ...wake, observedAtMs: wake.newestObservedAtMs }
+        }
       }
 
       const remaining = deadline - Date.now()
@@ -1802,6 +1838,14 @@ class OpportunityBoard {
       .filter((pool) => pool !== null)
     this.feeCache.set(key, { pools: available, at: Date.now() })
     return available
+  }
+
+  throwIfPeriodicPreempted() {
+    const context = this.rpcCallContext.getStore()
+    if (shouldPreemptPeriodicQuote(context, this.eventQueue.acceptedEvents)) {
+      context.preempted = true
+      throw new PeriodicCyclePreempted()
+    }
   }
 
   /** @param {() => Promise<any>} operation @param {(error: unknown) => boolean} [shouldRetry] */
@@ -2211,8 +2255,8 @@ class OpportunityBoard {
     }
   }
 
-  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base @param {{entryPoolId: string, exitPoolId: string}[]} pairs */
-  async quoteCandidateV4Pairs(candidate, fixed, amountIn, base, pairs) {
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base @param {{entryPoolId: string, exitPoolId: string}[]} pairs @param {{rebuildOnFailure?: boolean}} [options] */
+  async quoteCandidateV4Pairs(candidate, fixed, amountIn, base, pairs, options = {}) {
     const byPoolId = new Map(candidate.pools.map((pool) => [pool.poolId.toLowerCase(), pool]))
     const failures = []
     const routes = await mapLimit(this.config.legConcurrency, pairs, async (pair) => {
@@ -2270,6 +2314,9 @@ class OpportunityBoard {
     if (successful.length > 0) {
       return this.candidateBaseAmountResult(successful[0], amountIn, base, failures)
     }
+    if (options.rebuildOnFailure === false) {
+      return { amountIn, error: 'UNQUOTABLE', failures: failures.slice(0, 12) }
+    }
     this.quoteRpcMetrics.v4ShortlistRebuilds += 1
     return (await this.discoverCandidateV4Shortlist(candidate, fixed, amountIn, base)).best
   }
@@ -2295,8 +2342,8 @@ class OpportunityBoard {
     return this.quoteCandidateBaseAmount(candidate, fixed, amountIn, BASE_ASSETS.USDG)
   }
 
-  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base */
-  async quoteCandidateLane(candidate, fixed, base) {
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base @param {{eventTrigger?: Record<string, any> | null}} [options] */
+  async quoteCandidateLane(candidate, fixed, base, options = {}) {
     if (this.cycleRpcFailure) throw this.cycleRpcFailure
     const amountGrid =
       base.symbol === 'USDG'
@@ -2306,30 +2353,64 @@ class OpportunityBoard {
       base.symbol === 'USDG'
         ? this.config.probeAmounts
         : equivalentWethAmountGrid(this.config.probeAmounts, fixed.nativeMarkIn, fixed.nativeMark.amountOut)
-    const evaluate = (amounts) =>
-      mapLimit(this.config.amountQuoteConcurrency, amounts, (amount) =>
-        this.quoteCandidateBaseAmount(candidate, fixed, amount, base),
-      )
-    const probeAmounts = [...new Set(configuredProbes.map((amount) => amount.toString()))].map((amount) =>
-      BigInt(amount),
-    )
-    const evaluated = await evaluate(probeAmounts)
     const previousObservation = this.observations.get(candidate.id) || null
     const previousLane =
       previousObservation?.baseOpportunities?.[base.symbol] || (base.symbol === 'USDG' ? previousObservation : null)
-    const expandGrid = shouldExpandAmountGrid({
-      probeQuotes: evaluated,
-      previousStatus: previousLane?.status || null,
-      previousFullGridAt: previousLane?.fullGridAt || null,
-      priority: false,
-      cycleNumber: this.cycleNumber,
-      fullGridEveryCycles: this.config.fullGridEveryCycles,
-      fullGridRefreshMs: this.config.fullGridRefreshMs,
-    })
+    const eventFastPath = Boolean(options.eventTrigger)
+    const eventPairs = eventFastPath
+      ? selectEventV4RoutePairs(
+          candidate.pools,
+          previousLane,
+          options.eventTrigger?.poolKeys || [],
+          this.config.eventV4PairLimit,
+        )
+      : []
+    let previousAmount = null
+    if (eventFastPath && previousLane?.amountInBase) {
+      try {
+        previousAmount = parseUnits(String(previousLane.amountInBase), base.decimals)
+      } catch {
+        previousAmount = null
+      }
+    }
+    const probeAmounts = eventFastPath
+      ? selectEventProbeAmounts(
+          configuredProbes,
+          previousAmount,
+          amountGrid[amountGrid.length - 1],
+          this.config.eventAmountLimit,
+        )
+      : [...new Set(configuredProbes.map((amount) => amount.toString()))].map((amount) => BigInt(amount))
+    if (eventFastPath) {
+      this.eventMetrics.eventFastPathAmounts += probeAmounts.length
+      this.eventMetrics.eventFastPathPairs += eventPairs.length
+      if (eventPairs.length === 0) this.eventMetrics.eventFastPathMisses += 1
+    }
+    const evaluate = (amounts) =>
+      mapLimit(this.config.amountQuoteConcurrency, amounts, (amount) => {
+        this.throwIfPeriodicPreempted()
+        return eventFastPath
+          ? this.quoteCandidateV4Pairs(candidate, fixed, amount, base, eventPairs, { rebuildOnFailure: false })
+          : this.quoteCandidateBaseAmount(candidate, fixed, amount, base)
+      })
+    const evaluated = await evaluate(probeAmounts)
+    this.throwIfPeriodicPreempted()
+    const expandGrid =
+      !eventFastPath &&
+      shouldExpandAmountGrid({
+        probeQuotes: evaluated,
+        previousStatus: previousLane?.status || null,
+        previousFullGridAt: previousLane?.fullGridAt || null,
+        priority: false,
+        cycleNumber: this.cycleNumber,
+        fullGridEveryCycles: this.config.fullGridEveryCycles,
+        fullGridRefreshMs: this.config.fullGridRefreshMs,
+      })
     if (expandGrid) {
       const evaluatedAmounts = new Set(evaluated.map((quote) => quote.amountIn.toString()))
       const remaining = amountGrid.filter((amount) => !evaluatedAmounts.has(amount.toString()))
       evaluated.push(...(await evaluate(remaining)))
+      this.throwIfPeriodicPreempted()
     }
 
     let best = chooseBestAmountQuote(evaluated)
@@ -2340,6 +2421,7 @@ class OpportunityBoard {
         (amount) => !evaluatedAmounts.has(amount.toString()),
       )
       evaluated.push(...(await evaluate(refinements)))
+      this.throwIfPeriodicPreempted()
       best = chooseBestAmountQuote(evaluated)
     }
 
@@ -2401,11 +2483,13 @@ class OpportunityBoard {
     evaluated.sort((left, right) => (left.amountIn < right.amountIn ? -1 : 1))
     const amountQuotes = evaluated.map(formatQuote)
     const failures = evaluated.flatMap((quote) => quote.failures || []).slice(0, 12)
-    const optimizationMode = expandGrid
-      ? refinements.length > 0
-        ? 'ADAPTIVE_GRID_REFINED'
-        : 'ADAPTIVE_GRID'
-      : 'PROBE_ONLY'
+    const optimizationMode = eventFastPath
+      ? 'EVENT_KNOWN_ROUTE_PROBE'
+      : expandGrid
+        ? refinements.length > 0
+          ? 'ADAPTIVE_GRID_REFINED'
+          : 'ADAPTIVE_GRID'
+        : 'PROBE_ONLY'
     const fullGridAt = expandGrid ? new Date().toISOString() : previousLane?.fullGridAt || null
     const shared = {
       baseAsset: base.symbol,
@@ -2473,15 +2557,18 @@ class OpportunityBoard {
     }
   }
 
-  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed */
-  async quoteCandidate(candidate, fixed) {
-    const usdgLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.USDG)
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {{eventTrigger?: Record<string, any> | null}} [options] */
+  async quoteCandidate(candidate, fixed, options = {}) {
+    if (options.eventTrigger) this.eventMetrics.eventFastPathCandidates += 1
+    const usdgLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.USDG, options)
+    this.throwIfPeriodicPreempted()
     let wethLane = null
     if (this.config.wethBaseEnabled) {
       const priorFailure = this.cycleRpcFailure
       try {
-        wethLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.WETH)
+        wethLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.WETH, options)
       } catch (error) {
+        if (error instanceof PeriodicCyclePreempted) throw error
         if (!priorFailure) this.cycleRpcFailure = null
         wethLane = {
           baseAsset: 'WETH',
@@ -2618,12 +2705,24 @@ class OpportunityBoard {
 
   /** @param {{forceCatalog?: boolean, eventWake?: Record<string, any> | null}} [options] */
   async cycle(options = {}) {
+    const eventWake = options.eventWake ?? null
+    const callContext = {
+      preemptible: eventWake === null && this.observations.size > 0,
+      acceptedEventsAtStart: this.eventQueue.acceptedEvents,
+      preempted: false,
+    }
+    return this.rpcCallContext.run(callContext, () => this.runCycle(options))
+  }
+
+  /** @param {{forceCatalog?: boolean, eventWake?: Record<string, any> | null}} [options] */
+  async runCycle(options = {}) {
     const { forceCatalog = false, eventWake = null } = options
     if (this.inCycle) return null
     this.inCycle = true
     this.cycleRpcFailure = null
     this.v3ShortlistRefreshBudget = eventWake ? 0 : this.config.v3ShortlistRefreshesPerCycle
     const quoterCallsBefore = this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls
+    let selectedCount = 0
     try {
       const fullCatalogDue =
         forceCatalog ||
@@ -2644,6 +2743,7 @@ class OpportunityBoard {
       this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
       this.publish('SCANNING')
       const fixed = await this.fixedBlock()
+      this.throwIfPeriodicPreempted()
       if (this.hotCursor.nextBlock === null) {
         this.hotCursor = {
           ...this.hotCursor,
@@ -2655,11 +2755,12 @@ class OpportunityBoard {
         this.persistState()
       }
       const selected = this.selectCandidates(eventWake?.candidateIds || [])
+      selectedCount = selected.length
       const triggerByCandidate = new Map((eventWake?.triggers || []).map((trigger) => [trigger.candidateId, trigger]))
       await mapLimit(this.config.quoteConcurrency, selected, async (candidate) => {
         try {
-          const observation = await this.quoteCandidate(candidate, fixed)
           const trigger = triggerByCandidate.get(candidate.id)
+          const observation = await this.quoteCandidate(candidate, fixed, { eventTrigger: trigger || null })
           if (trigger) {
             observation.quoteTrigger = {
               mode: 'EVENT_DRIVEN_HTTP_LOG_WAKE',
@@ -2667,13 +2768,14 @@ class OpportunityBoard {
               eventCount: trigger.eventCount,
               minBlock: trigger.minBlock.toString(),
               maxBlock: trigger.maxBlock.toString(),
-              observedLogToQuoteMs: Date.now() - trigger.firstObservedAtMs,
+              observedLogToQuoteMs: Date.now() - trigger.lastObservedAtMs,
             }
           } else {
             observation.quoteTrigger = { mode: 'PERIODIC_RECONCILIATION' }
           }
           this.observations.set(candidate.id, observation)
         } catch (error) {
+          if (error instanceof PeriodicCyclePreempted) throw error
           this.observations.set(candidate.id, {
             status: BoardStatus.UNQUOTABLE,
             quotedAt: new Date().toISOString(),
@@ -2710,11 +2812,13 @@ class OpportunityBoard {
         } catch {
           this.writeSourceCatalog(fixed.blockNumber)
         }
+        this.throwIfPeriodicPreempted()
         try {
           await this.advanceSourcePoolCatalog(fixed.blockNumber)
         } catch {
           this.writeSourceCatalog(fixed.blockNumber)
         }
+        this.throwIfPeriodicPreempted()
         try {
           await this.advanceChainCatalog(fixed.blockNumber)
           this.chainCatalogLastError = null
@@ -2726,6 +2830,7 @@ class OpportunityBoard {
           )
           this.writeSourceCatalog(fixed.blockNumber)
         }
+        this.throwIfPeriodicPreempted()
       }
       this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
       const cycleQuoterCalls =
@@ -2749,6 +2854,19 @@ class OpportunityBoard {
     } catch (error) {
       this.lastCycleAt = new Date().toISOString()
       this.cycleNumber += 1
+      if (error instanceof PeriodicCyclePreempted) {
+        const cycleQuoterCalls =
+          this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls - quoterCallsBefore
+        this.eventMetrics.periodicPreemptions += 1
+        this.eventMetrics.lastPeriodicPreemptedAt = this.lastCycleAt
+        this.eventMetrics.lastPeriodicPreemptQuoterCalls = cycleQuoterCalls
+        this.eventMetrics.lastCycleTrigger = 'PERIODIC_PREEMPTED'
+        this.eventMetrics.lastCycleCandidateCount = selectedCount
+        this.eventMetrics.lastCycleQuoterCalls = cycleQuoterCalls
+        this.eventMetrics.reconciliationQuoterCalls += cycleQuoterCalls
+        this.lastError = null
+        return this.publish('SCANNING')
+      }
       this.consecutiveErrors += 1
       this.lastError = publicError(error)
       return this.publish('DEGRADED')
