@@ -50,3 +50,10 @@ memory ceiling and 16-task ceiling reproduced the npm hang; the same unit runnin
 completed in under three seconds. The corrected unit therefore invokes `/usr/bin/env node` directly without raising
 its task, memory, credential or write boundary. Feishu delivery remains pending until that follow-up passes review and is
 installed.
+
+The next controlled start reached webhook loading and then rejected systemd's runtime credential because the reporter's
+initial check accepted only ordinary mode-0400 files. Metadata inspection proved the decrypted file was the documented
+immutable `0440 root:root` file inside the unit-specific `/run/credentials/...` mount. The correction reuses the
+project's existing credential-directory identity predicate: mode 0440 is accepted only when root-owned and located
+directly in `CREDENTIALS_DIRECTORY`; an ordinary group-readable file remains rejected. No delivery receipt existed at
+this second failure boundary.

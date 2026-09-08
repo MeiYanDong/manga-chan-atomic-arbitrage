@@ -10,6 +10,7 @@ import {
   formatFeishuDailyReport,
   readPublicBusinessSnapshot,
 } from '../src/business-operations.mjs'
+import { isSecureSystemdCredential } from '../src/journal.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUN_DIR = path.resolve(process.env.MANGA_RUN_DIR || path.join(ROOT, 'runs'))
@@ -145,8 +146,10 @@ async function currentBusinessSnapshot(delivery = deliveryState()) {
 
 function readWebhook() {
   if (!WEBHOOK_FILE) throw new Error('Feishu webhook credential file is not configured')
-  const metadata = fs.statSync(WEBHOOK_FILE)
-  if (!metadata.isFile() || metadata.size <= 0 || metadata.size > 2_048 || (metadata.mode & 0o077) !== 0) {
+  const metadata = fs.lstatSync(WEBHOOK_FILE)
+  const privateFile = (metadata.mode & 0o077) === 0
+  const systemdCredential = isSecureSystemdCredential(WEBHOOK_FILE, metadata, process.env.CREDENTIALS_DIRECTORY)
+  if (!metadata.isFile() || metadata.size <= 0 || metadata.size > 2_048 || (!privateFile && !systemdCredential)) {
     throw new Error('Feishu webhook credential permissions are invalid')
   }
   return assertFeishuWebhookUrl(fs.readFileSync(WEBHOOK_FILE, 'utf8').trim())
