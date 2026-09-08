@@ -49,3 +49,4 @@ readback remain required before the change is called production-verified.
 
 - [Story: publish a positive quote before maintenance can age it out](../stories/post-quote-execution-checkpoint.md)
 - [ADR 0022: post-quote execution-feed checkpoint](../decisions/0022-post-quote-execution-feed-checkpoint.md)
+- [Production promotion and remaining live-observation boundary](2026-09-08-post-quote-and-startup-reliability-production-promotion.md)

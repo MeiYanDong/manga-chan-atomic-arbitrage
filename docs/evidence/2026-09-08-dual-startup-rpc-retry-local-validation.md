@@ -47,3 +47,4 @@ remain required before this correction is called production-verified.
 
 - [Story: recover a dual watcher from a transient startup RPC throttle](../stories/dual-startup-rpc-retry.md)
 - [ADR 0023: bounded dual startup RPC retry before signer load](../decisions/0023-bounded-dual-startup-rpc-retry.md)
+- [Production promotion and remaining live-retry boundary](2026-09-08-post-quote-and-startup-reliability-production-promotion.md)

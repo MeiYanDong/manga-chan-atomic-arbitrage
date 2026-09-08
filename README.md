@@ -76,11 +76,15 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free board and dual watcher are running release `4c1a53f80dca0afd4d1cc44b1961d89d6a458981`. The source
+- The signer-free board and dual watcher are running release `d7f15d3f8c60aa77e8c560adfdda0c5970d23be7`. The source
   census remains in its streamed catalog and evidence stores, while dashboard control routes build no opportunity
   objects and Radar lists only the current board-admitted set. The board survived repeated production API reads and
   complete catalog streaming under the unchanged 448 MiB pressure threshold and 512 MiB hard limit with zero restarts
   and zero OOM events. It remains loopback-only and has no signer or broadcast path.
+- A proxy-positive quote now checkpoints the compact execution feed before slower catalog maintenance, preserving the
+  30-second signer horizon without weakening the `0.1 USDG` screened/exact floor. Dual startup reads retry transient
+  RPC failures five times before loading the private credential. The production restart and subsequent public-RPC
+  throttle recovery are verified; the live positive-checkpoint path and live startup-retry branch remain unexercised.
 - The board and explicitly opted-in execution fallback currently use Robinhood's official public RPC because the
   configured ChainStack service was paused for billing. Public RPC throttling, latency and ambiguous-broadcast risk
   remain admitted limitations; idle dual-v3 reads only the local feed and touches execution RPC only after a screened
@@ -118,6 +122,10 @@ for the quote-to-feed latency diagnosis, bounded correction and pre-production t
 See
 [`docs/evidence/2026-09-08-dual-startup-rpc-retry-local-validation.md`](docs/evidence/2026-09-08-dual-startup-rpc-retry-local-validation.md)
 for the public-RPC startup throttle, safe recovery and bounded retry design.
+See
+[`docs/evidence/2026-09-08-post-quote-and-startup-reliability-production-promotion.md`](docs/evidence/2026-09-08-post-quote-and-startup-reliability-production-promotion.md)
+for both reviewed promotions, Linux gates, controlled production restart, throttle recovery and final chain/runtime
+readback.
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
