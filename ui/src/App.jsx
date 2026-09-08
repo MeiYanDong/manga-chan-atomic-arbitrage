@@ -952,10 +952,13 @@ export default function App() {
   }, [])
   const state = useConsoleData()
   useEffect(() => {
-    const update = () => setPage(currentPage(window.location.hash))
+    const update = () => {
+      closeDrawer()
+      setPage(currentPage(window.location.hash))
+    }
     window.addEventListener('hashchange', update)
     return () => window.removeEventListener('hashchange', update)
-  }, [])
+  }, [closeDrawer])
 
   let content
   if (page === 'opportunities') {

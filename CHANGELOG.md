@@ -7,6 +7,8 @@
   hides exact values, addresses and provenance evidence behind deliberate disclosures.
 - Simplified the Feishu daily report around verified net profit, executions, failed Gas, reinvestable capital and
   actionable opportunity counts.
+- Close opportunity evidence automatically when navigation changes so technical detail cannot remain over another
+  product page.
 
 - Add a private business-first dashboard with Beijing-day receipt economics, authorized USDG/WETH reinvestment,
   seven-day results, source separation and Blockscout-linked transactions. Publish it through a validated sanitized

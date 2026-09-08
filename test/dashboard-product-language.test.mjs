@@ -33,6 +33,11 @@ test('addresses and technical evidence are hidden behind an explicit disclosure'
   assert.match(app, /查看技术信息与完整证据/)
 })
 
+test('route changes dismiss an open evidence drawer', () => {
+  assert.match(app, /const update = \(\) => \{\s*closeDrawer\(\)\s*setPage\(currentPage\(window\.location\.hash\)\)/)
+  assert.match(app, /\}, \[closeDrawer\]\)/)
+})
+
 test('the default document declares a light Chinese operations product', () => {
   assert.match(html, /lang="zh-CN"/)
   assert.match(html, /name="color-scheme" content="light"/)
