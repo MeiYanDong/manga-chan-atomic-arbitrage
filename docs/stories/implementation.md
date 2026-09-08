@@ -186,12 +186,15 @@ Acceptance:
 - event state never substitutes for a fixed-block quote;
 - a slow round-robin reconciliation remains enabled for dependency coverage;
 - runtime exposes event wakes, exact candidate count, Quoter-call totals and observed-log-to-quote latency.
-- same-block anchor requests are deduplicated; V3 Factory and Quoter reads use code-hash-pinned Multicall3 aggregation,
-  while an incomplete result set trips one cycle-level circuit instead of being cached as pool absence;
+- same-block anchor requests are deduplicated; V3 Factory and Quoter reads use code-hash-pinned Multicall3 groups of no
+  more than four calls, and every failed subcall is re-read directly before it can become pool absence;
+- a direct transport failure stops the fallback sequence and trips one cycle-level circuit rather than amplifying a
+  provider outage across the remaining paths;
 - a mandatory periodic deadline prevents continuous event traffic from starving coverage rotation and chain backfill.
 
-Status: implementation and deterministic tests are complete. The prior JSON-batch production path was rejected after
-incomplete envelopes and public-RPC throttling; Multicall production latency and request reduction remain pending.
+Status: revised implementation and deterministic tests are complete. The unbounded v0.7.3 Multicall canary was rejected
+after the public RPC refused an 18-path aggregate and produced a heavy-path false negative in a four-call group. The
+bounded direct-verification path remains pending production acceptance.
 
 ## S17 — Hot-cursor progress independent of quote latency
 
