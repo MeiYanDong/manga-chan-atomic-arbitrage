@@ -1,6 +1,6 @@
 # ADR 0031: preemptible event hot path
 
-- Status: Accepted; v0.7.9 production acceptance pending
+- Status: Accepted and production-verified on v0.7.9
 - Date: 2026-09-09
 
 ## Context
