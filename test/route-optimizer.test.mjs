@@ -6,6 +6,7 @@ import {
   equivalentWethAmountGrid,
   parseUsdgAmountGrid,
   refinementAmounts,
+  selectV4RoutePairs,
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
 
@@ -50,6 +51,23 @@ test('selection maximizes absolute net profit instead of ROI or input size', () 
     { amountIn: 25_000_000n, grossProfitUsdg: 500_000n, screenedNetUsdg: 300_000n },
   ])
   assert.equal(lowerCapitalTie.amountIn, 10_000_000n)
+})
+
+test('V4 route-pair topology is ranked, deduplicated and bounded', () => {
+  const route = (entry, exit, net) => ({
+    entry: { pool: { poolId: entry } },
+    exitPool: { poolId: exit },
+    screening: { normalizedScreenedNetUsdg: net },
+  })
+  assert.deepEqual(
+    selectV4RoutePairs([route('0xAA', '0xBB', 2n), route('0xaa', '0xbb', 1n), route('0xCC', '0xDD', 3n)], 2),
+    [
+      { entryPoolId: '0xcc', exitPoolId: '0xdd' },
+      { entryPoolId: '0xaa', exitPoolId: '0xbb' },
+    ],
+  )
+  assert.deepEqual(selectV4RoutePairs([route('0xAA', '0xaa', 3n)], 2), [])
+  assert.throws(() => selectV4RoutePairs([], 0), /positive integer/)
 })
 
 test('adaptive expansion reacts to edge, previous actionability, priority and periodic coverage', () => {

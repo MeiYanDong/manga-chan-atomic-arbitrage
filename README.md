@@ -318,9 +318,12 @@ The hot path uses bounded public-HTTP `eth_getLogs` ranges for PoolManager and p
 cycle consumes at most four queued candidates, and priority, positive and coverage rows share the same four-candidate
 periodic cap. Route topology can be reused across cycles, but every retained V3 path is freshly quoted at the current
 fixed block. Event cycles do not enumerate every fee route; periodic cycles refresh at most two stale directions so
-coverage work remains bounded. Events only choose what to requote; they never substitute a local price calculation for
-the fixed-block Quoter result. Runtime evidence is available at `/api/event-metrics` and `/api/chain-catalog` through
-the same loopback-only SSH tunnel.
+coverage work remains bounded. A direction without prior successful evidence probes at most eight deterministic
+low-fee paths until a periodic full-discovery slot is available. For multiple amounts in one cycle, the first amount
+searches the complete V4 pool set and later amounts freshly quote only its three strongest pool pairs at that same
+block. Events only choose what to requote; they never substitute a local price calculation for the fixed-block Quoter
+result. Runtime evidence is available at `/api/event-metrics` and `/api/chain-catalog` through the same loopback-only
+SSH tunnel.
 
 The private source-aware console and read-only API are served on the same loopback listener. The console uses four
 operator tasks: 总览, 机会, 账单 and 更多. It starts with the current strategy result, separates account-wide history,

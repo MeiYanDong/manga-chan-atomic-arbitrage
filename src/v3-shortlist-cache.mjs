@@ -6,6 +6,31 @@ export function v3DirectionKey(tokenIn, tokenOut, bridgeToken) {
   return `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}:${bridgeToken.toLowerCase()}`
 }
 
+/**
+ * Pick a deterministic, bounded first-look set before any route has successful
+ * quote evidence. Lower aggregate fee is only a discovery heuristic; every
+ * selected path still goes through the canonical Quoter and later periodic
+ * work can run the complete topology search.
+ *
+ * @param {Record<string, any>[]} routes
+ * @param {number} limit
+ */
+export function selectV3BootstrapRoutes(routes, limit) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('V3 bootstrap limit must be a positive integer')
+  const unique = new Map()
+  for (const route of routes) {
+    const normalized = normalizeRoute(route)
+    if (normalized) unique.set(normalized.path.toLowerCase(), normalized)
+  }
+  return [...unique.values()]
+    .sort((left, right) => {
+      const leftFee = left.fees.reduce((sum, fee) => sum + fee, 0)
+      const rightFee = right.fees.reduce((sum, fee) => sum + fee, 0)
+      return leftFee - rightFee || left.fees.length - right.fees.length || left.path.localeCompare(right.path)
+    })
+    .slice(0, limit)
+}
+
 /** @param {Record<string, any>} route */
 function normalizeRoute(route) {
   const tokens = Array.isArray(route?.tokens) ? route.tokens : []

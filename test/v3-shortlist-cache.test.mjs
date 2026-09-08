@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { V3ShortlistCache, seedV3ShortlistsFromObservations, v3DirectionKey } from '../src/v3-shortlist-cache.mjs'
+import {
+  V3ShortlistCache,
+  seedV3ShortlistsFromObservations,
+  selectV3BootstrapRoutes,
+  v3DirectionKey,
+} from '../src/v3-shortlist-cache.mjs'
 
 const USDG = `0x${'1'.repeat(40)}`
 const WETH = `0x${'2'.repeat(40)}`
@@ -77,4 +82,21 @@ test('drops malformed or path-inconsistent route evidence rather than seeding it
   assert.equal(cache.set(key, [{ tokens: [USDG], fees: [], poolAddresses: [], path: '0x' }]), false)
   assert.equal(cache.set(key, [{ ...route(100, POOL_A), path: route(500, POOL_A).path }]), false)
   assert.equal(cache.size, 0)
+})
+
+test('bootstrap discovery is deterministic, deduplicated and hard bounded', () => {
+  const direct100 = route(100, POOL_A)
+  const direct500 = route(500, POOL_B)
+  const bridge = {
+    tokens: [USDG, WETH, STOCK],
+    fees: [100, 100],
+    poolAddresses: [POOL_A, POOL_B],
+    path: `${USDG}000064${WETH.slice(2)}000064${STOCK.slice(2)}`,
+  }
+  const selected = selectV3BootstrapRoutes([direct500, bridge, direct100, direct100], 2)
+  assert.deepEqual(
+    selected.map((item) => item.path),
+    [direct100.path, bridge.path],
+  )
+  assert.throws(() => selectV3BootstrapRoutes([], 0), /positive integer/)
 })
