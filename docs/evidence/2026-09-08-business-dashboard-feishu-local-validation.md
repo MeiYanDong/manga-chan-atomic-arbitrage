@@ -41,3 +41,12 @@ convenience state file was absent.
 This checkpoint proves local calculation, presentation, credential-reference and isolation behavior. It does not prove
 Linux unit validity, production installation, a Feishu delivery, a live transaction, current production state or profit.
 Those require Linux CI plus production readback and a Feishu response-code-0 receipt.
+
+## Production-entrypoint follow-up
+
+The first installed one-shot used `npm run` under `TasksMax=16`. Production reproduced a 45-second startup timeout before
+any snapshot or delivery receipt existed. A transient Linux unit with the same user, group, filesystem sandbox, 128 MiB
+memory ceiling and 16-task ceiling reproduced the npm hang; the same unit running the script as one direct Node process
+completed in under three seconds. The corrected unit therefore invokes `/usr/bin/env node` directly without raising
+its task, memory, credential or write boundary. Feishu delivery remains pending until that follow-up passes review and is
+installed.
