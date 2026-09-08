@@ -362,6 +362,62 @@ export function planHotLogRange(nextBlock, head, options) {
 }
 
 /**
+ * Keep the latency-sensitive event cursor near the canonical head. Historical
+ * catalog cursors retain their own completeness guarantees; this cursor may
+ * skip an old interval only when the gap is recorded explicitly.
+ *
+ * @param {Record<string, any>} cursor
+ * @param {bigint} head
+ * @param {{confirmations: bigint, maxLagBlocks: bigint, reorgLookback: bigint, observedAt?: string}} options
+ */
+export function recoverStaleHotCursor(cursor, head, options) {
+  if (options.confirmations < 0n || options.maxLagBlocks <= 0n || options.reorgLookback <= 0n) {
+    throw new Error('invalid stale hot cursor policy')
+  }
+  const safeHead = head > options.confirmations ? head - options.confirmations : 0n
+  if (cursor?.nextBlock === null || cursor?.nextBlock === undefined) {
+    return { cursor: { ...cursor }, safeHead, lagBlocks: 0n, fastForwarded: false, gap: null }
+  }
+  const nextBlock = BigInt(cursor.nextBlock)
+  const lagBlocks = nextBlock <= safeHead ? safeHead - nextBlock + 1n : 0n
+  if (lagBlocks <= options.maxLagBlocks) {
+    return { cursor: { ...cursor }, safeHead, lagBlocks, fastForwarded: false, gap: null }
+  }
+
+  const resumeBlock = safeHead + 1n > options.reorgLookback ? safeHead - options.reorgLookback + 1n : 0n
+  if (resumeBlock <= nextBlock) {
+    return { cursor: { ...cursor }, safeHead, lagBlocks, fastForwarded: false, gap: null }
+  }
+  const observedAt = options.observedAt || new Date().toISOString()
+  const gap = {
+    reason: 'STALE_REALTIME_CURSOR_FAST_FORWARD',
+    fromBlock: nextBlock.toString(),
+    toBlock: (resumeBlock - 1n).toString(),
+    skippedBlocks: (resumeBlock - nextBlock).toString(),
+    resumedAtBlock: resumeBlock.toString(),
+    safeHead: safeHead.toString(),
+    observedAt,
+  }
+  return {
+    cursor: {
+      ...cursor,
+      nextBlock: resumeBlock.toString(),
+      lastProcessedBlock: null,
+      lastProcessedBlockHash: null,
+      fastForwardCount: Number(cursor.fastForwardCount || 0) + 1,
+      skippedRealtimeBlocks: (BigInt(cursor.skippedRealtimeBlocks || 0) + BigInt(gap.skippedBlocks)).toString(),
+      lastFastForwardAt: observedAt,
+      lastCoverageGap: gap,
+      coverageMode: 'REALTIME_WITH_EXPLICIT_GAPS',
+    },
+    safeHead,
+    lagBlocks,
+    fastForwarded: true,
+    gap,
+  }
+}
+
+/**
  * Verify the persisted canonical anchor before advancing. A mismatch rewinds a
  * bounded number of blocks and makes the replay explicit.
  *

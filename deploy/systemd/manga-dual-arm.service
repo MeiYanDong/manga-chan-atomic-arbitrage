@@ -15,6 +15,9 @@ EnvironmentFile=/etc/manga-chan-arbitrage/live.env
 EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
 Environment=MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
+# Trigger read-only exact preflight at 0.05 USDG while retaining the separate
+# 0.10 USDG exact-net requirement from live.env before any signature.
+Environment=MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0.05
 LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
 Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
 UMask=0077

@@ -616,6 +616,13 @@ p {
   line-height: 1.6;
 }
 
+.summary-footnote {
+  margin-top: 8px;
+  color: var(--muted-light);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .summary-card-profit {
   border-top: 3px solid var(--green);
 }

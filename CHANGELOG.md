@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Split the latency-sensitive event cursor from historical completeness: cap public-RPC hot log ranges, detect stale
+  cursor lag, record every skipped interval, and resume near the confirmed head with a reorg lookback instead of
+  replaying day-old swaps as if they were current.
+- Separate the `0.05 USDG` signer-free screen trigger from the unchanged `0.10 USDG` exact signed-net floor. Near-edge
+  rows now receive a same-block exact call and gas estimate; only an independently profitable exact result can sign.
+- Surface exact-preflight activity and plain-language real-time event health in the Chinese operations console.
 - Rebuilt the private dashboard as a Chinese-first four-page operations console. It now separates current-strategy
   results from account history, groups opportunities by actionability, presents transactions as a readable ledger and
   hides exact values, addresses and provenance evidence behind deliberate disclosures.

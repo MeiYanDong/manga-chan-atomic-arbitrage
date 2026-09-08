@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   DUAL_AUTHORIZATION_LIFETIME,
+  DUAL_AUTHORIZATION_POLICY_VERSION,
   DUAL_PRINCIPAL_POLICY,
   dualAuthorizationId,
   dualAuthorizationUsage,
@@ -9,6 +10,7 @@ import {
   evaluateDualAuthorizationBudget,
   normalizeWethToUsdg,
   selectBestExactEvaluation,
+  validateDualProfitFloors,
   validateDualSignedAttempt,
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
@@ -54,6 +56,31 @@ test('converts a common USDG net floor into WETH conservatively', () => {
   assert.equal(wethFloorFromUsdg(100_000n, 4_000_000_000_000_000n, 12_000_000n), 33_333_333_333_334n)
   assert.equal(normalizeWethToUsdg(33_333_333_333_334n, 4_000_000_000_000_000n, 12_000_000n), 100_000n)
   assert.equal(normalizeWethToUsdg(33_333_333_333_333n, 4_000_000_000_000_000n, 12_000_000n), 99_999n)
+})
+
+test('screen floor can trigger exact preflight without lowering the signed execution floor', () => {
+  assert.deepEqual(validateDualProfitFloors(50_000n, 100_000n), {
+    screenedNetFloorUsdg: 50_000n,
+    exactNetFloorUsdg: 100_000n,
+  })
+  assert.throws(() => validateDualProfitFloors(0n, 100_000n), /positive/)
+  assert.throws(() => validateDualProfitFloors(100_001n, 100_000n), /no greater/)
+
+  const authorization = arm({
+    policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION,
+    minimumScreenedNetProfitUsdgWei: '50000',
+  })
+  assert.deepEqual(evaluateDualAuthorizationBudget(authorization, { failedGasWei: 0n }), {
+    allowed: true,
+    reason: null,
+  })
+  assert.deepEqual(
+    evaluateDualAuthorizationBudget(
+      arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION, minimumScreenedNetProfitUsdgWei: '100001' }),
+      { failedGasWei: 0n },
+    ),
+    { allowed: false, reason: 'invalid-profit-floors' },
+  )
 })
 
 test('selects the largest same-block normalized exact net across bases', () => {

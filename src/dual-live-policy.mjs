@@ -3,6 +3,24 @@ import { stableStringify } from './journal.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v2'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v1'
+
+/**
+ * The cheap board screen may be more permissive than the exact execution
+ * floor, but it may never be zero or stricter than the execution floor. This
+ * admits near-threshold read-only preflights without lowering the signed net
+ * profit requirement.
+ *
+ * @param {bigint} screenedNetFloorUsdg
+ * @param {bigint} exactNetFloorUsdg
+ */
+export function validateDualProfitFloors(screenedNetFloorUsdg, exactNetFloorUsdg) {
+  if (exactNetFloorUsdg <= 0n || screenedNetFloorUsdg <= 0n || screenedNetFloorUsdg > exactNetFloorUsdg) {
+    throw new Error('screened-net floor must be positive and no greater than the exact execution floor')
+  }
+  return { screenedNetFloorUsdg, exactNetFloorUsdg }
+}
 
 /** @param {bigint} numerator @param {bigint} denominator */
 export function ceilDiv(numerator, denominator) {
@@ -237,7 +255,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
   if (
     arm.schemaVersion !== 1 ||
     arm.mode !== 'AUTO_POLICY' ||
-    arm.policyVersion !== 'dual-base-loopback-escalation-v1' ||
+    ![DUAL_AUTHORIZATION_POLICY_VERSION, LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION].includes(arm.policyVersion) ||
     arm.authorizationLifetime !== DUAL_AUTHORIZATION_LIFETIME ||
     arm.principalPolicy !== DUAL_PRINCIPAL_POLICY ||
     arm.expiresAt !== undefined
@@ -245,12 +263,21 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     return { allowed: false, reason: 'invalid-authorization-policy' }
   }
   let maxFailedGas
+  let minimumNetProfitUsdg
+  let minimumScreenedNetProfitUsdg
   try {
     maxFailedGas = BigInt(arm.maxFailedGasWei)
+    minimumNetProfitUsdg = BigInt(arm.minimumNetProfitUsdgWei)
+    minimumScreenedNetProfitUsdg = BigInt(arm.minimumScreenedNetProfitUsdgWei)
   } catch {
-    return { allowed: false, reason: 'invalid-failed-gas-limit' }
+    return { allowed: false, reason: 'invalid-authorization-economics' }
   }
   if (maxFailedGas <= 0n) return { allowed: false, reason: 'invalid-failed-gas-limit' }
+  try {
+    validateDualProfitFloors(minimumScreenedNetProfitUsdg, minimumNetProfitUsdg)
+  } catch {
+    return { allowed: false, reason: 'invalid-profit-floors' }
+  }
   if (usage.failedGasWei >= maxFailedGas) return { allowed: false, reason: 'failed-gas-limit' }
   return { allowed: true, reason: null }
 }
