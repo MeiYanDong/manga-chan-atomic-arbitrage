@@ -1,6 +1,6 @@
 # ADR 0024: sanitized business dashboard and isolated Feishu reporting
 
-- Status: Accepted; production promotion pending
+- Status: Accepted; production-promoted on release `803caaaaae11a5c8cbef00bcab4aaa23ac2eb919`
 - Date: 2026-09-08
 
 ## Context
