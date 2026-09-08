@@ -55,6 +55,7 @@ test('dashboard client is same-origin, read-only and free of signer material', (
   assert.match(app, /requestOptionalJson\('\/api\/v1\/business'/)
   assert.match(app, /不能授权、签名或发起交易/)
   assert.match(app, /RPC 自动重试 \/ 降级/)
+  assert.match(styles, /\.page-stack\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s)
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/)
 })
 
