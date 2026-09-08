@@ -78,6 +78,7 @@ import {
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
 import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
+import { readWithBoundedMulticall } from '../src/rpc-multicall.mjs'
 import { BoardStore } from '../src/board-store.mjs'
 import { readPublicBusinessSnapshot } from '../src/business-operations.mjs'
 import {
@@ -276,6 +277,7 @@ function loadConfig() {
     rpcHttpConcurrency: integer(process.env.MANGA_BOARD_RPC_HTTP_CONCURRENCY, 2),
     rpcLogicalAttempts: integer(process.env.MANGA_BOARD_RPC_LOGICAL_ATTEMPTS, 3),
     rpcRetryDelayMs: integer(process.env.MANGA_BOARD_RPC_RETRY_DELAY_MS, 200, 0),
+    multicallMaxCalls: integer(process.env.MANGA_BOARD_MULTICALL_MAX_CALLS, 4),
     eventPollMs: integer(process.env.MANGA_BOARD_EVENT_POLL_MS, 4_000, 1_000),
     eventConfirmations: BigInt(integer(process.env.MANGA_BOARD_EVENT_CONFIRMATIONS, 2, 0)),
     eventMaxBlockRange: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_BLOCK_RANGE, 200)),
@@ -663,6 +665,10 @@ class OpportunityBoard {
       multicallRpcBatches: 0,
       multicallSubcalls: 0,
       multicallFailures: 0,
+      multicallFailedSubcalls: 0,
+      multicallDirectFallbacks: 0,
+      multicallDirectRecoveries: 0,
+      multicallTransientStops: 0,
       multicallCodeHash: null,
       rpcBatchFallbacks: 0,
     }
@@ -750,6 +756,7 @@ class OpportunityBoard {
           batchSize: this.config.rpcBatchSize,
           batchWaitMs: this.config.rpcBatchWaitMs,
           maxHttpConcurrency: this.config.rpcHttpConcurrency,
+          multicallMaxCalls: this.config.multicallMaxCalls,
           activeMode: this.rpcTransportMode,
           fallbackAt: this.rpcBatchFallbackAt,
           fallbackReason: this.rpcBatchFallbackReason,
@@ -767,6 +774,7 @@ class OpportunityBoard {
           amountQuoteConcurrency: this.config.amountQuoteConcurrency,
           rpcLogicalAttempts: this.config.rpcLogicalAttempts,
           rpcRetryDelayMs: this.config.rpcRetryDelayMs,
+          multicallMaxCalls: this.config.multicallMaxCalls,
         },
         quoteRpcTotals: { ...this.quoteRpcMetrics },
       },
@@ -1723,6 +1731,11 @@ class OpportunityBoard {
         args: [tokenA, tokenB, fee],
       })),
       blockNumber,
+      (contract) =>
+        this.retryRpc(
+          () => this.client.readContract({ ...contract, blockNumber }),
+          () => true,
+        ),
     )
     const rejected = reads.filter((result) => result.status === 'failure')
     if (rejected.length > 0) {
@@ -1770,26 +1783,34 @@ class OpportunityBoard {
     this.quoteRpcMetrics.multicallCodeHash = codeHash
   }
 
-  /** @param {Record<string, any>[]} contracts @param {bigint} blockNumber */
-  async readMulticall(contracts, blockNumber) {
+  /** @param {Record<string, any>[]} contracts @param {bigint} blockNumber @param {(contract: Record<string, any>) => Promise<any>} readDirect */
+  async readMulticall(contracts, blockNumber, readDirect) {
     if (contracts.length === 0) return []
     await this.ensureReadMulticall(blockNumber)
-    this.quoteRpcMetrics.multicallRpcBatches += 1
-    this.quoteRpcMetrics.multicallSubcalls += contracts.length
-    try {
-      return await this.retryRpc(() =>
-        this.client.multicall({
-          contracts,
-          multicallAddress: MULTICALL3,
-          allowFailure: true,
-          batchSize: 0,
-          blockNumber,
-        }),
-      )
-    } catch (error) {
-      this.quoteRpcMetrics.multicallFailures += 1
-      throw error
-    }
+    const { results, stats } = await readWithBoundedMulticall({
+      contracts,
+      maxCalls: this.config.multicallMaxCalls,
+      isTransient: quoteTransportIsIncomplete,
+      readBatch: (chunk) =>
+        this.retryRpc(() =>
+          this.client.multicall({
+            contracts: chunk,
+            multicallAddress: MULTICALL3,
+            allowFailure: true,
+            batchSize: 0,
+            blockNumber,
+          }),
+        ),
+      readDirect,
+    })
+    this.quoteRpcMetrics.multicallRpcBatches += stats.batchRequests
+    this.quoteRpcMetrics.multicallSubcalls += stats.batchedSubcalls
+    this.quoteRpcMetrics.multicallFailures += stats.aggregateFailures
+    this.quoteRpcMetrics.multicallFailedSubcalls += stats.failedSubcalls
+    this.quoteRpcMetrics.multicallDirectFallbacks += stats.directFallbacks
+    this.quoteRpcMetrics.multicallDirectRecoveries += stats.directRecoveries
+    this.quoteRpcMetrics.multicallTransientStops += stats.transientStops
+    return results
   }
 
   /** @param {unknown} error */
@@ -1885,6 +1906,15 @@ class OpportunityBoard {
         args: [candidate.path, amountIn],
       })),
       blockNumber,
+      (contract) =>
+        this.retryRpc(async () => {
+          const { result } = await this.client.simulateContract({
+            account: ZERO_ADDRESS,
+            ...contract,
+            blockNumber,
+          })
+          return result
+        }),
     )
     const quoteResults = multicallResults.map((item, index) =>
       item.status === 'success'

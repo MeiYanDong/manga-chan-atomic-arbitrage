@@ -208,12 +208,14 @@ marked executor-compatible.
 Priority candidates and current positive rows are covered by the periodic reconciliation cursor. Between those sweeps,
 PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call counts and event-to-quote latency
 are published as runtime metrics. Equivalent V3 anchor requests are deduplicated only within the same fixed block.
-V3 Factory reads and V3 Quoter paths are grouped through the code-hash-pinned canonical Multicall3 contract at that same
-block; every subcall retains its independent success, revert and decoded Gas estimate. V4 Quoter calls remain direct so
-their caller and hook context does not change. JSON-RPC batching is disabled on the public endpoint after production
-proved its envelopes incomplete. HTTP POST counts, Multicall groups and subcalls remain separate measurements and are
-never represented as provider billing-unit savings. No reduction target is considered met until a deployed observation
-window measures it.
+V3 Factory reads and V3 Quoter paths are grouped in at most four calls through the code-hash-pinned canonical
+Multicall3 contract at that same block. Every failed aggregate subcall is repeated once through the original direct read
+path: a direct success recovers a provider execution-budget false negative, while a direct contract revert remains an
+unquotable route. The first direct transport failure stops further fallback fan-out and fails the cycle closed. V4
+Quoter calls remain direct so their caller and hook context does not change. JSON-RPC batching is disabled on the public
+endpoint after production proved its envelopes incomplete. HTTP POST counts, Multicall groups, failed subcalls, direct
+fallbacks and recoveries remain separate measurements and are never represented as provider billing-unit savings. No
+reduction target is considered met until a deployed observation window measures it.
 
 Candidate concurrency and within-candidate leg concurrency are separate controls. The conservative public profile
 quotes one candidate at a time, while V3 paths share bounded onchain read aggregation; this reduces request bursts
