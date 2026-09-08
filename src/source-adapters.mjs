@@ -708,7 +708,7 @@ export function compactSourceCatalogProjectionInPlace(sourceCatalog) {
   }
 }
 
-export function selectVisibleDopplerLaunches({
+function dopplerVisibilityPredicate({
   dopplerTargetIndex = [],
   pools = [],
   pairListings = [],
@@ -725,21 +725,33 @@ export function selectVisibleDopplerLaunches({
   }
   const explicitlyVisible = sourceTargetAddresses({ pairListings, longLaunches })
   const nextPoolBlock = BigInt(poolCursor)
-  return dopplerTargetIndex
-    .filter((target) => {
-      const key = target.asset.toLowerCase()
-      const pendingPoolScan = BigInt(target.blockNumber) >= nextPoolBlock
-      return explicitlyVisible.has(key) || Number(poolCounts.get(key) || 0) >= 2 || pendingPoolScan
-    })
-    .map((target) => ({
-      adapterId: 'doppler.registry.v1',
-      protocolId: ProtocolId.DOPPLER,
-      attributionStatus: 'CHAIN_ATTESTED',
-      asset: target.asset,
-      numeraire: target.numeraire,
-      blockNumber: target.blockNumber,
-      evidenceId: target.evidenceId,
-    }))
+  return (target) => {
+    const key = target.asset.toLowerCase()
+    const pendingPoolScan = BigInt(target.blockNumber) >= nextPoolBlock
+    return explicitlyVisible.has(key) || Number(poolCounts.get(key) || 0) >= 2 || pendingPoolScan
+  }
+}
+
+export function countVisibleDopplerLaunches(input) {
+  const isVisible = dopplerVisibilityPredicate(input)
+  let count = 0
+  for (const target of input.dopplerTargetIndex || []) {
+    if (isVisible(target)) count += 1
+  }
+  return count
+}
+
+export function selectVisibleDopplerLaunches(input) {
+  const isVisible = dopplerVisibilityPredicate(input)
+  return (input.dopplerTargetIndex || []).filter(isVisible).map((target) => ({
+    adapterId: 'doppler.registry.v1',
+    protocolId: ProtocolId.DOPPLER,
+    attributionStatus: 'CHAIN_ATTESTED',
+    asset: target.asset,
+    numeraire: target.numeraire,
+    blockNumber: target.blockNumber,
+    evidenceId: target.evidenceId,
+  }))
 }
 
 export function boundSourceCatalogPools(sourceCatalog, { observedAt = new Date().toISOString() } = {}) {

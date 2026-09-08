@@ -37,9 +37,10 @@ function shortAddress(value) {
   return value ? `${value.slice(0, 6)}…${value.slice(-4)}` : 'UNKNOWN'
 }
 
-function metadataIndex(snapshot, sourceCatalog) {
+function metadataIndex(snapshot, sourceCatalog, targetAddresses = null) {
   const metadata = new Map(KNOWN_ASSET_LABELS)
   for (const listing of sourceCatalog?.pairListings || []) {
+    if (targetAddresses && !targetAddresses.has(listing.targetAddress.toLowerCase())) continue
     metadata.set(listing.targetAddress.toLowerCase(), {
       symbol: listing.symbol || shortAddress(listing.targetAddress),
       name: listing.name || listing.symbol || shortAddress(listing.targetAddress),
@@ -62,6 +63,7 @@ function metadataIndex(snapshot, sourceCatalog) {
     }
   }
   for (const launch of sourceCatalog?.longLaunches || []) {
+    if (targetAddresses && !targetAddresses.has(launch.asset.toLowerCase())) continue
     if (launch.asset && launch.normalizedTicker) {
       metadata.set(launch.asset.toLowerCase(), {
         symbol: launch.normalizedTicker,
@@ -153,7 +155,10 @@ function quoteState(lane) {
 }
 
 function evidenceTimeline({ listings, longLaunches, dopplerLaunches, pools, sourceEvidence }) {
-  const envelopes = new Map((sourceEvidence || []).map((item) => [item.evidenceId, item]))
+  const envelopes =
+    sourceEvidence instanceof Map
+      ? sourceEvidence
+      : new Map((sourceEvidence || []).map((item) => [item.evidenceId, item]))
   const sourceFacts = [
     ...longLaunches.map((fact) => ({ fact, producer: 'LONG_LAUNCHER_LOG_ADAPTER' })),
     ...dopplerLaunches.map((fact) => ({ fact, producer: 'DOPPLER_CREATE_LOG_ADAPTER' })),
@@ -216,9 +221,11 @@ function currentItems(snapshot) {
   )
 }
 
-function sourceIndex(sourceCatalog) {
+function sourceIndex(sourceCatalog, targetAddresses = null) {
   const output = new Map()
   const ensure = (rawAddress) => {
+    const rawKey = String(rawAddress || '').toLowerCase()
+    if (targetAddresses && !targetAddresses.has(rawKey)) return null
     const address = safeAddress(rawAddress)
     if (!address || address.toLowerCase() === ZERO_ADDRESS) return null
     const key = address.toLowerCase()
@@ -236,18 +243,35 @@ function sourceIndex(sourceCatalog) {
     (sourceCatalog?.adapters?.['uniswap-v4.pool-manager.v1']?.scannedThroughBlock
       ? (BigInt(sourceCatalog.adapters['uniswap-v4.pool-manager.v1'].scannedThroughBlock) + 1n).toString()
       : '0')
-  const dopplerLaunches = Array.isArray(persistedDopplerLaunches)
-    ? persistedDopplerLaunches
-    : selectVisibleDopplerLaunches({
-        dopplerTargetIndex: sourceCatalog?.dopplerTargetIndex || [],
-        pools,
-        pairListings,
-        longLaunches,
-        poolCursor,
-      })
   for (const listing of pairListings) ensure(listing.targetAddress)?.listings.push(listing)
   for (const launch of longLaunches) ensure(launch.asset)?.longLaunches.push(launch)
-  for (const launch of dopplerLaunches) ensure(launch.asset)?.dopplerLaunches.push(launch)
+  if (Array.isArray(persistedDopplerLaunches)) {
+    for (const launch of persistedDopplerLaunches) ensure(launch.asset)?.dopplerLaunches.push(launch)
+  } else if (targetAddresses) {
+    for (const target of sourceCatalog?.dopplerTargetIndex || []) {
+      const facts = ensure(target.asset)
+      if (!facts) continue
+      facts.dopplerLaunches.push({
+        adapterId: 'doppler.registry.v1',
+        protocolId: ProtocolId.DOPPLER,
+        attributionStatus: AttributionStatus.CHAIN_ATTESTED,
+        asset: target.asset,
+        numeraire: target.numeraire,
+        blockNumber: target.blockNumber,
+        evidenceId: target.evidenceId,
+      })
+    }
+  } else {
+    for (const launch of selectVisibleDopplerLaunches({
+      dopplerTargetIndex: sourceCatalog?.dopplerTargetIndex || [],
+      pools,
+      pairListings,
+      longLaunches,
+      poolCursor,
+    })) {
+      ensure(launch.asset)?.dopplerLaunches.push(launch)
+    }
+  }
   for (const pool of pools) {
     ensure(pool.currency0)?.pools.push(pool)
     ensure(pool.currency1)?.pools.push(pool)
@@ -270,11 +294,20 @@ function quoteAddresses(item, facts) {
   return [...output]
 }
 
-export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
-  const metadata = metadataIndex(snapshot, sourceCatalog)
-  const assetRegistry = canonicalAssetRegistry(sourceCatalog)
+export function projectDashboardOpportunities({
+  snapshot,
+  sourceCatalog,
+  includeSourceOnly = true,
+  includeDetails = true,
+}) {
   const current = currentItems(snapshot)
-  const sources = sourceIndex(sourceCatalog)
+  const targetAddresses = includeSourceOnly ? null : new Set(current.keys())
+  const metadata = metadataIndex(snapshot, sourceCatalog, targetAddresses)
+  const assetRegistry = canonicalAssetRegistry(sourceCatalog)
+  const sources = sourceIndex(sourceCatalog, targetAddresses)
+  const sourceEvidence = includeDetails
+    ? new Map((sourceCatalog?.evidence || []).map((item) => [item.evidenceId, item]))
+    : null
   for (const [address] of current) {
     if (!sources.has(address)) {
       sources.set(address, {
@@ -292,7 +325,7 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
     const item = current.get(key) || null
     const sourceOnlyEligible =
       facts.longLaunches.length > 0 || facts.dopplerLaunches.length > 0 || facts.pools.length >= 2
-    if (!item && !sourceOnlyEligible) continue
+    if (!item && (!includeSourceOnly || !sourceOnlyEligible)) continue
     const target = labelFor(facts.address, metadata)
     target.classification = classify(target.address, assetRegistry)
     const quotes = quoteAddresses(item, facts).map((address) => {
@@ -307,8 +340,10 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
         ? {
             platformId: PlatformId.LONG_ROUTE,
             status: AttributionStatus.CHAIN_ATTESTED,
-            entryContract: facts.longLaunches[0].entryContract || LONG_ENTRY_CONTRACT || null,
-            evidenceIds: facts.longLaunches.map((launch) => sourceFactEvidenceId(launch)).filter(Boolean),
+            entryContract: includeDetails ? facts.longLaunches[0].entryContract || LONG_ENTRY_CONTRACT || null : null,
+            evidenceIds: includeDetails
+              ? facts.longLaunches.map((launch) => sourceFactEvidenceId(launch)).filter(Boolean)
+              : [],
           }
         : {
             platformId: facts.pools.length > 0 ? PlatformId.UNATTRIBUTED_CHAIN : null,
@@ -321,7 +356,9 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
         ? {
             protocolId: ProtocolId.DOPPLER,
             status: AttributionStatus.CHAIN_ATTESTED,
-            evidenceIds: facts.dopplerLaunches.map((launch) => sourceFactEvidenceId(launch)).filter(Boolean),
+            evidenceIds: includeDetails
+              ? facts.dopplerLaunches.map((launch) => sourceFactEvidenceId(launch)).filter(Boolean)
+              : [],
           }
         : { protocolId: ProtocolId.UNKNOWN, status: AttributionStatus.UNKNOWN, evidenceIds: [] }
     const venue = facts.pools.length > 0 || item?.pools?.length > 0 ? VenueId.UNISWAP_V4 : VenueId.UNKNOWN
@@ -346,14 +383,14 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
           ...(facts.longLaunches.length > 0 ? [{ adapterId: 'long.launcher.v1', claim: 'LAUNCH_EVENT' }] : []),
           ...(facts.pools.length > 0 ? [{ adapterId: 'uniswap-v4.pool-manager.v1', claim: 'POOL_INITIALIZE' }] : []),
         ],
-        listings: facts.listings,
+        listings: includeDetails ? facts.listings : [],
         platformAttribution,
         launchFrontend: { value: null, status: AttributionStatus.UNKNOWN, evidenceIds: [] },
         launchProtocol,
         liquidityVenue: {
           venueId: venue,
           status: venue === VenueId.UNKNOWN ? AttributionStatus.UNKNOWN : AttributionStatus.CHAIN_ATTESTED,
-          evidenceIds: facts.pools.map((pool) => sourceFactEvidenceId(pool)).filter(Boolean),
+          evidenceIds: includeDetails ? facts.pools.map((pool) => sourceFactEvidenceId(pool)).filter(Boolean) : [],
         },
       },
       axes: {
@@ -384,14 +421,16 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
         receiptEvidence: item?.receiptEvidence || 'NONE',
         realizedNetUsdg: null,
       },
-      pools: facts.pools,
-      evidenceTimeline: evidenceTimeline({
-        listings: facts.listings,
-        longLaunches: facts.longLaunches,
-        dopplerLaunches: facts.dopplerLaunches,
-        pools: facts.pools,
-        sourceEvidence: sourceCatalog?.evidence,
-      }),
+      pools: includeDetails ? facts.pools : [],
+      evidenceTimeline: includeDetails
+        ? evidenceTimeline({
+            listings: facts.listings,
+            longLaunches: facts.longLaunches,
+            dopplerLaunches: facts.dopplerLaunches,
+            pools: facts.pools,
+            sourceEvidence,
+          })
+        : [],
       rawBoardStatus: selectedLane?.status || BoardStatus.DISCOVERED,
       rank: item?.rank || null,
     })
@@ -508,11 +547,27 @@ export function buildDashboardModel({
   persistence = null,
   release = null,
   readModel = 'sqlite',
+  includeOpportunities = true,
+  includeSourceOnly = true,
+  includeOpportunityDetails = true,
 }) {
-  const opportunities = projectDashboardOpportunities({ snapshot, sourceCatalog })
-  const fresh = opportunities.filter((item) => ['FRESH_NO_EDGE', 'FRESH_PROXY_POSITIVE'].includes(item.axes.quote))
-  const screenedPositive = opportunities.filter((item) => item.axes.quote === 'FRESH_PROXY_POSITIVE')
-  const exactReady = opportunities.filter((item) => item.axes.exactPreflight === 'PASSED')
+  const opportunities = includeOpportunities
+    ? projectDashboardOpportunities({
+        snapshot,
+        sourceCatalog,
+        includeSourceOnly,
+        includeDetails: includeOpportunityDetails,
+      })
+    : []
+  const quoteStates = includeOpportunities
+    ? opportunities.map((item) => ({ quote: item.axes.quote, exactPreflight: item.axes.exactPreflight }))
+    : (snapshot?.items || []).map((item) => ({
+        quote: quoteState(preferredQuoteLane(item)),
+        exactPreflight: 'NOT_RUN',
+      }))
+  const fresh = quoteStates.filter((item) => ['FRESH_NO_EDGE', 'FRESH_PROXY_POSITIVE'].includes(item.quote))
+  const screenedPositive = quoteStates.filter((item) => item.quote === 'FRESH_PROXY_POSITIVE')
+  const exactReady = quoteStates.filter((item) => item.exactPreflight === 'PASSED')
   const confirmed = executions.filter((item) => item.state === 'CONFIRMED')
   const realized = executions.filter((item) => item.economicsState === 'REALIZED_NET_VERIFIED')
   const realizedNetUsdg = realized.reduce((sum, item) => sum + Number(item.realizedNetUsdg || 0), 0)
@@ -545,6 +600,14 @@ export function buildDashboardModel({
       registryVersion: sourceCatalog?.registryVersion || null,
     },
   }
+}
+
+export function dashboardApiNeedsOpportunityProjection(pathname) {
+  return pathname === '/api/v1/opportunities' || pathname.startsWith('/api/v1/opportunities/')
+}
+
+export function dashboardApiNeedsOpportunityDetails(pathname) {
+  return pathname.startsWith('/api/v1/opportunities/')
 }
 
 export function routeDashboardApi(pathname, searchParams, model) {

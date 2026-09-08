@@ -15,6 +15,7 @@ import {
   boundSourceCatalogPools,
   compactSourceCatalogProjectionInPlace,
   compactSourceFact,
+  countVisibleDopplerLaunches,
   createAdapterStates,
   decodeDopplerCreateLog,
   decodeLongLauncherLog,
@@ -351,6 +352,20 @@ test('Doppler rows retain only explicit, multi-pool or not-yet-scanned targets',
   assert.deepEqual(
     visible.map((item) => item.asset),
     [NINECAT, MULTI, PENDING],
+  )
+  assert.equal(
+    countVisibleDopplerLaunches({
+      dopplerTargetIndex: [target(NINECAT, '100'), target(MULTI, '101'), target(SINGLE, '102'), target(PENDING, '200')],
+      pools: [
+        { currency0: NINECAT, currency1: AI },
+        { currency0: MULTI, currency1: AI },
+        { currency0: MULTI, currency1: NINECAT },
+        { currency0: SINGLE, currency1: AI },
+      ],
+      longLaunches: [{ asset: NINECAT }],
+      poolCursor: 150n,
+    }),
+    visible.length,
   )
 })
 

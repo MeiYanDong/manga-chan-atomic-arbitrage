@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Separate dashboard control-plane, admitted-opportunity summary and one-ID evidence projections after the production
+  `/api/v1/system` path expanded 41,652 source discoveries and exhausted V8 old space. Keep the complete source census
+  in evidence storage and coverage metrics, drop duplicate in-memory Doppler detail objects, and retain the existing
+  board cgroup and signer boundary.
 - Bound the restart source projection after the live catalog reached 82 MB: retain every discovered target and PoolKey,
   move reconstructable log fields exclusively to the append-only evidence store, derive visible Doppler facts from its
   complete target index, and require an exclusive hash-verified backup for the one-shot schema-v5 migration.
