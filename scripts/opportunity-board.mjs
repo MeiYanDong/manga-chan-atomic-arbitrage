@@ -20,6 +20,7 @@ import {
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
   capEventWaitForReconciliation,
+  coalesceLatestSwapPerPool,
   nextHotPollDelay,
   planHotLogRange,
   recoverStaleHotCursor,
@@ -620,6 +621,7 @@ class OpportunityBoard {
       polls: 0,
       rpcLogCalls: 0,
       logsSeen: 0,
+      logsCoalesced: 0,
       relevantLogs: 0,
       dedupedLogs: 0,
       candidateWakes: 0,
@@ -1570,14 +1572,11 @@ class OpportunityBoard {
       this.eventMetrics.rpcLogCalls += 1
     }
 
-    const events = [
+    const decodedEvents = [
       ...v4Logs.map((log) => decodePoolManagerLog(log)),
       ...v3Logs.map((log) => decodeV3SwapLog(log)),
     ].filter(Boolean)
-    events.sort((left, right) => {
-      if (left.blockNumber !== right.blockNumber) return left.blockNumber < right.blockNumber ? -1 : 1
-      return left.logIndex - right.logIndex
-    })
+    const events = coalesceLatestSwapPerPool(decodedEvents)
     const initializeEvents = events.filter((event) => event.type === 'V4_INITIALIZE')
     const initializeResult = this.ingestInitializeEvents(initializeEvents)
     if (initializeResult.discoveredPools > 0) {
@@ -1615,7 +1614,8 @@ class OpportunityBoard {
       lastProcessedBlockHash: anchor.hash,
       lastProcessedAt: new Date().toISOString(),
     }
-    this.eventMetrics.logsSeen += events.length
+    this.eventMetrics.logsSeen += decodedEvents.length
+    this.eventMetrics.logsCoalesced += decodedEvents.length - events.length
     this.eventMetrics.relevantLogs += relevantLogs
     this.eventMetrics.candidateWakes += candidateWakes
     this.eventMetrics.dedupedLogs = this.eventQueue.dedupedEvents
@@ -2380,6 +2380,10 @@ class OpportunityBoard {
         await this.refreshCatalog({ full: fullCatalogDue })
         this.catalogRefreshRequested = false
       }
+      // The background hot poller may advance while this cycle awaits quotes.
+      // Build routing before the fixed-block boundary so every later event in
+      // the same cycle can wake the candidates represented by that snapshot.
+      this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
       this.publish('SCANNING')
       const fixed = await this.fixedBlock()
       if (this.hotCursor.nextBlock === null) {

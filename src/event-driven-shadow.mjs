@@ -190,6 +190,44 @@ export function shadowEventId(event) {
   return `${event.transactionHash || event.blockHash || 'block'}:${event.logIndex ?? -1}:${event.type}`
 }
 
+/**
+ * A hot-log range can contain many swaps for the same pool. The board uses
+ * events only to request a canonical re-quote, so one latest revision per pool
+ * carries the same wake information without repeatedly fanning out an already
+ * pending candidate set. Initialize events remain independent catalog facts.
+ *
+ * @param {Record<string, any>[]} events
+ */
+export function coalesceLatestSwapPerPool(events) {
+  const retained = []
+  const latestByPool = new Map()
+  for (const event of events) {
+    const poolIdentity =
+      event.type === ShadowWakeSource.V4_SWAP
+        ? event.poolId
+        : event.type === ShadowWakeSource.V3_SWAP
+          ? event.poolAddress
+          : null
+    if (!poolIdentity) {
+      retained.push(event)
+      continue
+    }
+    const key = `${event.type}:${String(poolIdentity).toLowerCase()}`
+    const previous = latestByPool.get(key)
+    if (
+      !previous ||
+      event.blockNumber > previous.blockNumber ||
+      (event.blockNumber === previous.blockNumber && event.logIndex >= previous.logIndex)
+    ) {
+      latestByPool.set(key, event)
+    }
+  }
+  return [...retained, ...latestByPool.values()].sort((left, right) => {
+    if (left.blockNumber !== right.blockNumber) return left.blockNumber < right.blockNumber ? -1 : 1
+    return left.logIndex - right.logIndex
+  })
+}
+
 export class CandidateWakeQueue {
   constructor(maxRemembered = 20_000) {
     this.maxRemembered = maxRemembered
