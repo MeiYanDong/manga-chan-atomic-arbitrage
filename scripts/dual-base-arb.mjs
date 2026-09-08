@@ -37,6 +37,7 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
+import { retryReadOnly } from '../src/event-driven-shadow.mjs'
 import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/generic-plan.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import {
@@ -49,6 +50,7 @@ import {
   genericSignerLaneConflict,
   isBoardSnapshotTransportFailure,
   isGenericOpportunityMiss,
+  isTransientRpcError,
   latestUnresolvedMutation,
 } from '../src/policy.mjs'
 import { compileGenericContract } from './generic-contract-compile.mjs'
@@ -69,6 +71,8 @@ const WETH_HARD_MAXIMUM_AMOUNT_IN = 1_000_000_000_000_000_000n
 const DEADLINE_SECONDS = 45n
 const NATIVE_MARK_INPUT = 4_000_000_000_000_000n
 const MAX_BOARD_SNAPSHOT_BYTES = 16 * 1024 * 1024
+const STARTUP_RPC_ATTEMPTS = 5
+const STARTUP_RPC_RETRY_DELAY_MS = 1_000
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUNTIME_CONFIG = loadRuntimeConfig()
@@ -1959,6 +1963,7 @@ async function watchDual() {
   const release = acquireLock(DUAL_WATCH_LOCK_PATH, 'dual-v3-watch')
   let stopRequested = false
   let watchState = null
+  let startupRpcRetries = 0
   const requestStop = () => {
     stopRequested = true
   }
@@ -1980,38 +1985,85 @@ async function watchDual() {
     }
     const unresolved = latestUnresolved()
     if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
-    await assertCanonicalBase()
-    let deployments = await loadVerifiedDeployments()
-    const usage = assertDualAuthorization(arm, deployments)
+    const startup = await retryReadOnly(
+      async () => {
+        await assertCanonicalBase()
+        const deployments = await loadVerifiedDeployments()
+        const usage = assertDualAuthorization(arm, deployments)
+        const wallet = await walletSnapshot()
+        const [usdgPrincipal, wethPrincipal] = await Promise.all([
+          publicClient.readContract({
+            address: GENERIC_USDG,
+            abi: ERC20_ABI,
+            functionName: 'balanceOf',
+            args: [deployments.usdg.executor],
+          }),
+          publicClient.readContract({
+            address: GENERIC_WETH,
+            abi: ERC20_ABI,
+            functionName: 'balanceOf',
+            args: [deployments.weth.executor],
+          }),
+        ])
+        const expectedNonce = Number(arm.baselineNonce) + usage.confirmedExecutions
+        const spendableUsdg = dualSpendablePrincipal(arm, deployments.usdg.state, 'USDG')
+        const spendableWeth = dualSpendablePrincipal(arm, deployments.weth.state, 'WETH')
+        if (
+          wallet.nonceLatest !== wallet.noncePending ||
+          wallet.nonceLatest !== expectedNonce ||
+          usdgPrincipal < spendableUsdg ||
+          wethPrincipal < spendableWeth
+        ) {
+          throw new Error(
+            `dual watcher startup state mismatch: nonce=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}, USDG=${usdgPrincipal}/${spendableUsdg}, WETH=${wethPrincipal}/${spendableWeth}`,
+          )
+        }
+        return { deployments, usage }
+      },
+      {
+        attempts: STARTUP_RPC_ATTEMPTS,
+        delayMs: STARTUP_RPC_RETRY_DELAY_MS,
+        shouldRetry: (error) => !stopRequested && isTransientRpcError(error),
+        onRetry: (error, attempt) => {
+          startupRpcRetries = attempt
+          const retryDelayMs = STARTUP_RPC_RETRY_DELAY_MS * 2 ** (attempt - 1)
+          const updatedAt = new Date().toISOString()
+          watchState = {
+            schemaVersion: 1,
+            status: 'DEGRADED_STARTUP_RPC',
+            pid: process.pid,
+            wallet: WALLET,
+            authorizationId: arm.authorizationId,
+            startedAt: null,
+            updatedAt,
+            startupRpcRetries,
+            nextStartupRetryDelayMs: retryDelayMs,
+            reason: errorText(error),
+          }
+          writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+          appendAudit('dual_watch_startup_rpc_retry', {
+            authorizationId: arm.authorizationId,
+            attempt,
+            retryDelayMs,
+            reason: errorText(error),
+          })
+          console.log(
+            stringify({
+              status: 'DUAL_WATCH_STARTUP_RPC_RETRY',
+              authorizationId: arm.authorizationId,
+              attempt,
+              retryDelayMs,
+              reason: errorText(error),
+            }),
+          )
+        },
+      },
+    )
+    let { deployments } = startup
+    const { usage } = startup
+    // The private credential is not loaded until all retryable public-chain
+    // identity, deployment, balance and nonce reads have converged.
     loadAccount()
-    const wallet = await walletSnapshot()
-    const [usdgPrincipal, wethPrincipal] = await Promise.all([
-      publicClient.readContract({
-        address: GENERIC_USDG,
-        abi: ERC20_ABI,
-        functionName: 'balanceOf',
-        args: [deployments.usdg.executor],
-      }),
-      publicClient.readContract({
-        address: GENERIC_WETH,
-        abi: ERC20_ABI,
-        functionName: 'balanceOf',
-        args: [deployments.weth.executor],
-      }),
-    ])
-    const expectedNonce = Number(arm.baselineNonce) + usage.confirmedExecutions
-    const spendableUsdg = dualSpendablePrincipal(arm, deployments.usdg.state, 'USDG')
-    const spendableWeth = dualSpendablePrincipal(arm, deployments.weth.state, 'WETH')
-    if (
-      wallet.nonceLatest !== wallet.noncePending ||
-      wallet.nonceLatest !== expectedNonce ||
-      usdgPrincipal < spendableUsdg ||
-      wethPrincipal < spendableWeth
-    ) {
-      throw new Error(
-        `dual watcher startup state mismatch: nonce=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}, USDG=${usdgPrincipal}/${spendableUsdg}, WETH=${wethPrincipal}/${spendableWeth}`,
-      )
-    }
     const startedAt = new Date().toISOString()
     watchState = {
       schemaVersion: 1,
@@ -2028,6 +2080,8 @@ async function watchDual() {
       authorizationLifetime: arm.authorizationLifetime,
       principalPolicy: arm.principalPolicy,
       usage: watcherUsageView(usage),
+      startupRpcRetries,
+      nextStartupRetryDelayMs: null,
       consecutiveBoardErrors: 0,
       consecutiveExecutionRpcErrors: 0,
       processedBoardGenerations: 0,

@@ -16,6 +16,7 @@ import {
   routeShadowEvent,
   selectPeriodicShadowCandidates,
 } from '../src/event-driven-shadow.mjs'
+import { isTransientRpcError } from '../src/policy.mjs'
 
 test('async concurrency gate bounds simultaneous provider requests', async () => {
   const gate = new AsyncConcurrencyGate(2)
@@ -85,6 +86,33 @@ test('bounded read retry recovers transient evidence but never retries a busines
     /SPL/,
   )
   assert.equal(revertCalls, 1)
+})
+
+test('startup retry classification recovers a public RPC 429 but never retries an identity mismatch', async () => {
+  let throttledCalls = 0
+  const recovered = await retryReadOnly(
+    async () => {
+      throttledCalls += 1
+      if (throttledCalls === 1) throw new Error('429 Too Many Requests')
+      return 'canonical-readback'
+    },
+    { attempts: 5, delayMs: 0, shouldRetry: isTransientRpcError },
+  )
+  assert.equal(recovered, 'canonical-readback')
+  assert.equal(throttledCalls, 2)
+
+  let invariantCalls = 0
+  await assert.rejects(
+    retryReadOnly(
+      async () => {
+        invariantCalls += 1
+        throw new Error('wrong chain id 1')
+      },
+      { attempts: 5, delayMs: 0, shouldRetry: isTransientRpcError },
+    ),
+    /wrong chain id/,
+  )
+  assert.equal(invariantCalls, 1)
 })
 
 test('fixed-block quote cache deduplicates concurrent equivalents and never crosses blocks', async () => {
