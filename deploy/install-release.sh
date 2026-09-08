@@ -66,6 +66,8 @@ install -o root -g root -m 0644 deploy/systemd/manga-dual-arm.service /etc/syste
 install -o root -g root -m 0644 deploy/systemd/manga-dual-watcher.service /etc/systemd/system/manga-dual-watcher.service
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
+install -o root -g root -m 0644 deploy/systemd/manga-business-report.service /etc/systemd/system/manga-business-report.service
+install -o root -g root -m 0644 deploy/systemd/manga-business-report.timer /etc/systemd/system/manga-business-report.timer
 systemctl daemon-reload
 
 echo "installed ${release_sha}; service was not armed or started"

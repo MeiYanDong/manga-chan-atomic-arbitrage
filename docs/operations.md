@@ -171,8 +171,42 @@ Before calling a source-aware canary healthy, require all of the following:
 4. the static root returns the v0.6 console with same-origin CSP, and mutating API methods return `405`;
 5. the signer service state, wallet nonce and audit-ledger head are unchanged across the board-only promotion.
 
-Do not copy signer runtime files into the board user merely to populate the Execution page. It remains `NONE` until a
-separately reviewed, sanitized execution-evidence export exists.
+Do not copy signer runtime files into the board user to populate the Execution page. The business reporter reads the
+canonical ledgers through a read-only filesystem boundary and exports only the reviewed mode-0640 sanitized snapshot;
+the board user receives no direct access to strategy state.
+
+## Business dashboard and Feishu reporting
+
+The business reporter is a one-shot projection and notification service, not part of the signing lane. Enter the
+custom-bot webhook through encrypted standard input; never put its value in argv, an environment file, a release archive
+or a shell history entry:
+
+```bash
+sudo systemd-creds encrypt --name=manga-feishu-webhook - /etc/credstore.encrypted/manga-feishu-webhook
+sudo chown root:root /etc/credstore.encrypted/manga-feishu-webhook
+sudo chmod 0600 /etc/credstore.encrypted/manga-feishu-webhook
+```
+
+Run one controlled delivery before enabling the timer:
+
+```bash
+sudo systemctl start manga-business-report.service
+sudo systemctl show manga-business-report.service --property=Result,ExecMainStatus
+sudo systemctl enable --now manga-business-report.timer
+sudo systemctl list-timers manga-business-report.timer
+curl --fail --silent --show-error http://127.0.0.1:8788/api/v1/business | jq \
+  '{generatedAt,accountingScope,strategy,capital,economics,market,delivery}'
+```
+
+Acceptance requires Feishu response code `0`, one fsynced `DELIVERED` receipt for the previous Beijing day, a mode-0640
+sanitized snapshot and an enabled next timer trigger. Inspect metadata and selected non-secret fields; never print or
+decrypt the webhook into logs. The board rejects the business snapshot after 15 minutes, so an old panel cannot silently
+appear current.
+
+The service retries every five minutes after 09:05 Beijing time until that period has a durable success receipt. A
+failure exits non-zero and may alert, but it cannot stop, re-arm or mutate the watcher. The custom-bot API cannot provide
+an end-to-end idempotency key: a host crash after remote acceptance but before the local receipt becomes durable may
+produce one duplicate, and operations must not claim exactly-once delivery.
 
 On the first v0.5 start, preserve the existing `events.jsonl`. The service appends one
 `EVENT_LEDGER_EPOCH_STARTED` record and stores its timestamp in `state.json`; older event counts remain legacy evidence.

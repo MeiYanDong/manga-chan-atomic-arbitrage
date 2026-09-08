@@ -103,7 +103,10 @@
     "board:once": "node scripts/opportunity-board.mjs once",
     "board:status": "node scripts/opportunity-board.mjs status",
     "board:catalog:compact": "node --expose-gc scripts/compact-source-catalog.mjs compact",
-    "board:catalog:verify": "node --expose-gc scripts/compact-source-catalog.mjs verify"
+    "board:catalog:verify": "node --expose-gc scripts/compact-source-catalog.mjs verify",
+    "business:report:tick": "node scripts/business-report.mjs tick",
+    "business:report:preview": "node scripts/business-report.mjs preview",
+    "business:report:status": "node scripts/business-report.mjs status"
   },
   "dependencies": {
     "react": "19.2.8",

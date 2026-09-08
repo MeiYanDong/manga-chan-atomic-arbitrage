@@ -315,6 +315,26 @@ h1 {
   line-height: 1.75;
 }
 
+.hero-copy {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.hero-copy p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.hero-copy small {
+  max-width: 460px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
 .metric-grid,
 .ops-grid {
   display: grid;
@@ -377,6 +397,262 @@ h1 {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.55;
+}
+
+.business-pending {
+  padding: 14px 18px;
+  border: 1px solid rgba(239, 161, 75, 0.45);
+  color: var(--amber);
+  background: rgba(239, 161, 75, 0.06);
+  font-size: 12px;
+}
+
+.business-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 14px;
+}
+
+.capital-board,
+.delivery-board,
+.profit-strip,
+.source-strip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.capital-board,
+.delivery-board {
+  min-height: 228px;
+  padding: 24px;
+}
+
+.capital-lines {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 24px;
+  background: var(--line);
+}
+
+.capital-lines > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  min-height: 92px;
+  padding: 17px;
+  background: #0d1210;
+}
+
+.capital-lines span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.capital-lines strong {
+  color: var(--acid);
+  font: 700 clamp(25px, 3vw, 42px) / 1 var(--mono);
+  letter-spacing: -0.055em;
+}
+
+.capital-lines small {
+  color: var(--muted);
+  font: 10px/1 var(--mono);
+}
+
+.capital-board > p,
+.delivery-board > p {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.delivery-board > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delivery-board h2 {
+  margin: 28px 0 0;
+  font: 700 38px/1 var(--mono);
+  letter-spacing: -0.06em;
+}
+
+.delivery-board h2 small {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.delivery-board dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 18px 0 0;
+}
+
+.delivery-board dl div {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.delivery-board dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.delivery-board dd {
+  margin: 5px 0 0;
+  font: 10px/1.4 var(--mono);
+}
+
+.profit-strip .panel-heading > small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.profit-bars {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  min-height: 210px;
+  padding: 22px 24px 18px;
+}
+
+.profit-day {
+  display: grid;
+  grid-template-rows: 24px 120px 20px;
+  justify-content: center;
+  justify-items: center;
+  gap: 8px;
+  border-right: 1px solid var(--line);
+}
+
+.profit-day:last-child {
+  border-right: 0;
+}
+
+.profit-day strong {
+  color: var(--acid);
+  font: 10px/1 var(--mono);
+}
+
+.profit-day strong.negative {
+  color: var(--red);
+}
+
+.profit-day small {
+  color: var(--muted);
+  font: 9px/1 var(--mono);
+}
+
+.profit-bar-track {
+  position: relative;
+  width: 16px;
+  height: 100%;
+  background: #0a0e0c;
+}
+
+.profit-bar-track span {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  min-height: 4px;
+  background: linear-gradient(180deg, var(--acid), rgba(184, 244, 93, 0.2));
+}
+
+.profit-bar-track span.negative {
+  background: linear-gradient(180deg, var(--red), rgba(240, 107, 97, 0.18));
+}
+
+.source-strip {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.35fr) repeat(4, minmax(120px, 0.65fr));
+}
+
+.source-strip > div {
+  display: grid;
+  align-content: center;
+  min-height: 116px;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+}
+
+.source-strip > div:last-child {
+  border-right: 0;
+}
+
+.source-strip p {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.source-strip strong {
+  color: var(--cyan);
+  font: 700 26px/1 var(--mono);
+}
+
+.source-strip > div > span:not(.section-index) {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.business-ledger {
+  display: grid;
+}
+
+.business-ledger a {
+  display: grid;
+  grid-template-columns: 112px minmax(220px, 1.5fr) minmax(110px, 0.7fr) minmax(120px, 0.7fr) 82px;
+  align-items: center;
+  gap: 16px;
+  min-height: 68px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.business-ledger a:last-child {
+  border-bottom: 0;
+}
+
+.business-ledger a:hover {
+  background: rgba(184, 244, 93, 0.035);
+}
+
+.business-ledger span,
+.business-ledger small,
+.business-ledger i {
+  color: var(--muted);
+  font: 10px/1.4 var(--mono);
+  font-style: normal;
+}
+
+.business-ledger strong {
+  font-size: 12px;
+}
+
+.business-ledger b {
+  color: var(--acid);
+  font: 700 12px/1 var(--mono);
+}
+
+.business-ledger i {
+  color: var(--cyan);
+  text-align: right;
+}
+
+.business-ledger-full {
+  border: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .truth-ladder {
@@ -1005,6 +1281,24 @@ h1 {
   .filter-search {
     grid-column: 1 / -1;
   }
+  .business-split {
+    grid-template-columns: 1fr;
+  }
+  .source-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .source-strip > div {
+    border-bottom: 1px solid var(--line);
+  }
+  .source-strip > div:first-child {
+    grid-column: 1 / -1;
+  }
+  .business-ledger a {
+    grid-template-columns: 100px minmax(180px, 1fr) 110px 110px;
+  }
+  .business-ledger i {
+    display: none;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1082,6 +1376,34 @@ h1 {
   .metric-grid,
   .ops-grid {
     grid-template-columns: 1fr;
+  }
+  .capital-lines,
+  .source-strip {
+    grid-template-columns: 1fr;
+  }
+  .source-strip > div:first-child {
+    grid-column: auto;
+  }
+  .source-strip > div {
+    min-height: 90px;
+    border-right: 0;
+  }
+  .profit-bars {
+    min-width: 560px;
+  }
+  .profit-strip {
+    overflow-x: auto;
+  }
+  .business-ledger a {
+    grid-template-columns: 1fr auto;
+    gap: 8px 14px;
+    padding: 17px;
+  }
+  .business-ledger strong {
+    grid-column: 1 / -1;
+  }
+  .business-ledger b {
+    text-align: right;
   }
   .metric {
     min-height: 130px;
