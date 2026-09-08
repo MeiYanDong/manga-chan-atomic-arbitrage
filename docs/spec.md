@@ -207,14 +207,17 @@ marked executor-compatible.
 
 Priority candidates and current positive rows are covered by the periodic reconciliation cursor. Between those sweeps,
 PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call counts and event-to-quote latency
-are published as runtime metrics. Equivalent V3 anchor requests are deduplicated only within the same fixed block, and
-independent JSON-RPC calls are transported in bounded HTTP batches without changing their individual call context or
-return data. HTTP POST counts are not represented as provider billing units. No reduction target is considered met until
-a deployed observation window measures it.
+are published as runtime metrics. Equivalent V3 anchor requests are deduplicated only within the same fixed block.
+V3 Factory reads and V3 Quoter paths are grouped through the code-hash-pinned canonical Multicall3 contract at that same
+block; every subcall retains its independent success, revert and decoded Gas estimate. V4 Quoter calls remain direct so
+their caller and hook context does not change. JSON-RPC batching is disabled on the public endpoint after production
+proved its envelopes incomplete. HTTP POST counts, Multicall groups and subcalls remain separate measurements and are
+never represented as provider billing-unit savings. No reduction target is considered met until a deployed observation
+window measures it.
 
 Candidate concurrency and within-candidate leg concurrency are separate controls. The conservative public profile
-quotes one candidate at a time, while independent legs may share an HTTP batch; this reduces request bursts without
-allowing multiple candidate grids to expand simultaneously.
+quotes one candidate at a time, while V3 paths share bounded onchain read aggregation; this reduces request bursts
+without allowing multiple candidate grids to expand simultaneously.
 
 The signer consumes only a compact atomically replaced execution feed from a dedicated read-only runtime directory.
 Board restarts preserve its last complete generation; a transient missing or stale file handle is a board-only retry,

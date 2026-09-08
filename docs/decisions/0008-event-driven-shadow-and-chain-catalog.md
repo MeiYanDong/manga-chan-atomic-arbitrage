@@ -1,6 +1,6 @@
 # ADR 0008: event-driven shadow and evidence-bearing chain catalog
 
-- Status: Accepted and promoted to signer-free production observation
+- Status: Accepted; JSON-RPC batching section superseded by ADR 0028
 - Date: 2026-09-07
 
 ## Context

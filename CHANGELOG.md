@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Run hot-log polling independently of slow quote cycles, coalesce each range to the latest swap per pool and rebuild
+  dependencies before the cycle fixed block, while keeping events as non-executable wake evidence.
+- Replace unsupported public JSON-RPC batches with code-hash-pinned Multicall3 aggregation for V3 Factory and Quoter
+  reads. Keep V4 hook calls direct and the paid execution RPC isolated behind the exact-preflight threshold.
 - Split the latency-sensitive event cursor from historical completeness: cap public-RPC hot log ranges, detect stale
   cursor lag, record every skipped interval, and resume near the confirmed head with a reorg lookback instead of
   replaying day-old swaps as if they were current.

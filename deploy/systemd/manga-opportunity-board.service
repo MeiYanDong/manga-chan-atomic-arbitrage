@@ -18,7 +18,7 @@ Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=/var/lib/manga-business-report/busines
 UMask=0027
 # ExecStart-level values intentionally override a retained live.env from an
 # older release. Historical catalog completeness uses separate cursors.
-ExecStart=/usr/bin/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 npm run board
+ExecStart=/usr/bin/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 MANGA_BOARD_RPC_BATCH_SIZE=1 MANGA_BOARD_RPC_RETRY_DELAY_MS=1000 npm run board
 Restart=on-failure
 RestartSec=10s
 TimeoutStopSec=20
