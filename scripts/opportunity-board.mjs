@@ -81,9 +81,13 @@ import {
   AdapterRunStatus,
   DOPPLER_CREATE_TOPIC,
   LONG_LAUNCH_CREATED_TOPIC,
+  SOURCE_CATALOG_RUNTIME_PROJECTION,
+  SOURCE_CATALOG_SCHEMA_VERSION,
   adaptPoolManagerInitialize,
   adaptRobinhoodAssets,
+  assertCompactSourceCatalogProjection,
   boundSourceCatalogPools,
+  compactSourceCatalogProjectionInPlace,
   compactSourceFact,
   decodeDopplerCreateLog,
   decodeLongLauncherLog,
@@ -92,6 +96,7 @@ import {
   markAdapterSuccess,
   mergeDopplerTargetFacts,
   mergeSourceFacts,
+  isCompactSourceCatalogProjection,
   planSourceTargetPoolRange,
   retainPoolsForSourceTargets,
   restoreAdapterStates,
@@ -471,10 +476,17 @@ class OpportunityBoard {
     const persistedState = readJson(this.statePath) || {}
     const persistedChainCatalog = readJson(this.chainCatalogPath) || {}
     let persistedSourceCatalog = readJson(this.sourceCatalogPath) || {}
+    const compactedStartupCatalog = isCompactSourceCatalogProjection(persistedSourceCatalog)
+      ? { sourceCatalog: persistedSourceCatalog, changed: false }
+      : compactSourceCatalogProjectionInPlace(persistedSourceCatalog)
+    persistedSourceCatalog = compactedStartupCatalog.sourceCatalog
     const boundedStartupCatalog = boundSourceCatalogPools(persistedSourceCatalog)
     persistedSourceCatalog = boundedStartupCatalog.sourceCatalog
     const startupRetention = boundedStartupCatalog.retention
-    if (boundedStartupCatalog.changed) writeStableJsonAtomic(this.sourceCatalogPath, persistedSourceCatalog)
+    if (compactedStartupCatalog.changed || boundedStartupCatalog.changed) {
+      writeStableJsonAtomic(this.sourceCatalogPath, persistedSourceCatalog)
+    }
+    assertCompactSourceCatalogProjection(persistedSourceCatalog)
     this.store = new BoardStore({
       runDir: config.runDir,
       legacySnapshotPath: this.snapshotPath,
@@ -508,17 +520,11 @@ class OpportunityBoard {
     this.chainCatalogSafeHead = persistedChainCatalog.coverage?.safeHead || null
     this.chainCatalogComplete = persistedChainCatalog.coverage?.status === 'COMPLETE_FROM_CONFIGURED_START'
     this.chainCatalogLastError = null
-    this.longLaunches = Array.isArray(persistedSourceCatalog.longLaunches)
-      ? persistedSourceCatalog.longLaunches.map((launch) => compactSourceFact(launch))
+    this.longLaunches = Array.isArray(persistedSourceCatalog.longLaunches) ? persistedSourceCatalog.longLaunches : []
+    this.dopplerTargetIndex = Array.isArray(persistedSourceCatalog.dopplerTargetIndex)
+      ? persistedSourceCatalog.dopplerTargetIndex
       : []
-    const persistedDopplerLaunches = Array.isArray(persistedSourceCatalog.dopplerLaunches)
-      ? persistedSourceCatalog.dopplerLaunches
-      : []
-    this.dopplerTargetIndex = mergeDopplerTargetFacts(
-      persistedSourceCatalog.dopplerTargetIndex,
-      persistedDopplerLaunches,
-    )
-    this.dopplerLaunches = persistedDopplerLaunches.map((launch) => compactSourceFact(launch))
+    this.dopplerLaunches = []
     this.pairListings = Array.isArray(persistedSourceCatalog.pairListings) ? persistedSourceCatalog.pairListings : []
     const persistedGenericPools = Array.isArray(persistedSourceCatalog.pools) ? persistedSourceCatalog.pools : []
     this.genericPools = retainPoolsForSourceTargets(
@@ -529,7 +535,7 @@ class OpportunityBoard {
         dopplerLaunches: this.dopplerLaunches,
         dopplerTargetIndex: this.dopplerTargetIndex,
       }),
-    ).map((pool) => compactSourceFact(pool))
+    )
     this.sourcePoolRetention = startupRetention
     this.sourceEvidence = Array.isArray(persistedSourceCatalog.evidence) ? persistedSourceCatalog.evidence : []
     this.sourceAdapterCursors = {
@@ -656,6 +662,7 @@ class OpportunityBoard {
     )
     const persistedCatalog = writeStableJsonAtomic(this.sourceCatalogPath, this.latestSourceCatalog)
     this.latestSourceCatalogHash = persistedCatalog.hash
+    this.latestSourceCatalogBytes = persistedCatalog.bytes
     if (config.rpcUrl) {
       const chain = defineChain({
         id: CHAIN_ID,
@@ -731,7 +738,7 @@ class OpportunityBoard {
 
   sourceState() {
     return {
-      schemaVersion: 4,
+      schemaVersion: SOURCE_CATALOG_SCHEMA_VERSION,
       registryVersion: SOURCE_REGISTRY_VERSION,
       discovery: 'INDEPENDENT_PAIR_LONG_DOPPLER_POOL_MANAGER_AND_ROBINHOOD_ASSET_ADAPTERS',
       canonicalAssets: 'ROBINHOOD_ASSETS_API_ONLY',
@@ -756,6 +763,7 @@ class OpportunityBoard {
         dopplerLaunches: this.dopplerLaunches.length,
         dopplerTargetsDiscovered: this.dopplerTargetIndex.length,
         genericPools: this.genericPools.length,
+        projectionBytes: this.latestSourceCatalogBytes ?? null,
         poolRetention: this.sourcePoolRetention,
         scopeWarning: 'each adapter reports its own bounded coverage; no cross-adapter completeness promotion',
       },
@@ -790,7 +798,7 @@ class OpportunityBoard {
   sourceCatalogProjection(safeHead = this.sourceCatalogSafeHead, generatedAt = new Date().toISOString()) {
     const normalizedSafeHead = safeHead === null ? null : String(safeHead)
     return {
-      schemaVersion: 4,
+      schemaVersion: SOURCE_CATALOG_SCHEMA_VERSION,
       registryVersion: SOURCE_CONTRACT_REGISTRY.version,
       mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
       generatedAt,
@@ -800,10 +808,15 @@ class OpportunityBoard {
         longLaunches: this.longLaunches.length,
         dopplerLaunches: this.dopplerLaunches.length,
         dopplerTargetsDiscovered: this.dopplerTargetIndex.length,
+        persistedDopplerLaunchDetails: 0,
         genericPools: this.genericPools.length,
         poolRetention: this.sourcePoolRetention,
       },
       adapters: this.adapterStates,
+      runtimeProjection: { ...SOURCE_CATALOG_RUNTIME_PROJECTION },
+      sourceAdapterCursors: Object.fromEntries(
+        Object.entries(this.sourceAdapterCursors).map(([adapterId, cursor]) => [adapterId, cursor.toString()]),
+      ),
       evidence: this.sourceEvidence,
       pairListings: this.pairListings,
       assetRegistry: {
@@ -814,7 +827,6 @@ class OpportunityBoard {
           .map((item) => item.evidenceId),
       },
       longLaunches: this.longLaunches,
-      dopplerLaunches: this.dopplerLaunches,
       dopplerTargetIndex: this.dopplerTargetIndex,
       pools: this.genericPools,
     }
@@ -826,6 +838,7 @@ class OpportunityBoard {
     const persisted = writeStableJsonAtomic(this.sourceCatalogPath, catalog)
     this.latestSourceCatalog = catalog
     this.latestSourceCatalogHash = persisted.hash
+    this.latestSourceCatalogBytes = persisted.bytes
     return catalog
   }
 

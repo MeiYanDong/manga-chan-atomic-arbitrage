@@ -11,6 +11,49 @@ import {
 
 export const LONG_LAUNCH_CREATED_TOPIC = '0xadc6f1f726f7c710f77ec06adc75f3bb964e5be19581b072c67f7b9b4039267b'
 export const DOPPLER_CREATE_TOPIC = '0x68ff1cfcdcf76864161555fc0de1878d8f83ec6949bf351df74d8a4a1a2679ab'
+export const SOURCE_CATALOG_SCHEMA_VERSION = 5
+export const SOURCE_CATALOG_PROJECTION_VERSION = 1
+
+export const SourceFactKind = Object.freeze({
+  LONG_LAUNCH: 'LONG_LAUNCH',
+  DOPPLER_LAUNCH: 'DOPPLER_LAUNCH',
+  POOL: 'POOL',
+  UNKNOWN: 'UNKNOWN',
+})
+
+const SOURCE_FACT_FIELDS = Object.freeze({
+  [SourceFactKind.LONG_LAUNCH]: Object.freeze(['asset', 'numeraire', 'normalizedTicker', 'blockNumber', 'evidenceId']),
+  [SourceFactKind.DOPPLER_LAUNCH]: Object.freeze(['asset', 'numeraire', 'blockNumber', 'evidenceId']),
+  [SourceFactKind.POOL]: Object.freeze([
+    'poolId',
+    'currency0',
+    'currency1',
+    'fee',
+    'tickSpacing',
+    'hooks',
+    'blockNumber',
+    'evidenceId',
+  ]),
+})
+
+const SOURCE_FACT_REQUIRED_FIELDS = Object.freeze({
+  [SourceFactKind.LONG_LAUNCH]: Object.freeze(['asset', 'numeraire', 'blockNumber', 'evidenceId']),
+  [SourceFactKind.DOPPLER_LAUNCH]: Object.freeze(['asset', 'numeraire', 'blockNumber', 'evidenceId']),
+  [SourceFactKind.POOL]: SOURCE_FACT_FIELDS[SourceFactKind.POOL],
+})
+
+const DOPPLER_TARGET_FIELDS = Object.freeze(['asset', 'numeraire', 'blockNumber', 'evidenceId'])
+const SOURCE_FACT_FIELD_SETS = Object.freeze(
+  Object.fromEntries(Object.entries(SOURCE_FACT_FIELDS).map(([kind, fields]) => [kind, new Set(fields)])),
+)
+const DOPPLER_TARGET_FIELD_SET = new Set(DOPPLER_TARGET_FIELDS)
+
+export const SOURCE_CATALOG_RUNTIME_PROJECTION = Object.freeze({
+  version: SOURCE_CATALOG_PROJECTION_VERSION,
+  factShape: 'EVIDENCE_LINKED_ROUTE_MINIMUM',
+  chainEvidenceStore: 'APPEND_ONLY_JSONL_AND_SQLITE',
+  dopplerLaunchDetails: 'DERIVED_FROM_TARGET_INDEX',
+})
 
 export const AdapterRunStatus = Object.freeze({
   NOT_ATTEMPTED: 'NOT_ATTEMPTED',
@@ -418,12 +461,70 @@ export function sourceFactEvidenceId(fact) {
   return fact?.evidenceId || fact?.evidence?.evidenceId || null
 }
 
-export function compactSourceFact(fact) {
+/** @param {Record<string, any>} fact @param {string} [requestedKind] */
+function inferSourceFactKind(fact, requestedKind = SourceFactKind.UNKNOWN) {
+  if (requestedKind !== SourceFactKind.UNKNOWN) return requestedKind
+  if (fact?.adapterId === 'long.launcher.v1' || fact?.entryContract) return SourceFactKind.LONG_LAUNCH
+  if (fact?.adapterId === 'doppler.registry.v1' || fact?.protocolRoot) return SourceFactKind.DOPPLER_LAUNCH
+  if (fact?.adapterId === 'uniswap-v4.pool-manager.v1' || fact?.poolId) return SourceFactKind.POOL
+  return SourceFactKind.UNKNOWN
+}
+
+function assertProjectedSourceFact(fact, kind) {
+  for (const field of SOURCE_FACT_REQUIRED_FIELDS[kind] || []) {
+    if (!Object.hasOwn(fact, field) || fact[field] === null || fact[field] === undefined || fact[field] === '') {
+      throw new Error(`${kind} source fact is missing ${field}`)
+    }
+  }
+  for (const field of ['asset', 'numeraire', 'currency0', 'currency1', 'hooks']) {
+    if (fact[field] !== null && fact[field] !== undefined) getAddress(fact[field])
+  }
+  if (kind === SourceFactKind.POOL && !/^0x[0-9a-f]{64}$/i.test(String(fact.poolId))) {
+    throw new Error('POOL source fact has an invalid poolId')
+  }
+  if (!/^rh:\d+:log:0x[0-9a-f]{64}:\d+$/i.test(String(fact.evidenceId))) {
+    throw new Error(`${kind} source fact has an invalid evidenceId`)
+  }
+  if (!/^\d+$/.test(String(fact.blockNumber))) throw new Error(`${kind} source fact has an invalid blockNumber`)
+  return fact
+}
+
+function compactKnownSourceFact(fact, kind) {
+  const evidenceId = sourceFactEvidenceId(fact)
+  const output = {}
+  for (const field of SOURCE_FACT_FIELDS[kind]) {
+    const value = field === 'evidenceId' ? evidenceId : fact[field]
+    if (value !== undefined) output[field] = value
+  }
+  return assertProjectedSourceFact(output, kind)
+}
+
+/** @param {Record<string, any>} fact @param {string} [requestedKind] */
+export function compactSourceFact(fact, requestedKind = SourceFactKind.UNKNOWN) {
   if (!fact || typeof fact !== 'object') return fact
+  const kind = inferSourceFactKind(fact, requestedKind)
+  if (kind !== SourceFactKind.UNKNOWN) return compactKnownSourceFact(fact, kind)
   const evidenceId = sourceFactEvidenceId(fact)
   const payload = { ...fact }
   delete payload.evidence
   return evidenceId ? { ...payload, evidenceId } : payload
+}
+
+function compactKnownSourceFactInPlace(fact, kind) {
+  const evidenceId = sourceFactEvidenceId(fact)
+  const allowed = SOURCE_FACT_FIELD_SETS[kind]
+  let removedFields = 0
+  for (const field of Object.keys(fact)) {
+    if (allowed.has(field)) continue
+    delete fact[field]
+    removedFields += 1
+  }
+  if (fact.evidenceId !== evidenceId) {
+    fact.evidenceId = evidenceId
+    removedFields += 1
+  }
+  assertProjectedSourceFact(fact, kind)
+  return removedFields
 }
 
 export function dopplerTargetFact(fact) {
@@ -452,6 +553,159 @@ export function mergeDopplerTargetFacts(existing, discovered) {
     if (blockOrder !== 0n) return blockOrder < 0n ? -1 : 1
     return left.asset.toLowerCase().localeCompare(right.asset.toLowerCase())
   })
+}
+
+function sameStringSet(left, right) {
+  return left.size === right.size && [...left].every((value) => right.has(value))
+}
+
+function compactDopplerTargetInPlace(target) {
+  const compact = dopplerTargetFact(target)
+  let removedFields = 0
+  for (const field of Object.keys(target)) {
+    if (DOPPLER_TARGET_FIELD_SET.has(field)) continue
+    delete target[field]
+    removedFields += 1
+  }
+  for (const [field, value] of Object.entries(compact)) {
+    if (target[field] === value) continue
+    target[field] = value
+    removedFields += 1
+  }
+  assertProjectedSourceFact(target, SourceFactKind.DOPPLER_LAUNCH)
+  return removedFields
+}
+
+export function isCompactSourceCatalogProjection(sourceCatalog) {
+  return Boolean(
+    sourceCatalog &&
+    sourceCatalog.schemaVersion === SOURCE_CATALOG_SCHEMA_VERSION &&
+    sourceCatalog.runtimeProjection?.version === SOURCE_CATALOG_PROJECTION_VERSION &&
+    !Object.hasOwn(sourceCatalog, 'dopplerLaunches'),
+  )
+}
+
+export function assertCompactSourceCatalogProjection(sourceCatalog) {
+  if (!isCompactSourceCatalogProjection(sourceCatalog)) {
+    throw new Error('source catalog runtime projection is not current')
+  }
+  for (const fact of sourceCatalog.longLaunches || []) {
+    assertProjectedSourceFact(fact, SourceFactKind.LONG_LAUNCH)
+    const allowed = SOURCE_FACT_FIELD_SETS[SourceFactKind.LONG_LAUNCH]
+    if (Object.keys(fact).some((field) => !allowed.has(field))) throw new Error('LONG_LAUNCH fact is not compact')
+  }
+  for (const fact of sourceCatalog.dopplerTargetIndex || []) {
+    assertProjectedSourceFact(fact, SourceFactKind.DOPPLER_LAUNCH)
+    if (Object.keys(fact).some((field) => !DOPPLER_TARGET_FIELD_SET.has(field))) {
+      throw new Error('DOPPLER target fact is not compact')
+    }
+  }
+  for (const fact of sourceCatalog.pools || []) {
+    assertProjectedSourceFact(fact, SourceFactKind.POOL)
+    const allowed = SOURCE_FACT_FIELD_SETS[SourceFactKind.POOL]
+    if (Object.keys(fact).some((field) => !allowed.has(field))) throw new Error('POOL fact is not compact')
+  }
+  return {
+    schemaVersion: sourceCatalog.schemaVersion,
+    projectionVersion: sourceCatalog.runtimeProjection.version,
+    longLaunches: sourceCatalog.longLaunches?.length || 0,
+    dopplerTargets: sourceCatalog.dopplerTargetIndex?.length || 0,
+    pools: sourceCatalog.pools?.length || 0,
+  }
+}
+
+/**
+ * Convert the restart projection in place so a production-sized legacy catalog
+ * never needs a second full object graph. Full receipt-log payloads have already
+ * been committed to BoardStore before facts enter this projection.
+ */
+export function compactSourceCatalogProjectionInPlace(sourceCatalog) {
+  if (!sourceCatalog || typeof sourceCatalog !== 'object' || Array.isArray(sourceCatalog)) {
+    throw new Error('source catalog must be an object')
+  }
+  const longLaunches = Array.isArray(sourceCatalog.longLaunches) ? sourceCatalog.longLaunches : []
+  const dopplerLaunches = Array.isArray(sourceCatalog.dopplerLaunches) ? sourceCatalog.dopplerLaunches : []
+  const dopplerTargetIndex = Array.isArray(sourceCatalog.dopplerTargetIndex) ? sourceCatalog.dopplerTargetIndex : []
+  const pools = Array.isArray(sourceCatalog.pools) ? sourceCatalog.pools : []
+  const targetsBefore = sourceTargetAddresses({
+    pairListings: sourceCatalog.pairListings,
+    longLaunches,
+    dopplerLaunches,
+    dopplerTargetIndex,
+  })
+  const countsBefore = {
+    longLaunches: longLaunches.length,
+    dopplerLaunchDetails: dopplerLaunches.length,
+    dopplerTargets: dopplerTargetIndex.length,
+    pools: pools.length,
+  }
+  const oldSchemaVersion = sourceCatalog.schemaVersion ?? null
+  const oldProjectionVersion = sourceCatalog.runtimeProjection?.version ?? null
+  let removedFields = 0
+
+  for (const fact of longLaunches) {
+    removedFields += compactKnownSourceFactInPlace(fact, SourceFactKind.LONG_LAUNCH)
+  }
+  for (const fact of pools) removedFields += compactKnownSourceFactInPlace(fact, SourceFactKind.POOL)
+  for (const target of dopplerTargetIndex) removedFields += compactDopplerTargetInPlace(target)
+
+  const indexedDopplerTargets = new Set(dopplerTargetIndex.map((target) => getAddress(target.asset).toLowerCase()))
+  for (const launch of dopplerLaunches) {
+    const compact = dopplerTargetFact(launch)
+    const key = getAddress(compact.asset).toLowerCase()
+    if (indexedDopplerTargets.has(key)) continue
+    assertProjectedSourceFact(compact, SourceFactKind.DOPPLER_LAUNCH)
+    dopplerTargetIndex.push(compact)
+    indexedDopplerTargets.add(key)
+  }
+  if (Object.hasOwn(sourceCatalog, 'dopplerLaunches')) delete sourceCatalog.dopplerLaunches
+  dopplerTargetIndex.sort((left, right) => {
+    const blockOrder = BigInt(left.blockNumber) - BigInt(right.blockNumber)
+    if (blockOrder !== 0n) return blockOrder < 0n ? -1 : 1
+    return left.asset.toLowerCase().localeCompare(right.asset.toLowerCase())
+  })
+
+  sourceCatalog.schemaVersion = SOURCE_CATALOG_SCHEMA_VERSION
+  sourceCatalog.runtimeProjection = { ...SOURCE_CATALOG_RUNTIME_PROJECTION }
+  sourceCatalog.longLaunches = longLaunches
+  sourceCatalog.dopplerTargetIndex = dopplerTargetIndex
+  sourceCatalog.pools = pools
+  sourceCatalog.summary = {
+    ...(sourceCatalog.summary || {}),
+    longLaunches: longLaunches.length,
+    dopplerTargetsDiscovered: dopplerTargetIndex.length,
+    genericPools: pools.length,
+    persistedDopplerLaunchDetails: 0,
+  }
+
+  const targetsAfter = sourceTargetAddresses({
+    pairListings: sourceCatalog.pairListings,
+    longLaunches,
+    dopplerTargetIndex,
+  })
+  if (!sameStringSet(targetsBefore, targetsAfter)) {
+    throw new Error('source catalog compaction changed the discovered target set')
+  }
+  if (longLaunches.length !== countsBefore.longLaunches || pools.length !== countsBefore.pools) {
+    throw new Error('source catalog compaction changed a retained collection count')
+  }
+  const verification = assertCompactSourceCatalogProjection(sourceCatalog)
+  return {
+    sourceCatalog,
+    changed:
+      removedFields > 0 ||
+      countsBefore.dopplerLaunchDetails > 0 ||
+      oldSchemaVersion !== SOURCE_CATALOG_SCHEMA_VERSION ||
+      oldProjectionVersion !== SOURCE_CATALOG_PROJECTION_VERSION,
+    stats: {
+      ...verification,
+      sourceTargets: targetsAfter.size,
+      dopplerLaunchDetailsRemoved: countsBefore.dopplerLaunchDetails,
+      removedFields,
+      oldSchemaVersion,
+      oldProjectionVersion,
+    },
+  }
 }
 
 export function selectVisibleDopplerLaunches({

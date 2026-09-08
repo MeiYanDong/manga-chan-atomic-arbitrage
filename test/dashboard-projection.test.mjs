@@ -135,6 +135,34 @@ test('compact runtime facts retain evidence timelines without embedding duplicat
   assert.equal(item.evidenceTimeline.length, 4)
 })
 
+test('schema-v5 dashboard derives Doppler attribution from the compact target index', () => {
+  const fixture = runtimeFixture()
+  const longEvidenceId = fixture.sourceCatalog.longLaunches[0].evidence.evidenceId
+  delete fixture.sourceCatalog.longLaunches[0].evidence
+  delete fixture.sourceCatalog.longLaunches[0].entryContract
+  fixture.sourceCatalog.longLaunches[0].evidenceId = longEvidenceId
+  const dopplerEvidenceId = fixture.sourceCatalog.dopplerLaunches[0].evidence.evidenceId
+  delete fixture.sourceCatalog.dopplerLaunches
+  fixture.sourceCatalog.schemaVersion = 5
+  fixture.sourceCatalog.runtimeProjection = {
+    version: 1,
+    factShape: 'EVIDENCE_LINKED_ROUTE_MINIMUM',
+    chainEvidenceStore: 'APPEND_ONLY_JSONL_AND_SQLITE',
+    dopplerLaunchDetails: 'DERIVED_FROM_TARGET_INDEX',
+  }
+  fixture.sourceCatalog.sourceAdapterCursors = { 'uniswap-v4.pool-manager.v1': '45879016' }
+  fixture.sourceCatalog.dopplerTargetIndex = [
+    { asset: NINECAT, numeraire: AI, blockNumber: '45879015', evidenceId: dopplerEvidenceId },
+  ]
+  const [item] = projectDashboardOpportunities(fixture)
+  assert.equal(
+    item.provenance.platformAttribution.entryContract.toLowerCase(),
+    '0x22e99278308b393ea1260859b181ad7e78f5eeed',
+  )
+  assert.equal(item.provenance.launchProtocol.protocolId, 'DOPPLER')
+  assert.equal(item.provenance.launchProtocol.evidenceIds[0], 'doppler:ninecat')
+})
+
 test('native zero-address liquidity is a route leg, never a standalone opportunity target', () => {
   const fixture = runtimeFixture()
   fixture.sourceCatalog.pools.push({

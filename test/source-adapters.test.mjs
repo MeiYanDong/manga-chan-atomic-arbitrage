@@ -6,9 +6,14 @@ import {
   DOPPLER_CREATE_TOPIC,
   LONG_LAUNCH_CREATED_TOPIC,
   SOURCE_ADAPTER_MANIFESTS,
+  SOURCE_CATALOG_PROJECTION_VERSION,
+  SOURCE_CATALOG_SCHEMA_VERSION,
+  SourceFactKind,
   adaptPairCatalogToken,
   adaptRobinhoodAssets,
+  assertCompactSourceCatalogProjection,
   boundSourceCatalogPools,
+  compactSourceCatalogProjectionInPlace,
   compactSourceFact,
   createAdapterStates,
   decodeDopplerCreateLog,
@@ -218,6 +223,91 @@ test('compact source facts keep provenance identity without duplicating evidence
   const index = mergeDopplerTargetFacts([], [decoded])
   const targets = sourceTargetAddresses({ dopplerTargetIndex: index })
   assert.equal(targets.has(NINECAT.toLowerCase()), true)
+})
+
+test('restart projection keeps route identity while moving duplicate receipt fields to evidence storage', () => {
+  const poolId = `0x${'cd'.repeat(32)}`
+  const legacy = {
+    schemaVersion: 4,
+    pairListings: [],
+    longLaunches: [
+      {
+        adapterId: 'long.launcher.v1',
+        platformId: 'LONG_ROUTE',
+        attributionStatus: 'CHAIN_ATTESTED',
+        entryContract: '0x22e99278308B393ea1260859B181AD7E78f5eeED',
+        asset: NINECAT,
+        numeraire: AI,
+        normalizedTicker: 'NINECAT',
+        blockNumber: '45879015',
+        blockHash: BLOCK_HASH,
+        transactionHash: TX,
+        logIndex: 86,
+        evidenceId: `rh:4663:log:${TX}:86`,
+      },
+    ],
+    dopplerLaunches: [
+      {
+        adapterId: 'doppler.registry.v1',
+        protocolId: 'DOPPLER',
+        asset: NINECAT,
+        numeraire: AI,
+        blockNumber: '45879015',
+        blockHash: BLOCK_HASH,
+        transactionHash: TX,
+        logIndex: 87,
+        evidenceId: `rh:4663:log:${TX}:87`,
+      },
+    ],
+    dopplerTargetIndex: [],
+    pools: [
+      {
+        adapterId: 'uniswap-v4.pool-manager.v1',
+        venueId: 'UNISWAP_V4',
+        attributionStatus: 'CHAIN_ATTESTED',
+        poolManager: '0x8366a39cc670B4001a1121b8f6a443a643e40951',
+        poolId,
+        currency0: AI,
+        currency1: NINECAT,
+        fee: 3_000,
+        tickSpacing: 60,
+        hooks: HOOK,
+        blockNumber: '45879016',
+        blockHash: BLOCK_HASH,
+        transactionHash: TX,
+        logIndex: 88,
+        evidenceId: `rh:4663:log:${TX}:88`,
+      },
+    ],
+  }
+  const beforeTargets = sourceTargetAddresses(legacy)
+  const result = compactSourceCatalogProjectionInPlace(legacy)
+  assert.equal(result.changed, true)
+  assert.equal(legacy.schemaVersion, SOURCE_CATALOG_SCHEMA_VERSION)
+  assert.equal(legacy.runtimeProjection.version, SOURCE_CATALOG_PROJECTION_VERSION)
+  assert.equal(Object.hasOwn(legacy, 'dopplerLaunches'), false)
+  assert.deepEqual(Object.keys(legacy.longLaunches[0]), [
+    'asset',
+    'numeraire',
+    'normalizedTicker',
+    'blockNumber',
+    'evidenceId',
+  ])
+  assert.deepEqual(
+    compactSourceFact(legacy.pools[0], SourceFactKind.POOL),
+    legacy.pools[0],
+    'every executable PoolKey field must survive compaction',
+  )
+  assert.deepEqual(sourceTargetAddresses(legacy), beforeTargets)
+  assert.equal(legacy.dopplerTargetIndex[0].evidenceId, `rh:4663:log:${TX}:87`)
+  assert.deepEqual(assertCompactSourceCatalogProjection(legacy), {
+    schemaVersion: SOURCE_CATALOG_SCHEMA_VERSION,
+    projectionVersion: SOURCE_CATALOG_PROJECTION_VERSION,
+    longLaunches: 1,
+    dopplerTargets: 1,
+    pools: 1,
+  })
+  assert.equal(compactSourceCatalogProjectionInPlace(legacy).changed, false, 'migration must be idempotent')
 })
 
 test('a compact Doppler target index keeps later pools discoverable after launch details are pruned', () => {

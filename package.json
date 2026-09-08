@@ -101,7 +101,9 @@
     "dual:watch:disarm": "node scripts/dual-base-arb.mjs watch-disarm",
     "board": "node scripts/opportunity-board.mjs watch",
     "board:once": "node scripts/opportunity-board.mjs once",
-    "board:status": "node scripts/opportunity-board.mjs status"
+    "board:status": "node scripts/opportunity-board.mjs status",
+    "board:catalog:compact": "node --expose-gc scripts/compact-source-catalog.mjs compact",
+    "board:catalog:verify": "node --expose-gc scripts/compact-source-catalog.mjs verify"
   },
   "dependencies": {
     "react": "19.2.8",

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bound the restart source projection after the live catalog reached 82 MB: retain every discovered target and PoolKey,
+  move reconstructable log fields exclusively to the append-only evidence store, derive visible Doppler facts from its
+  complete target index, and require an exclusive hash-verified backup for the one-shot schema-v5 migration.
 - Add a separate bounded WETH-principal executor and a single dual-v3 signing lane. The signer-free board can quote
   USDG and WETH cycles at one fixed block; exact candidates are re-simulated at one current block and only the largest
   conservatively normalized net profit is signed. Retained profit compounds independently, while both bases share one
