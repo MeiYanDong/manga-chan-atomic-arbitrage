@@ -1,9 +1,20 @@
 import { getAddress } from 'viem'
 import { BoardStatus, finiteNumber } from './opportunity-board.mjs'
-import { sourceFactEvidenceId } from './source-adapters.mjs'
-import { AttributionStatus, PlatformId, ProtocolId, VenueId, stablePayloadHash } from './source-provenance.mjs'
+import { selectVisibleDopplerLaunches, sourceFactEvidenceId } from './source-adapters.mjs'
+import {
+  AttributionStatus,
+  ContractRole,
+  PlatformId,
+  ProtocolId,
+  SOURCE_CONTRACT_REGISTRY,
+  VenueId,
+  stablePayloadHash,
+} from './source-provenance.mjs'
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+const LONG_ENTRY_CONTRACT = SOURCE_CONTRACT_REGISTRY.entries.find(
+  (entry) => entry.role === ContractRole.UNIQUE_PLATFORM_ENTRY && entry.platformId === PlatformId.LONG_ROUTE,
+)?.address
 const KNOWN_ASSET_LABELS = new Map(
   [
     [ZERO_ADDRESS, 'ETH'],
@@ -143,7 +154,12 @@ function quoteState(lane) {
 
 function evidenceTimeline({ listings, longLaunches, dopplerLaunches, pools, sourceEvidence }) {
   const envelopes = new Map((sourceEvidence || []).map((item) => [item.evidenceId, item]))
-  for (const fact of [...longLaunches, ...dopplerLaunches, ...pools]) {
+  const sourceFacts = [
+    ...longLaunches.map((fact) => ({ fact, producer: 'LONG_LAUNCHER_LOG_ADAPTER' })),
+    ...dopplerLaunches.map((fact) => ({ fact, producer: 'DOPPLER_CREATE_LOG_ADAPTER' })),
+    ...pools.map((fact) => ({ fact, producer: 'UNISWAP_V4_POOL_MANAGER_ADAPTER' })),
+  ]
+  for (const { fact, producer } of sourceFacts) {
     const evidenceId = sourceFactEvidenceId(fact)
     if (!evidenceId) continue
     if (fact?.evidence) {
@@ -151,14 +167,6 @@ function evidenceTimeline({ listings, longLaunches, dopplerLaunches, pools, sour
       continue
     }
     const transactionHash = /^rh:\d+:log:(0x[0-9a-f]{64}):\d+$/i.exec(evidenceId)?.[1] || fact.transactionHash || null
-    const producer =
-      fact.adapterId === 'long.launcher.v1'
-        ? 'LONG_LAUNCHER_LOG_ADAPTER'
-        : fact.adapterId === 'doppler.registry.v1'
-          ? 'DOPPLER_CREATE_LOG_ADAPTER'
-          : fact.adapterId === 'uniswap-v4.pool-manager.v1'
-            ? 'UNISWAP_V4_POOL_MANAGER_ADAPTER'
-            : null
     envelopes.set(evidenceId, {
       evidenceId,
       observedAt: fact.observedAt || null,
@@ -219,10 +227,28 @@ function sourceIndex(sourceCatalog) {
     }
     return output.get(key)
   }
-  for (const listing of sourceCatalog?.pairListings || []) ensure(listing.targetAddress)?.listings.push(listing)
-  for (const launch of sourceCatalog?.longLaunches || []) ensure(launch.asset)?.longLaunches.push(launch)
-  for (const launch of sourceCatalog?.dopplerLaunches || []) ensure(launch.asset)?.dopplerLaunches.push(launch)
-  for (const pool of sourceCatalog?.pools || []) {
+  const pairListings = sourceCatalog?.pairListings || []
+  const longLaunches = sourceCatalog?.longLaunches || []
+  const pools = sourceCatalog?.pools || []
+  const persistedDopplerLaunches = sourceCatalog?.dopplerLaunches
+  const poolCursor =
+    sourceCatalog?.sourceAdapterCursors?.['uniswap-v4.pool-manager.v1'] ||
+    (sourceCatalog?.adapters?.['uniswap-v4.pool-manager.v1']?.scannedThroughBlock
+      ? (BigInt(sourceCatalog.adapters['uniswap-v4.pool-manager.v1'].scannedThroughBlock) + 1n).toString()
+      : '0')
+  const dopplerLaunches = Array.isArray(persistedDopplerLaunches)
+    ? persistedDopplerLaunches
+    : selectVisibleDopplerLaunches({
+        dopplerTargetIndex: sourceCatalog?.dopplerTargetIndex || [],
+        pools,
+        pairListings,
+        longLaunches,
+        poolCursor,
+      })
+  for (const listing of pairListings) ensure(listing.targetAddress)?.listings.push(listing)
+  for (const launch of longLaunches) ensure(launch.asset)?.longLaunches.push(launch)
+  for (const launch of dopplerLaunches) ensure(launch.asset)?.dopplerLaunches.push(launch)
+  for (const pool of pools) {
     ensure(pool.currency0)?.pools.push(pool)
     ensure(pool.currency1)?.pools.push(pool)
   }
@@ -281,7 +307,7 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
         ? {
             platformId: PlatformId.LONG_ROUTE,
             status: AttributionStatus.CHAIN_ATTESTED,
-            entryContract: facts.longLaunches[0].entryContract,
+            entryContract: facts.longLaunches[0].entryContract || LONG_ENTRY_CONTRACT || null,
             evidenceIds: facts.longLaunches.map((launch) => sourceFactEvidenceId(launch)).filter(Boolean),
           }
         : {

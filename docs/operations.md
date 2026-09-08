@@ -127,6 +127,25 @@ not copy the growing catalog into SQLite. Existing SQLite source-catalog rows re
 are not current-source evidence. The SQLite economic snapshot and opportunity projection retain their independent
 parity check.
 
+Schema-v4 catalogs must be migrated while the board and every signer are stopped. Keep the full preimage as rollback
+material; do not delete or overwrite it. Run the compactor as `manga-board` with an explicit heap only for this one-shot
+migration, then verify the smaller file in a fresh process:
+
+```bash
+sudo -u manga-board env NODE_OPTIONS=--max-old-space-size=448 npm run board:catalog:compact -- \
+  --file /var/lib/manga-opportunity-board/source-catalog.json \
+  --backup /var/lib/manga-opportunity-board/source-catalog.schema4.pre-v5.json \
+  --sqlite /var/lib/manga-opportunity-board/board.sqlite
+sudo -u manga-board env NODE_OPTIONS=--max-old-space-size=320 npm run board:catalog:verify -- \
+  --file /var/lib/manga-opportunity-board/source-catalog.json \
+  --sqlite /var/lib/manga-opportunity-board/board.sqlite
+```
+
+The compact command refuses to proceed without an exclusive backup path or without proving every fact against a
+hash-valid immutable receipt payload in SQLite. Require unchanged collection counts and source-target count in its
+receipt before starting the signer-free board. The schema-v5 runtime file keeps evidence links and exact route fields;
+full receipt-log payloads remain in `evidence.jsonl` and `board.sqlite`.
+
 Read the evidence surfaces separately:
 
 ```bash
