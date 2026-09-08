@@ -309,7 +309,7 @@ function loadConfig() {
     eventMaxLagBlocks: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_LAG_BLOCKS, 500)),
     eventWakeMaxCandidates: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_CANDIDATES, 1),
     eventWakeMaxAgeMs: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_AGE_MS, 20_000, 1_000),
-    eventV4PairLimit: integer(process.env.MANGA_BOARD_EVENT_V4_PAIR_LIMIT, 2),
+    eventV4PairLimit: integer(process.env.MANGA_BOARD_EVENT_V4_PAIR_LIMIT, 1),
     eventAmountLimit: integer(process.env.MANGA_BOARD_EVENT_AMOUNT_LIMIT, 2),
     eventV3MaxAddresses: integer(process.env.MANGA_BOARD_EVENT_V3_MAX_ADDRESSES, 200),
     eventReorgLookback: BigInt(integer(process.env.MANGA_BOARD_EVENT_REORG_LOOKBACK, 12)),
@@ -1848,6 +1848,14 @@ class OpportunityBoard {
     }
   }
 
+  /** @param {unknown} error */
+  isPeriodicPreemption(error) {
+    return (
+      error instanceof PeriodicCyclePreempted ||
+      shouldPreemptPeriodicQuote(this.rpcCallContext.getStore(), this.eventQueue.acceptedEvents)
+    )
+  }
+
   /** @param {() => Promise<any>} operation @param {(error: unknown) => boolean} [shouldRetry] */
   retryRpc(operation, shouldRetry = quoteTransportIsIncomplete) {
     return retryReadOnly(operation, {
@@ -2568,7 +2576,7 @@ class OpportunityBoard {
       try {
         wethLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.WETH, options)
       } catch (error) {
-        if (error instanceof PeriodicCyclePreempted) throw error
+        if (this.isPeriodicPreemption(error)) throw new PeriodicCyclePreempted()
         if (!priorFailure) this.cycleRpcFailure = null
         wethLane = {
           baseAsset: 'WETH',
@@ -2775,7 +2783,7 @@ class OpportunityBoard {
           }
           this.observations.set(candidate.id, observation)
         } catch (error) {
-          if (error instanceof PeriodicCyclePreempted) throw error
+          if (this.isPeriodicPreemption(error)) throw new PeriodicCyclePreempted()
           this.observations.set(candidate.id, {
             status: BoardStatus.UNQUOTABLE,
             quotedAt: new Date().toISOString(),
@@ -2854,7 +2862,7 @@ class OpportunityBoard {
     } catch (error) {
       this.lastCycleAt = new Date().toISOString()
       this.cycleNumber += 1
-      if (error instanceof PeriodicCyclePreempted) {
+      if (this.isPeriodicPreemption(error)) {
         const cycleQuoterCalls =
           this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls - quoterCallsBefore
         this.eventMetrics.periodicPreemptions += 1

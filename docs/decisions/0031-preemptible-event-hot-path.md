@@ -1,6 +1,6 @@
 # ADR 0031: preemptible event hot path
 
-- Status: Accepted; production verification pending
+- Status: Accepted; production correction pending
 - Date: 2026-09-09
 
 ## Context
@@ -21,7 +21,7 @@ them.
    every stale candidate drop; never relabel an expired event as current.
 2. Quote one event candidate per cycle. For each USDG/WETH lane, probe at most two amounts: the previous winning amount
    when still inside the configured risk grid, then the smallest configured probe.
-3. Quote at most two V4 pairs per lane. Prefer pairs joining the touched V4 pool to the previous winning route; otherwise
+3. Quote one V4 pair per lane. Prefer a pair joining the touched V4 pool to the previous winning route; otherwise
    use the previous pair or a deterministic two-pool fallback. Each selected pair still receives fresh V3 and V4
    Quoter calls at one canonical fixed block. A failed event shortlist does not expand into full discovery.
 4. When a warm periodic cycle is running, a pool event accepted after that cycle began causes its next RPC read to
@@ -36,9 +36,18 @@ them.
 ## Consequences
 
 - Fresh pool changes can reach the screen ahead of slow coverage work without adding paid-RPC use or a second signer.
-- An event-only edge outside two amounts or two route pairs can be missed until periodic reconciliation. This is an
+- An event-only edge outside two amounts or the selected route pair can be missed until periodic reconciliation. This is an
   explicit latency-for-completeness trade, not evidence that no opportunity existed.
 - Repeated active-pool events may interrupt broad reconciliation. The durable catalog and persisted observations remain
   intact, while quiet intervals continue coverage. Cold-start coverage cannot be skipped.
 - Production acceptance requires a completed event cycle inside the 45-second freshness window, bounded hot-path
   metrics, no cursor-lag breach or restart, and no signed attempt unless independent exact preflight remains positive.
+
+## v0.7.7 canary correction
+
+The first production hot cycle completed in 53,579 ms with 44 logical Quoter calls; the second completed in 40,961 ms
+with 34. Both were a major improvement over 610,315 ms and 247 calls, but the first missed the latency gate and the
+second left too little margin. The canary also showed that viem wraps a fetch-level `PeriodicCyclePreempted` in its HTTP
+error hierarchy. One later yield was therefore published as a transient `DEGRADED` state even though the service did
+not restart and no signer or transaction was involved. v0.7.8 reduces the pair bound from two to one and recognizes the
+AsyncLocalStorage preemption flag even when the thrown error is wrapped.
