@@ -47,6 +47,14 @@ WETH creation code hash:
 
 The dependency hash in the WETH build equals the unchanged GenericAtomicArb source hash.
 
+## GitHub CI gate
+
+[PR #60](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/pull/60) ran the Ubuntu `quality` job against
+commit `946266c` in [Actions run 34189495705](https://github.com/MeiYanDong/manga-chan-atomic-arbitrage/actions/runs/34189495705).
+The run completed with `success`. Its fresh checkout executed the complete `npm run check`, including Linux
+`systemd-analyze verify`, `172/172` Node tests, all three deterministic contract tests, and a `159`-file secret scan.
+The different local and CI scan counts reflect checkout/generated-file scope; both reported `SECRET_SCAN_PASSED`.
+
 ## Signer-free public-RPC dual quote
 
 The temporary run used Robinhood's official public endpoint, one HTTP request at a time, WETH mode enabled, a one-row
@@ -75,13 +83,39 @@ PAIR chain-catalog backfill was `BACKFILL_PARTIAL` after the public endpoint ret
 state was retained explicitly and did not become execution evidence. This cycle does not estimate opportunity frequency
 and correctly produced no transaction.
 
+## Production pre-cutover readback
+
+A read-only check of the `manga-chan-arb-us-west` SWAS host at approximately `2026-09-08T05:17Z` confirmed the existing
+release `b8ab13509be6f9c033d51054759162eaff5f34a1` was still active. The board and generic watcher were both
+`active/running` with zero service restarts. No production file, service, authorization, or chain state was changed by
+this check.
+
+Canonical runtime verification reported:
+
+```text
+chainId=4663
+walletEth=0.006441287054404
+nonceLatest=14
+noncePending=14
+genericExecutor=0x3f3A60A2da9E8D9811F41c6093280D7a90685aDD
+executorUsdg=35.344393
+confirmedExecutions=10
+unresolvedMutation=null
+boardMode=READ_ONLY_NO_SIGNING_NO_BROADCAST
+boardSignerLoaded=false
+```
+
+The until-revoked generic arm had confirmed two executions after its eight-execution baseline, from four exact
+preflights and two signed attempts, with zero failed Gas. Its last confirmed transaction was
+`0x62414964fa7ce9e8494826792a1181733dad12e392cd1fd01a3f06e43921ffa9`, and its recorded normalized net profit was
+`1.05211 USDG`. These are generic-v2 receipt/ledger results, not WETH or dual-v3 results.
+
 ## Remaining production gates
 
-1. Linux `systemd-analyze verify` and protected-branch CI.
-2. Current production wallet ETH, nonce, generic executor balance, unresolved ledger, and service readback.
-3. Explicit WETH seed selected only after current deployment Gas and retained operating reserve are known.
-4. Canonical WETH deployment receipt and contract post-state.
-5. Schema-v5 production board readback, dual runtime verification, durable generic-v2 disarm, dual arm, and service
+1. Protected-branch review/merge and commit-addressed release installation.
+2. Explicit WETH seed selected only after current deployment Gas and retained operating reserve are known.
+3. Canonical WETH deployment receipt and contract post-state.
+4. Schema-v5 production board readback, dual runtime verification, durable generic-v2 disarm, dual arm, and service
    readback.
-6. Any first live transaction must independently prove receipt, base-balance delta, canonical Gas, normalized net, clean
+5. Any first live transaction must independently prove receipt, base-balance delta, canonical Gas, normalized net, clean
    residuals, and the next nonce. Until then, realized WETH PnL is `UNKNOWN`.
