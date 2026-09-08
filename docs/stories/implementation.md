@@ -186,13 +186,12 @@ Acceptance:
 - event state never substitutes for a fixed-block quote;
 - a slow round-robin reconciliation remains enabled for dependency coverage;
 - runtime exposes event wakes, exact candidate count, Quoter-call totals and observed-log-to-quote latency.
-- same-block anchor requests are deduplicated, HTTP batches are bounded and an incomplete RPC set trips one cycle-level
-  circuit instead of being cached as pool absence or retried across every candidate amount.
+- same-block anchor requests are deduplicated; V3 Factory and Quoter reads use code-hash-pinned Multicall3 aggregation,
+  while an incomplete result set trips one cycle-level circuit instead of being cached as pool absence;
 - a mandatory periodic deadline prevents continuous event traffic from starving coverage rotation and chain backfill.
 
-Status: implementation, deterministic tests and signer-free production promotion are complete. Production exercised
-the malformed-batch fallback and non-starvable periodic deadline; steady-state latency and RPC-reduction targets remain
-unproven.
+Status: implementation and deterministic tests are complete. The prior JSON-batch production path was rejected after
+incomplete envelopes and public-RPC throttling; Multicall production latency and request reduction remain pending.
 
 ## S17 — Hot-cursor progress independent of quote latency
 

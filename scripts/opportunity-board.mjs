@@ -9,6 +9,7 @@ import {
   formatUnits,
   getAddress,
   http,
+  keccak256,
   parseAbi,
   parseEther,
   toHex,
@@ -123,6 +124,8 @@ const USDG = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 const WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
 const V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
 const V3_QUOTER = getAddress('0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7')
+const MULTICALL3 = getAddress('0xcA11bde05977b3631167028862bE2a173976CA11')
+const MULTICALL3_RUNTIME_CODE_HASH = '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891'
 const POOL_MANAGER = V4_POOL_MANAGER
 const LONG_LAUNCHER = getAddress('0x22e99278308b393ea1260859b181ad7e78f5eeed')
 const DOPPLER_AIRLOCK = getAddress('0xeb7c034704ef8dcd2d32324c1545f62fb4ad0862')
@@ -657,6 +660,10 @@ class OpportunityBoard {
       v3ShortlistDiscoveries: 0,
       v3ShortlistHits: 0,
       v4QuoterCalls: 0,
+      multicallRpcBatches: 0,
+      multicallSubcalls: 0,
+      multicallFailures: 0,
+      multicallCodeHash: null,
       rpcBatchFallbacks: 0,
     }
     this.catalogRefreshRequested = false
@@ -680,6 +687,7 @@ class OpportunityBoard {
     this.hotPollTask = null
     this.client = null
     this.unbatchedClient = null
+    this.multicallVerifiedAtBlock = null
     this.rpcTransportMode = config.rpcBatchSize > 1 ? 'BATCH' : 'INDIVIDUAL'
     this.rpcBatchFallbackAt = null
     this.rpcBatchFallbackReason = null
@@ -1706,33 +1714,32 @@ class OpportunityBoard {
     if (cached && (cached.pools.length > 0 || Date.now() - cached.at < this.config.catalogIntervalMs)) {
       return cached.pools
     }
-    const reads = await Promise.allSettled(
-      V3_FEES.map(async (fee) => {
-        this.quoteRpcMetrics.v3FactoryReads += 1
-        const pool = await this.retryRpc(
-          () =>
-            this.client.readContract({
-              address: V3_FACTORY,
-              abi: FACTORY_ABI,
-              functionName: 'getPool',
-              args: [tokenA, tokenB, fee],
-              blockNumber,
-            }),
-          () => true,
-        )
-        return pool !== ZERO_ADDRESS ? { fee, address: getAddress(pool) } : null
-      }),
+    this.quoteRpcMetrics.v3FactoryReads += V3_FEES.length
+    const reads = await this.readMulticall(
+      V3_FEES.map((fee) => ({
+        address: V3_FACTORY,
+        abi: FACTORY_ABI,
+        functionName: 'getPool',
+        args: [tokenA, tokenB, fee],
+      })),
+      blockNumber,
     )
-    const rejected = reads.filter((result) => result.status === 'rejected')
+    const rejected = reads.filter((result) => result.status === 'failure')
     if (rejected.length > 0) {
       const failure = incompleteRpcError(
         `V3 factory evidence incomplete (${rejected.length}/${V3_FEES.length} reads failed)`,
-        rejected[0].reason,
+        rejected[0].error,
       )
       this.cycleRpcFailure ||= failure
       throw failure
     }
-    const available = reads.map((result) => result.value).filter((pool) => pool !== null)
+    const available = reads
+      .map((result, index) =>
+        result.status === 'success' && result.result !== ZERO_ADDRESS
+          ? { fee: V3_FEES[index], address: getAddress(result.result) }
+          : null,
+      )
+      .filter((pool) => pool !== null)
     this.feeCache.set(key, { pools: available, at: Date.now() })
     return available
   }
@@ -1748,6 +1755,41 @@ class OpportunityBoard {
         this.activateUnbatchedTransport(error)
       },
     })
+  }
+
+  /** @param {bigint} blockNumber */
+  async ensureReadMulticall(blockNumber) {
+    if (this.multicallVerifiedAtBlock !== null) return
+    const code = await this.retryRpc(() => this.client.getCode({ address: MULTICALL3, blockNumber }))
+    if (!code || code === '0x') throw new Error('canonical Multicall3 code is missing')
+    const codeHash = keccak256(code)
+    if (codeHash !== MULTICALL3_RUNTIME_CODE_HASH) {
+      throw new Error(`canonical Multicall3 code hash mismatch: ${codeHash}`)
+    }
+    this.multicallVerifiedAtBlock = blockNumber
+    this.quoteRpcMetrics.multicallCodeHash = codeHash
+  }
+
+  /** @param {Record<string, any>[]} contracts @param {bigint} blockNumber */
+  async readMulticall(contracts, blockNumber) {
+    if (contracts.length === 0) return []
+    await this.ensureReadMulticall(blockNumber)
+    this.quoteRpcMetrics.multicallRpcBatches += 1
+    this.quoteRpcMetrics.multicallSubcalls += contracts.length
+    try {
+      return await this.retryRpc(() =>
+        this.client.multicall({
+          contracts,
+          multicallAddress: MULTICALL3,
+          allowFailure: true,
+          batchSize: 0,
+          blockNumber,
+        }),
+      )
+    } catch (error) {
+      this.quoteRpcMetrics.multicallFailures += 1
+      throw error
+    }
   }
 
   /** @param {unknown} error */
@@ -1834,25 +1876,20 @@ class OpportunityBoard {
 
   /** @param {Record<string, any>[]} candidates @param {bigint} amountIn @param {bigint} blockNumber */
   async quoteV3Routes(candidates, amountIn, blockNumber) {
-    const quoteResults = await Promise.all(
-      candidates.map(async (candidate) => {
-        try {
-          this.quoteRpcMetrics.v3QuoterCalls += 1
-          const { result } = await this.retryRpc(() =>
-            this.client.simulateContract({
-              account: ZERO_ADDRESS,
-              address: V3_QUOTER,
-              abi: V3_QUOTER_ABI,
-              functionName: 'quoteExactInput',
-              args: [candidate.path, amountIn],
-              blockNumber,
-            }),
-          )
-          return { amountOut: result[0], gasEstimate: result[3], ...candidate }
-        } catch (error) {
-          return { error }
-        }
-      }),
+    this.quoteRpcMetrics.v3QuoterCalls += candidates.length
+    const multicallResults = await this.readMulticall(
+      candidates.map((candidate) => ({
+        address: V3_QUOTER,
+        abi: V3_QUOTER_ABI,
+        functionName: 'quoteExactInput',
+        args: [candidate.path, amountIn],
+      })),
+      blockNumber,
+    )
+    const quoteResults = multicallResults.map((item, index) =>
+      item.status === 'success'
+        ? { amountOut: item.result[0], gasEstimate: item.result[3], ...candidates[index] }
+        : { error: item.error },
     )
     const incomplete = quoteResults.find((result) => result?.error && quoteTransportIsIncomplete(result.error))
     if (incomplete) {
@@ -2298,6 +2335,7 @@ class OpportunityBoard {
       this.retryRpc(() => this.client.getBlock({ blockNumber })),
       this.retryRpc(() => this.client.getGasPrice()),
     ])
+    await this.ensureReadMulticall(blockNumber)
     const nativeMarkIn = parseEther('0.004')
     const nativeMark = await this.quoteBestV3(WETH, USDG, nativeMarkIn, blockNumber)
     return { blockNumber, block, gasPrice, nativeMarkIn, nativeMark }
