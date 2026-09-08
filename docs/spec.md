@@ -122,9 +122,11 @@ Opportunity -> Intent -> Plan -> Signed exact raw -> Broadcast observation
 The generic and fixed generations deliberately use different hot paths. Generic idle discovery is the signer-free
 loopback board backed by the official public RPC. The board incrementally polls bounded PoolManager and known V3 anchor
 log ranges, maps a changed pool to affected candidates, and then repeats the full fixed-block quote for those candidates.
-One bounded hot range is polled before each event-cycle backlog drain. A successful poll can coalesce a newer revision
-into an already-pending candidate; a poll failure is retained as source-health evidence while an already-observed wake
-may still be quoted. The quote batch limit is unchanged, and a reorg replaces the wake queue before any fallback drain.
+A dedicated serial hot-poll loop advances independently of slow quote and catalog cycles. It only coalesces revisions
+into the bounded candidate queue; the main scheduler is the sole queue consumer. A public-RPC failure is retained as
+source-health evidence and applies bounded backoff without blocking already-observed wakes. A reorg replaces the queue;
+an already-consumed wake can only request a new canonical fixed-block quote and is never executable evidence by itself.
+The quote batch limit is unchanged.
 Events are wake evidence only: the local post-event mirror is never used as executable output. A low-frequency round-robin
 reconciliation remains necessary because the V3 event set contains previously quoted routes rather than every route that
 could become best. Only a new eligible board candidate escalates to the explicitly configured execution RPC for exact

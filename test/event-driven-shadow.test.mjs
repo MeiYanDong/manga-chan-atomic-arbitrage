@@ -8,8 +8,8 @@ import {
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
   capEventWaitForReconciliation,
+  nextHotPollDelay,
   planHotLogRange,
-  pollBeforeDrainingWakeQueue,
   recoverStaleHotCursor,
   reconcileHotCursorAnchor,
   retryReadOnly,
@@ -262,137 +262,13 @@ test('wake queue deduplicates logs and coalesces revisions per candidate', () =>
   assert.equal(queue.dedupedEvents, 1)
 })
 
-test('hot polling precedes backlog drain and coalesces the newest candidate revision', async () => {
-  const queue = new CandidateWakeQueue()
-  const order = []
-  queue.offer(
-    {
-      type: ShadowWakeSource.V4_SWAP,
-      blockNumber: 10n,
-      transactionHash: '0xold',
-      logIndex: 1,
-    },
-    ['token-a'],
-    100,
-  )
-  const take = queue.take.bind(queue)
-  queue.take = (limit) => {
-    order.push('take')
-    return take(limit)
-  }
-
-  const result = await pollBeforeDrainingWakeQueue({
-    poll: async () => {
-      order.push('poll')
-      queue.offer(
-        {
-          type: ShadowWakeSource.V4_SWAP,
-          blockNumber: 12n,
-          transactionHash: '0xnew',
-          logIndex: 2,
-        },
-        ['token-a', 'token-b'],
-        110,
-      )
-      return { candidateIds: [], catalogRefresh: false, initialized: false }
-    },
-    getQueue: () => queue,
-    limit: 1,
-  })
-
-  assert.deepEqual(order, ['poll', 'take'])
-  assert.equal(result.pollError, null)
-  assert.deepEqual(result.wake.candidateIds, ['token-a'])
-  assert.equal(result.wake.triggers[0].eventCount, 2)
-  assert.equal(result.wake.triggers[0].maxBlock, 12n)
-  assert.equal(queue.size, 1)
-})
-
-test('a wake already selected by the bounded poll is not replaced by another backlog take', async () => {
-  const queue = new CandidateWakeQueue()
-  queue.offer(
-    {
-      type: ShadowWakeSource.V4_SWAP,
-      blockNumber: 10n,
-      transactionHash: '0xold',
-      logIndex: 1,
-    },
-    ['token-a'],
-    100,
-  )
-
-  const polledWake = {
-    candidateIds: ['token-b'],
-    triggers: [{ candidateId: 'token-b' }],
-    oldestObservedAtMs: 110,
-    catalogRefresh: true,
-    initialized: false,
-  }
-  const result = await pollBeforeDrainingWakeQueue({
-    poll: async () => polledWake,
-    getQueue: () => queue,
-    limit: 1,
-  })
-
-  assert.equal(result.wake, polledWake)
-  assert.equal(result.pollResult, polledWake)
-  assert.equal(queue.size, 1)
-})
-
-test('a failed hot poll preserves its error while allowing an observed backlog wake to progress', async () => {
-  const queue = new CandidateWakeQueue()
-  queue.offer(
-    {
-      type: ShadowWakeSource.V4_SWAP,
-      blockNumber: 10n,
-      transactionHash: '0xobserved',
-      logIndex: 1,
-    },
-    ['token-a'],
-    100,
-  )
-  const expectedError = new Error('public rpc unavailable')
-
-  const result = await pollBeforeDrainingWakeQueue({
-    poll: async () => {
-      throw expectedError
-    },
-    getQueue: () => queue,
-    limit: 1,
-  })
-
-  assert.equal(result.pollResult, null)
-  assert.equal(result.pollError, expectedError)
-  assert.deepEqual(result.wake.candidateIds, ['token-a'])
-  assert.equal(queue.size, 0)
-})
-
-test('a hot-poll reorg queue replacement cannot leak stale pre-reorg wakes', async () => {
-  const staleQueue = new CandidateWakeQueue()
-  staleQueue.offer(
-    {
-      type: ShadowWakeSource.V4_SWAP,
-      blockNumber: 10n,
-      transactionHash: '0xstale',
-      logIndex: 1,
-    },
-    ['token-a'],
-    100,
-  )
-  let currentQueue = staleQueue
-
-  const result = await pollBeforeDrainingWakeQueue({
-    poll: async () => {
-      currentQueue = new CandidateWakeQueue()
-      return { candidateIds: [], catalogRefresh: false, initialized: false }
-    },
-    getQueue: () => currentQueue,
-    limit: 1,
-  })
-
-  assert.equal(result.wake, null)
-  assert.equal(currentQueue.size, 0)
-  assert.equal(staleQueue.size, 1)
+test('independent hot polling keeps a fixed success cadence and bounded error backoff', () => {
+  assert.equal(nextHotPollDelay(4_000, 0, 1_000), 3_000)
+  assert.equal(nextHotPollDelay(4_000, 0, 5_000), 0)
+  assert.equal(nextHotPollDelay(4_000, 2, 1_000), 15_000)
+  assert.equal(nextHotPollDelay(10_000, 20, 1_000), 59_000)
+  assert.throws(() => nextHotPollDelay(0, 0, 0), /invalid hot poll timing policy/)
+  assert.throws(() => nextHotPollDelay(4_000, -1, 0), /invalid hot poll timing policy/)
 })
 
 test('hot log ranges start forward-only, remain bounded and wait for confirmations', () => {

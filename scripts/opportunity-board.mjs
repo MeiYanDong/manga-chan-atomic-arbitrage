@@ -20,8 +20,8 @@ import {
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
   capEventWaitForReconciliation,
+  nextHotPollDelay,
   planHotLogRange,
-  pollBeforeDrainingWakeQueue,
   recoverStaleHotCursor,
   reconcileHotCursorAnchor,
   retryReadOnly,
@@ -615,6 +615,7 @@ class OpportunityBoard {
     this.poolMirror = readJson(this.poolMirrorPath) || {}
     this.eventMetrics = {
       mode: 'PUBLIC_HTTP_BOUNDED_LOG_POLLING',
+      scheduler: 'INDEPENDENT_HOT_POLL_LOOP',
       startedAt: this.startedAt,
       polls: 0,
       rpcLogCalls: 0,
@@ -672,6 +673,9 @@ class OpportunityBoard {
     this.dashboardCache = null
     this.sleepTimer = null
     this.sleepResolve = null
+    this.hotPollSleepTimer = null
+    this.hotPollSleepResolve = null
+    this.hotPollTask = null
     this.client = null
     this.unbatchedClient = null
     this.rpcTransportMode = config.rpcBatchSize > 1 ? 'BATCH' : 'INDIVIDUAL'
@@ -1498,11 +1502,21 @@ class OpportunityBoard {
         nextBlock: planned.initializedNextBlock.toString(),
       }
       this.persistState()
-      return { candidateIds: [], catalogRefresh: false, initialized: true }
+      return {
+        candidateIds: [],
+        catalogRefresh: false,
+        initialized: true,
+        pendingCandidates: this.eventQueue.size,
+      }
     }
     if (!planned.range) {
       this.persistState()
-      return { candidateIds: [], catalogRefresh: false, initialized: false }
+      return {
+        candidateIds: [],
+        catalogRefresh: false,
+        initialized: false,
+        pendingCandidates: this.eventQueue.size,
+      }
     }
 
     if (this.hotCursor.lastProcessedBlock) {
@@ -1523,7 +1537,14 @@ class OpportunityBoard {
         })
       }
     }
-    if (!planned.range) return { candidateIds: [], catalogRefresh: false, initialized: false }
+    if (!planned.range) {
+      return {
+        candidateIds: [],
+        catalogRefresh: false,
+        initialized: false,
+        pendingCandidates: this.eventQueue.size,
+      }
+    }
 
     const { fromBlock, toBlock } = planned.range
     const v4Logs = await this.rpcLogs({
@@ -1604,33 +1625,60 @@ class OpportunityBoard {
     this.eventMetrics.consecutiveErrors = 0
     if (relevantLogs > 0) writeJsonAtomic(this.poolMirrorPath, this.poolMirror)
     this.persistState()
-    const wake = this.eventQueue.take(this.config.eventWakeMaxCandidates)
-    return { ...wake, catalogRefresh, initialized: false }
+    return {
+      candidateIds: [],
+      catalogRefresh,
+      initialized: false,
+      pendingCandidates: this.eventQueue.size,
+    }
+  }
+
+  async runHotPollLoop() {
+    while (!this.stopping) {
+      const startedAtMs = Date.now()
+      try {
+        const result = await this.pollHotEvents()
+        if (result.catalogRefresh) this.catalogRefreshRequested = true
+        if (result.pendingCandidates > 0 && this.sleepResolve) {
+          const resolve = this.sleepResolve
+          if (this.sleepTimer) clearTimeout(this.sleepTimer)
+          this.sleepTimer = null
+          this.sleepResolve = null
+          resolve()
+        }
+      } catch (error) {
+        this.eventMetrics.lastError = publicError(error)
+        this.eventMetrics.consecutiveErrors += 1
+      }
+      if (this.stopping) break
+      const remaining = nextHotPollDelay(
+        this.config.eventPollMs,
+        this.eventMetrics.consecutiveErrors,
+        Date.now() - startedAtMs,
+      )
+      await new Promise((resolve) => {
+        this.hotPollSleepResolve = resolve
+        this.hotPollSleepTimer = setTimeout(resolve, remaining)
+      })
+      this.hotPollSleepResolve = null
+      this.hotPollSleepTimer = null
+    }
   }
 
   /** @param {number} timeoutMs */
   async waitForEventWake(timeoutMs) {
     const deadline = Date.now() + timeoutMs
     while (!this.stopping && Date.now() < deadline) {
-      const { pollResult, pollError, wake } = await pollBeforeDrainingWakeQueue({
-        poll: () => this.pollHotEvents(),
-        getQueue: () => this.eventQueue,
-        limit: this.config.eventWakeMaxCandidates,
-      })
-      if (pollResult?.catalogRefresh) this.catalogRefreshRequested = true
-      if (pollError) {
-        this.eventMetrics.lastError = publicError(pollError)
-        this.eventMetrics.consecutiveErrors += 1
+      if (this.eventQueue.size > 0) {
+        const wake = this.eventQueue.take(this.config.eventWakeMaxCandidates)
+        return { ...wake, observedAtMs: wake.oldestObservedAtMs }
       }
-      if (wake) return { ...wake, observedAtMs: wake.oldestObservedAtMs }
 
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
-      const errorMultiplier = 2 ** Math.min(this.eventMetrics.consecutiveErrors, 4)
-      const pollDelay = Math.min(60_000, this.config.eventPollMs * errorMultiplier)
       await new Promise((resolve) => {
         this.sleepResolve = resolve
-        this.sleepTimer = setTimeout(resolve, Math.min(pollDelay, remaining))
+        this.sleepTimer = setTimeout(resolve, Math.min(this.config.eventPollMs, remaining))
       })
       this.sleepResolve = null
       this.sleepTimer = null
@@ -2661,35 +2709,45 @@ class OpportunityBoard {
         mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
       }),
     )
+    this.hotPollTask = this.runHotPollLoop()
     let eventWake = null
     let nextPeriodicAtMs = 0
-    while (!this.stopping) {
-      const started = Date.now()
-      const periodicCycle = eventWake === null
-      const result = await this.cycle({ forceCatalog: this.catalog.length === 0, eventWake })
-      if (result) {
-        console.log(
-          JSON.stringify({
-            status: result.snapshot.health.status,
-            generatedAt: result.snapshot.generatedAt,
-            candidates: result.snapshot.coverage.candidateTokens,
-            freshQuoted: result.snapshot.coverage.freshQuotedTokens,
-            screenedPositive: result.snapshot.coverage.counts[BoardStatus.SCREENED_POSITIVE] || 0,
-            events: result.events.length,
-            trigger: eventWake ? 'POOL_EVENT' : 'PERIODIC_RECONCILIATION',
-            eventCandidateCount: eventWake?.candidateIds?.length || 0,
-          }),
-        )
+    try {
+      while (!this.stopping) {
+        const started = Date.now()
+        const periodicCycle = eventWake === null
+        const result = await this.cycle({ forceCatalog: this.catalog.length === 0, eventWake })
+        if (result) {
+          console.log(
+            JSON.stringify({
+              status: result.snapshot.health.status,
+              generatedAt: result.snapshot.generatedAt,
+              candidates: result.snapshot.coverage.candidateTokens,
+              freshQuoted: result.snapshot.coverage.freshQuotedTokens,
+              screenedPositive: result.snapshot.coverage.counts[BoardStatus.SCREENED_POSITIVE] || 0,
+              events: result.events.length,
+              trigger: eventWake ? 'POOL_EVENT' : 'PERIODIC_RECONCILIATION',
+              eventCandidateCount: eventWake?.candidateIds?.length || 0,
+            }),
+          )
+        }
+        const remaining = nextCycleDelay({
+          scanIntervalMs: this.config.scanIntervalMs,
+          cycleDurationMs: Date.now() - started,
+          minimumPauseMs: this.config.minimumCyclePauseMs,
+        })
+        if (periodicCycle) nextPeriodicAtMs = Date.now() + remaining
+        this.eventMetrics.nextPeriodicCycleAt = new Date(nextPeriodicAtMs).toISOString()
+        const eventWaitMs = capEventWaitForReconciliation(remaining, Date.now(), nextPeriodicAtMs)
+        eventWake = eventWaitMs > 0 ? await this.waitForEventWake(eventWaitMs) : null
       }
-      const remaining = nextCycleDelay({
-        scanIntervalMs: this.config.scanIntervalMs,
-        cycleDurationMs: Date.now() - started,
-        minimumPauseMs: this.config.minimumCyclePauseMs,
-      })
-      if (periodicCycle) nextPeriodicAtMs = Date.now() + remaining
-      this.eventMetrics.nextPeriodicCycleAt = new Date(nextPeriodicAtMs).toISOString()
-      const eventWaitMs = capEventWaitForReconciliation(remaining, Date.now(), nextPeriodicAtMs)
-      eventWake = eventWaitMs > 0 ? await this.waitForEventWake(eventWaitMs) : null
+    } finally {
+      this.stopping = true
+      if (this.hotPollSleepTimer) clearTimeout(this.hotPollSleepTimer)
+      if (this.hotPollSleepResolve) this.hotPollSleepResolve()
+      await this.hotPollTask
+      this.hotPollTask = null
+      this.store.close()
     }
   }
 
@@ -2697,8 +2755,10 @@ class OpportunityBoard {
     this.stopping = true
     if (this.sleepTimer) clearTimeout(this.sleepTimer)
     if (this.sleepResolve) this.sleepResolve()
+    if (this.hotPollSleepTimer) clearTimeout(this.hotPollSleepTimer)
+    if (this.hotPollSleepResolve) this.hotPollSleepResolve()
     if (this.server) await new Promise((resolve) => this.server.close(resolve))
-    this.store.close()
+    this.server = null
   }
 }
 

@@ -1,6 +1,6 @@
 # ADR 0011: poll one hot range before draining the quote backlog
 
-- Status: Accepted and production-verified for bounded cursor progress; current-head convergence pending
+- Status: Superseded by ADR 0027 after production showed periodic quote latency still blocked polling
 - Date: 2026-09-07
 
 ## Context

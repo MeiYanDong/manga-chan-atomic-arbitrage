@@ -85,6 +85,28 @@ export function capEventWaitForReconciliation(waitMs, nowMs, reconciliationAtMs)
 }
 
 /**
+ * Keep the hot poller on a fixed success cadence while applying bounded
+ * exponential backoff after public-RPC failures. Time already spent polling
+ * counts toward the interval so a slow request is never followed by an
+ * unnecessary full delay.
+ *
+ * @param {number} baseMs
+ * @param {number} consecutiveErrors
+ * @param {number} elapsedMs
+ */
+export function nextHotPollDelay(baseMs, consecutiveErrors, elapsedMs) {
+  if (![baseMs, consecutiveErrors, elapsedMs].every(Number.isSafeInteger)) {
+    throw new Error('hot poll timing values must be safe integers')
+  }
+  if (baseMs <= 0 || consecutiveErrors < 0 || elapsedMs < 0) {
+    throw new Error('invalid hot poll timing policy')
+  }
+  const errorMultiplier = 2 ** Math.min(consecutiveErrors, 4)
+  const intervalMs = Math.min(60_000, baseMs * errorMultiplier)
+  return Math.max(0, intervalMs - elapsedMs)
+}
+
+/**
  * Retry only failures explicitly classified as transient by the caller. This
  * helper has no default retry policy, so an EVM/business revert cannot be
  * retried accidentally.
@@ -234,35 +256,6 @@ export class CandidateWakeQueue {
   get size() {
     return this.pending.size
   }
-}
-
-/**
- * Advance the bounded hot-log poll before consuming an existing quote backlog.
- * The poll may coalesce fresher revisions into the queue or consume a bounded
- * wake itself. A transient poll failure must not prevent already-observed
- * candidates from making progress.
- *
- * The queue is resolved after the poll because a reorg may replace it.
- *
- * @param {{poll: () => Promise<Record<string, any>>, getQueue: () => CandidateWakeQueue, limit: number}} options
- */
-export async function pollBeforeDrainingWakeQueue(options) {
-  let pollResult = null
-  let pollError = null
-  try {
-    pollResult = await options.poll()
-  } catch (error) {
-    pollError = error
-  }
-
-  const queue = options.getQueue()
-  const polledWake = Array.isArray(pollResult?.candidateIds) && pollResult.candidateIds.length > 0
-  const wake = polledWake
-    ? pollResult
-    : queue.size > 0
-      ? { ...queue.take(options.limit), catalogRefresh: false, initialized: false }
-      : null
-  return { pollResult, pollError, wake }
 }
 
 /** @param {Map<string, Set<string>>} map @param {string} key @param {string} candidateId */
