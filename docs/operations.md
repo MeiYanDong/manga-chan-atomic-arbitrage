@@ -112,6 +112,27 @@ curl --fail --silent --show-error http://127.0.0.1:8788/healthz
 sudo -u manga-board env MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board npm run board:status
 ```
 
+For a board-only rolling promotion on a host where `manga-business-report.timer` is already enabled, stop that timer
+before intentionally stopping the board. The report unit declares `Wants=manga-opportunity-board.service`; a timer tick
+during the install gate can otherwise start the old symlink target, making a later `systemctl start` a no-op. After the
+installer moves `current`, use an explicit board restart, verify both the process working directory and
+`MANGA_RELEASE_SHA`, wait for `/healthz` to become healthy, refresh the sanitized snapshot, and only then restore the
+timer:
+
+```bash
+sudo systemctl stop manga-business-report.timer
+sudo systemctl stop manga-opportunity-board.service
+sudo ./deploy/install-release.sh /path/to/release.tar.gz <40-char-commit-sha>
+sudo systemctl restart manga-opportunity-board.service
+# Verify /proc/<board-node-pid>/cwd and MANGA_RELEASE_SHA against the intended release.
+curl --fail --silent --show-error http://127.0.0.1:8788/healthz
+sudo systemctl start manga-business-report.service
+sudo systemctl start manga-business-report.timer
+```
+
+Keep the timer disabled if the release identity or health readback disagrees. A board-only promotion must not restart,
+re-arm or otherwise mutate the trading watcher.
+
 The HTTP service deliberately listens only on loopback. View it through an SSH tunnel instead of opening a public
 firewall port. The supplied SSH drop-in permits only client-local forwarding to `127.0.0.1:8788`; validate it with
 `sshd -t`, reload SSH, and prove a fresh key-only session before relying on the tunnel. Runtime evidence is stored in
