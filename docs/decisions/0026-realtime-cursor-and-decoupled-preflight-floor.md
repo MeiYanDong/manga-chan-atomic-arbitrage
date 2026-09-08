@@ -26,6 +26,9 @@ was conservative, even though a failed exact call spends no transaction Gas.
    receipt reconciliation and manual revocation remain unchanged.
 5. The dashboard exposes the result as real-time position and exact-preflight count in user language; block ranges and
    machine fields remain in the technical disclosure and API evidence.
+6. Release-owned safety overrides are applied at `ExecStart`, because systemd `EnvironmentFile` values can otherwise
+   retain and override an older deployment's value. Production readback must verify the value seen by the process, not
+   merely the unit's declared `Environment=` list.
 
 ## Consequences
 

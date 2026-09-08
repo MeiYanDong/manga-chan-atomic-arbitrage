@@ -79,6 +79,10 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
     unit,
     /^Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=\/var\/lib\/manga-business-report\/business-snapshot\.json$/m,
   )
+  assert.match(
+    unit,
+    /^ExecStart=\/usr\/bin\/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 npm run board$/m,
+  )
   assert.doesNotMatch(unit, /LoadCredential|manga-private-key|MANGA_PRIVATE_KEY/)
 
   const example = fs.readFileSync(path.join(root, 'deploy', 'opportunity-board.env.example'), 'utf8')
@@ -207,9 +211,15 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   )
   assert.match(dualWatcher, /^SupplementaryGroups=manga-board$/m)
   assert.match(dualWatcher, /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service/m)
-  assert.match(dualWatcher, /^ExecStart=\/usr\/bin\/env npm run dual:watch$/m)
+  assert.match(
+    dualWatcher,
+    /^ExecStart=\/usr\/bin\/env MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0\.05 npm run dual:watch$/m,
+  )
   assert.match(dualArm, /^Type=oneshot$/m)
-  assert.match(dualArm, /^ExecStart=\/usr\/bin\/env npm run dual:watch:arm$/m)
+  assert.match(
+    dualArm,
+    /^ExecStart=\/usr\/bin\/env MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0\.05 npm run dual:watch:arm$/m,
+  )
   assert.match(wethDeploy, /^Type=oneshot$/m)
   assert.match(wethDeploy, /^ExecStart=\/usr\/bin\/env npm run dual:weth:deploy$/m)
 
