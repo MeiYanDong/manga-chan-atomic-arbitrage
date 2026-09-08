@@ -319,10 +319,17 @@ from freezing the chain cursor without increasing the four-candidate quote cap. 
 they never substitute a local price calculation for the fixed-block Quoter result. Runtime evidence is available at
 `/api/event-metrics` and `/api/chain-catalog` through the same loopback-only SSH tunnel.
 
-The private source-aware console and read-only API are served on the same loopback listener. Control-plane endpoints do
-not construct an opportunity table. Radar contains only candidates admitted to the current quote board, uses a
-semantic summary projection, and loads full claim evidence for one ID only when a row is opened. Historical source-only
-discoveries remain in source coverage and the streamed source catalog rather than being mislabeled as opportunities:
+The private source-aware console and read-only API are served on the same loopback listener. The console uses four
+operator tasks: 总览, 机会, 账单 and 更多. It starts with the current strategy result, separates account-wide history,
+and divides candidates into 可以执行, 接近门槛 and 全部观察. Exact values, Gas, hashes, addresses and claim evidence
+remain available through deliberate disclosure instead of appearing in the primary reading path. See
+[ADR 0025](docs/decisions/0025-user-first-progressive-disclosure.md) and the
+[user-first console story](docs/stories/user-first-operations-console.md).
+
+Control-plane endpoints do not construct an opportunity table. The opportunity view contains only candidates admitted
+to the current quote board, uses a semantic summary projection, and loads full claim evidence for one ID only when a
+card is opened. Historical source-only discoveries remain in source coverage and the streamed source catalog rather
+than being mislabeled as opportunities:
 
 ```text
 GET /api/v1/overview
