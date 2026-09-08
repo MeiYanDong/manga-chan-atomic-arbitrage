@@ -9,7 +9,7 @@ the broad scanner back onto the paid RPC or weakening any signing control.
 
 - A warm periodic quote yields after a newly accepted event and before issuing another periodic RPC request.
 - Pending candidates older than 20 seconds are discarded with a visible counter; the freshest candidate is selected.
-- One event cycle quotes at most one candidate, two amounts per enabled base and two V4 pairs per amount.
+- One event cycle quotes at most one candidate, two amounts per enabled base and one V4 pair per amount.
 - Event probes use a current fixed block and fresh Quoter calls; cached data selects topology only.
 - A failed event shortlist remains incomplete and never triggers full topology discovery in the hot cycle.
 - Periodic reconciliation remains enabled for full route, sizing and catalog coverage.
