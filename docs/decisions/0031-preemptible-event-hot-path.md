@@ -1,6 +1,6 @@
 # ADR 0031: preemptible event hot path
 
-- Status: Accepted; production correction pending
+- Status: Accepted; v0.7.9 production acceptance pending
 - Date: 2026-09-09
 
 ## Context
@@ -21,9 +21,10 @@ them.
    every stale candidate drop; never relabel an expired event as current.
 2. Quote one event candidate per cycle. For each USDG/WETH lane, probe at most two amounts: the previous winning amount
    when still inside the configured risk grid, then the smallest configured probe.
-3. Quote one V4 pair per lane. Prefer a pair joining the touched V4 pool to the previous winning route; otherwise
-   use the previous pair or a deterministic two-pool fallback. Each selected pair still receives fresh V3 and V4
-   Quoter calls at one canonical fixed block. A failed event shortlist does not expand into full discovery.
+3. Quote one V4 pair and the strongest previously proven V3 topology per lane. Prefer a pair joining the touched V4
+   pool to the previous winning route; otherwise use the previous pair or a deterministic two-pool fallback. Each
+   selected path still receives fresh V3 and V4 Quoter calls at one canonical fixed block. A missing or failed event
+   shortlist does not expand into full discovery.
 4. When a warm periodic cycle is running, a pool event accepted after that cycle began causes its next RPC read to
    yield. Backlog that predates the cycle does not abort mandatory work, and a cold start without persisted observations
    remains non-preemptible. Completed observations remain valid; the interrupted candidate is not converted into a
@@ -32,6 +33,8 @@ them.
    states. Event probes cannot establish route completeness and cannot authorize signing by themselves.
 6. Do not change the exact executor simulation, current-block route validation, immutable principal caps, minimum net
    profit, nonce, reserve, failed-Gas breaker, authorization or receipt reconciliation.
+7. Give event quotes two logical read attempts separated by 200 ms. Keep the periodic reconciliation's three-attempt,
+   one-second exponential policy so lowering event latency does not silently weaken coverage work.
 
 ## Consequences
 
@@ -51,3 +54,11 @@ second left too little margin. The canary also showed that viem wraps a fetch-le
 error hierarchy. One later yield was therefore published as a transient `DEGRADED` state even though the service did
 not restart and no signer or transaction was involved. v0.7.8 reduces the pair bound from two to one and recognizes the
 AsyncLocalStorage preemption flag even when the thrown error is wrapped.
+
+## v0.7.8 canary correction
+
+The first bounded event cycle used only 17 logical Quoter calls, but the official public endpoint required 13 logical
+retries and the cycle still took 54,807 ms. A later cycle completed in 45,135 ms, while another correctly published
+`DEGRADED` when the same public endpoint could not provide complete fixed-block evidence. The board did not restart,
+sign or spend Gas. v0.7.9 therefore retains only the strongest proven V3 topology in an event wake and gives that hot
+path one fast retry. Periodic reconciliation remains the completeness path.

@@ -17,6 +17,7 @@ import {
   rotatingSlice,
   routeShadowEvent,
   selectPeriodicShadowCandidates,
+  selectRpcRetryPolicy,
   shouldPreemptPeriodicQuote,
 } from '../src/event-driven-shadow.mjs'
 import { isTransientRpcError } from '../src/policy.mjs'
@@ -71,6 +72,27 @@ test('only a newer event revision preempts an eligible periodic quote', () => {
   assert.equal(shouldPreemptPeriodicQuote({ ...context, preemptible: false }, 11), false)
   assert.equal(shouldPreemptPeriodicQuote({ ...context, preempted: true }, 10), true)
   assert.throws(() => shouldPreemptPeriodicQuote(context, -1), /non-negative/)
+})
+
+test('event quotes receive an independent fast RPC retry budget', () => {
+  const policies = {
+    periodic: { attempts: 3, delayMs: 1_000 },
+    event: { attempts: 2, delayMs: 200 },
+  }
+  assert.deepEqual(selectRpcRetryPolicy(undefined, policies), {
+    attempts: 3,
+    delayMs: 1_000,
+    eventHotPath: false,
+  })
+  assert.deepEqual(selectRpcRetryPolicy({ eventHotPath: true }, policies), {
+    attempts: 2,
+    delayMs: 200,
+    eventHotPath: true,
+  })
+  assert.throws(
+    () => selectRpcRetryPolicy({ eventHotPath: true }, { ...policies, event: { attempts: 0, delayMs: 200 } }),
+    /positive safe integer/,
+  )
 })
 
 test('bounded read retry recovers transient evidence but never retries a business revert', async () => {

@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   V3ShortlistCache,
   seedV3ShortlistsFromObservations,
+  selectEventV3Routes,
   selectV3BootstrapRoutes,
   v3DirectionKey,
 } from '../src/v3-shortlist-cache.mjs'
@@ -99,4 +100,12 @@ test('bootstrap discovery is deterministic, deduplicated and hard bounded', () =
     [direct100.path, bridge.path],
   )
   assert.throws(() => selectV3BootstrapRoutes([], 0), /positive integer/)
+})
+
+test('event V3 selection keeps prior ranking and never expands past its hot-path limit', () => {
+  const strongest = route(500, POOL_B)
+  const fallback = route(100, POOL_A)
+  assert.deepEqual(selectEventV3Routes([strongest, fallback], 1), [strongest])
+  assert.deepEqual(selectEventV3Routes([strongest, fallback], 3), [strongest, fallback])
+  assert.throws(() => selectEventV3Routes([strongest], 0), /positive integer/)
 })

@@ -31,6 +31,19 @@ export function selectV3BootstrapRoutes(routes, limit) {
     .slice(0, limit)
 }
 
+/**
+ * Re-quote only the strongest previously proven topology in an event wake.
+ * The caller still obtains fresh current-block quotes; this helper only bounds
+ * structural route selection and never expands into discovery.
+ *
+ * @param {Record<string, any>[]} routes
+ * @param {number} limit
+ */
+export function selectEventV3Routes(routes, limit) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('event V3 route limit must be a positive integer')
+  return routes.slice(0, limit)
+}
+
 /** @param {Record<string, any>} route */
 function normalizeRoute(route) {
   const tokens = Array.isArray(route?.tokens) ? route.tokens : []
