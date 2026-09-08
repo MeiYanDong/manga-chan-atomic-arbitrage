@@ -77,6 +77,23 @@ export function compactExecutionBoardSnapshot(snapshot) {
 }
 
 /**
+ * Count candidates whose just-completed observation contains at least one
+ * proxy-positive base lane. The board uses this to publish a signer-feed
+ * checkpoint before slower catalog maintenance can age a new quote past the
+ * watcher's much tighter execution horizon.
+ *
+ * @param {Array<Record<string, any> | null | undefined>} observations
+ */
+export function screenedPositiveObservationCount(observations) {
+  if (!Array.isArray(observations)) throw new Error('observations must be an array')
+  return observations.filter((observation) => {
+    if (!observation || typeof observation !== 'object') return false
+    const lanes = [observation, ...Object.values(observation.baseOpportunities || {})]
+    return lanes.some((lane) => lane?.status === BoardStatus.SCREENED_POSITIVE)
+  }).length
+}
+
+/**
  * Persist the signer-facing projection independently from the board's HTTP
  * event loop. Atomic replacement means readers see either the previous complete
  * generation or the next complete generation, never a partial JSON document.

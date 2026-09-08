@@ -1,17 +1,16 @@
 # Bounded Generic PAIR Atomic Arbitrage + Opportunity Board
 
-> The `live/spx-aapl-nvda-canary` branch is the protected production line for the
-> isolated fixed-route canary and the separately bounded generic-v2 lane. The two
-> generations retain separate contracts and state; only one may own the wallet's
-> signing lane at a time.
+> The `live/spx-aapl-nvda-canary` branch is the protected production line for the retained fixed-route canaries,
+> generic-v2 USDG executor and active dual-v3 USDG/WETH lane. The generations retain separate contracts and state;
+> only dual-v3 currently owns the wallet's signing lane.
 
-The repository has two deployed execution generations and one production-pending successor:
+The repository retains three deployed execution generations:
 
 - the deployed fixed-route canaries, including `USDG -> AAPL -> SPX -> NVDA -> USDG`; and
 - generic-v2, a typed bounded USDG executor for any admitted PAIR token with two quote pools, whether the quote assets
   are stocks, AI tokens or memes; and
 - dual-v3, which retains generic-v2 and adds a separately bounded WETH-principal executor behind one shared signer and
-  nonce lane. Dual-v3 is implemented locally but is not described as deployed or live until production evidence exists.
+  nonce lane. Dual-v3 is the active production signer under an explicit until-revoked authorization.
 
 The generic economic unit is:
 
@@ -46,46 +45,46 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 
 ## Honest status
 
-- Dual-v3/WETH is currently code and deterministic-test evidence only in this checkout. No WETH executor address,
-  deployment receipt, production arm, systemd runtime, live transaction, or WETH profit is claimed yet. The existing
-  generic-v2 service remains the production signer until an explicit evidence-gated cutover. The exact local and
-  signer-free public-RPC results are recorded in
-  [`docs/evidence/2026-09-08-dual-base-local-validation.md`](docs/evidence/2026-09-08-dual-base-local-validation.md).
+- Dual-v3 is active on the production host. Its WETH executor is
+  `0xeC6BB0511Eb7a348ad1879535F66320a51a3eDfc`, deployed and seeded with `0.0032 WETH` by
+  [`0xee0c…f880`](https://robinhoodchain.blockscout.com/tx/0xee0cee4e11b383ff869be571db44f5fbebbe88c1793daf011f4fcb03ae78f880).
+  USDG cycles retain and compound USDG; WETH cycles retain and compound WETH. Native ETH remains in the operator
+  wallet for Gas.
+- The active authorization is `0x3922c6c44af592bf21a59839c59cdc3f3650d679320f26512130d12fb12fb696`. It is
+  `UNTIL_REVOKED`, has unlimited count limits, uses `35.344393 USDG` and `0.0032 WETH` arm-time principal, and caps
+  authorized principal at `100 USDG` and `1 WETH`. The common minimum screened and exact net is `0.1 USDG`; the
+  cumulative failed-Gas breaker is `0.001 ETH` and the wallet reserve floor is `0.002 ETH`.
+- At the latest production readback, dual-v3 had observed current empty signer-free feeds but had zero exact preflights,
+  zero signed attempts, zero confirmed executions and zero failed Gas. Therefore dual-era realized profit is `0`, not
+  unknown positive profit. Automatic WETH compounding is deployed and armed but remains unexercised until a canonical
+  WETH execution receipt exists.
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
-  disabled while generic-v2 owns the wallet lane. Their public evidence is under [`deployments`](deployments).
+  disabled. Their public evidence is under [`deployments`](deployments).
 - Generic-v2 is deployed on Robinhood Chain mainnet at
   `0x3f3A60A2da9E8D9811F41c6093280D7a90685aDD` from release
   `a21b782c9a2fec3522f7a7a8f73a10c7df236e43`. The deployment receipt and identity are recorded in
   [`deployments/generic-v2-mainnet.json`](deployments/generic-v2-mainnet.json).
-- Eight canonically confirmed autonomous executions have produced `10.980908 USDG` gross profit, `2.985869 USDG`
-  marked Gas and `7.995039 USDG` marked net execution profit. After the separately marked `2.322841 USDG` one-time
-  deployment Gas, the combined marked result is `+5.672198 USDG`, excluding seed-conversion impact. This small sample
-  does not establish an opportunity frequency or race-win probability.
-- The server generic watcher is active from release `b8ab13509be6f9c033d51054759162eaff5f34a1` under schema-v3
-  authorization `0x7e580b5ff19c2db13f25439c4b9b751a7db29e48e2d050f05e179462a0de0b21`. Its lifetime is
-  `UNTIL_REVOKED`, with no seven-day expiry or renewal task. Confirmed retained USDG automatically increases eligible
-  principal up to the immutable `100 USDG` contract cap; at the 2026-09-08 recovery readback the eligible principal was
-  `33.021814 USDG`, with zero new-arm attempts, zero failed Gas and no unresolved mutation. A
-  compact execution projection is published atomically through a dedicated read-only runtime directory, so signer
-  liveness no longer depends on the board's occasionally stalled HTTP event loop. A controlled board restart preserved
-  the feed and signer process, and a subsequent 38-sample production soak crossed the prior heap-failure window with
-  zero post-cutover service restarts or cgroup OOM events.
+- Ten canonically confirmed historical generic-v2 executions produced `13.303487 USDG` gross profit, `3.839925 USDG`
+  marked Gas and `9.463562 USDG` marked net execution profit. After the separately marked `2.322841 USDG` one-time
+  deployment Gas, the combined marked result is `+7.140721 USDG`, excluding seed-conversion impact. Those ten receipts
+  predate the dual-v3 authorization baseline and do not establish future opportunity frequency or race-win probability.
 - The prior signed-attempt lifecycle defect was closed only after two independent readers proved the expired raw
   transaction absent and nonce-unconsumed. That recovery remains historical evidence; it is not counted as a receipt or
   execution.
 - Historical fixed-route receipt evidence is documented separately. A test, screen, running process or fork transaction is never presented as a new mainnet profit.
-- The old macOS polling watcher and fixed-route cloud signer remain stopped; generic-v2 exclusively owns the live wallet
-  lane. The broad opportunity board remains a separate signer-free service.
+- The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
+  exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free event board is running release `b8ab13509be6f9c033d51054759162eaff5f34a1`. Its exact source catalog
-  is an atomically replaced, SHA-256-committed file written with bounded transient memory; SQLite economic checkpoints
-  reference that commitment instead of duplicating the complete catalog on each publication. The board remains under
-  its unchanged 448 MiB pressure threshold and 512 MiB hard limit. A quote backlog no longer freezes hot-log polling, although the
-  persisted cursor is still catching up to the chain head. The board remains loopback-only and has no signer or
-  broadcast path. The live signer is temporarily using Robinhood's official public RPC through an explicit emergency
-  opt-in because the configured ChainStack account returned a service-paused billing error. This fallback is
-  rate-limited and is not treated as a production-grade provider.
+- The signer-free board and dual watcher are running release `4c1a53f80dca0afd4d1cc44b1961d89d6a458981`. The source
+  census remains in its streamed catalog and evidence stores, while dashboard control routes build no opportunity
+  objects and Radar lists only the current board-admitted set. The board survived repeated production API reads and
+  complete catalog streaming under the unchanged 448 MiB pressure threshold and 512 MiB hard limit with zero restarts
+  and zero OOM events. It remains loopback-only and has no signer or broadcast path.
+- The board and explicitly opted-in execution fallback currently use Robinhood's official public RPC because the
+  configured ChainStack service was paused for billing. Public RPC throttling, latency and ambiguous-broadcast risk
+  remain admitted limitations; idle dual-v3 reads only the local feed and touches execution RPC only after a screened
+  candidate.
 - The bounded source backfill now renders NINECAT as `LONG_ROUTE / DOPPLER / UNISWAP_V4 / NINECAT-AI`, with zero PAIR
   listings for that address. NINECAT is still `UNQUOTED` and `UNPROVEN`; source coverage remains partial and current
   proxy-positive rows are not executable-profit or receipt evidence.
@@ -109,6 +108,13 @@ See
 [`docs/evidence/2026-09-08-board-restart-resilience-production-promotion.md`](docs/evidence/2026-09-08-board-restart-resilience-production-promotion.md)
 for the source-catalog heap-failure root cause, bounded streaming correction, restart-preserved execution feed and
 post-restart production soak.
+See
+[`docs/evidence/2026-09-08-dual-v3-bounded-dashboard-production-promotion.md`](docs/evidence/2026-09-08-dual-v3-bounded-dashboard-production-promotion.md)
+for the WETH deployment receipt, dual authorization, dashboard OOM correction, production gates and current
+receipt-separated runtime readback.
+See
+[`docs/evidence/2026-09-08-post-quote-checkpoint-local-validation.md`](docs/evidence/2026-09-08-post-quote-checkpoint-local-validation.md)
+for the quote-to-feed latency diagnosis, bounded correction and pre-production test boundary.
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
@@ -167,9 +173,13 @@ The fixed executors retain their original 15 USDG policy. Generic-v2 does not si
   blockers.
 - The USDG and WETH contracts keep separate principal and accounting ledgers but use exactly one signer process, wallet
   lock and nonce baseline.
+- A newly quoted proxy-positive batch is checkpointed to the compact execution feed before slower catalog maintenance.
+  This preserves the strict 30-second signer freshness boundary; it does not bypass the independent `0.1 USDG`
+  screened/exact floor or any typed route and receipt gate.
 
 See [ADR 0019](docs/decisions/0019-dual-usdg-weth-principal-execution.md) and the
-[dual-base stories](docs/stories/dual-base-execution.md).
+[dual-base stories](docs/stories/dual-base-execution.md). The quote-to-feed ordering decision is recorded in
+[ADR 0022](docs/decisions/0022-post-quote-execution-feed-checkpoint.md).
 
 See [`docs/spec.md`](docs/spec.md) for the Race Thesis, Shot Policy, state model and acceptance boundaries.
 

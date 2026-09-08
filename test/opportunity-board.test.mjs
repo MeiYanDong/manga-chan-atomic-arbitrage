@@ -19,6 +19,7 @@ import {
   publicError,
   reconcileOpportunityEpisodes,
   screenRoundTrip,
+  screenedPositiveObservationCount,
   screenWethRoundTrip,
   writeExecutionBoardSnapshot,
   writeJsonAtomic,
@@ -66,6 +67,25 @@ test('execution snapshot retains a WETH-only positive lane while legacy USDG rem
   }
   const compact = compactExecutionBoardSnapshot({ schemaVersion: 5, items: [wethOnly] })
   assert.deepEqual(compact.items, [wethOnly])
+})
+
+test('post-quote checkpoint counts each newly quoted candidate once across USDG and WETH lanes', () => {
+  assert.equal(
+    screenedPositiveObservationCount([
+      { status: BoardStatus.SCREENED_POSITIVE },
+      {
+        status: BoardStatus.NO_EDGE,
+        baseOpportunities: {
+          USDG: { status: BoardStatus.NO_EDGE },
+          WETH: { status: BoardStatus.SCREENED_POSITIVE },
+        },
+      },
+      { status: BoardStatus.GROSS_POSITIVE },
+      null,
+    ]),
+    2,
+  )
+  assert.throws(() => screenedPositiveObservationCount(/** @type {any} */ ({})), /must be an array/)
 })
 
 test('WETH screening subtracts native Gas exactly and normalizes conservatively to USDG', () => {

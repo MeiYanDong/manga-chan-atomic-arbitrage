@@ -1,5 +1,9 @@
 # Bounded dashboard runtime local validation
 
+Follow-up: this allocation boundary was later promoted and production-verified in
+[the dual-v3 bounded-dashboard production promotion](2026-09-08-dual-v3-bounded-dashboard-production-promotion.md).
+The evidence below remains the historical local checkpoint.
+
 - Date: 2026-09-08 (Asia/Shanghai)
 - Input: read-only copy of the production schema-v5 source catalog and board snapshot
 - Production mutation during this validation: the unstable board was stopped; the dual watcher stayed active

@@ -1,6 +1,6 @@
 # ADR 0020: evidence-linked source-catalog restart projection
 
-- Status: Accepted; production verification pending
+- Status: Accepted and production-verified
 - Date: 2026-09-08
 
 ## Context
@@ -49,3 +49,7 @@ targets would make discovery incomplete and could hide a later second-pool oppor
   unchanged and continues to return semantic platform, protocol and venue fields.
 - The pre-migration source file remains as rollback material. Removing that backup is a separate destructive decision.
 - Profitability, ordering advantage and a confirmed WETH execution remain unproven until canonical receipts exist.
+
+The schema-v5 production migration, subsequent dashboard-allocation incident and final bounded-runtime verification are
+recorded in
+[the dual-v3 bounded-dashboard promotion evidence](../evidence/2026-09-08-dual-v3-bounded-dashboard-production-promotion.md).

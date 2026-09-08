@@ -1,6 +1,6 @@
 # ADR 0021: bounded dashboard runtime projection
 
-- Status: Accepted; production verification pending
+- Status: Accepted and production-verified
 - Date: 2026-09-08
 
 ## Context
@@ -44,3 +44,7 @@ opportunity.
 - A detail request for an unknown ID returns `404`; malformed encoded IDs return `400` before building a projection.
 - Public-RPC throttling can still make a scan `DEGRADED`. It is transport evidence and remains separate from process
   memory stability or profitable execution evidence.
+
+The production cold start, repeated concurrent API reads, exact source-stream hash, cgroup counters and watcher
+readback are recorded in
+[the dual-v3 bounded-dashboard promotion evidence](../evidence/2026-09-08-dual-v3-bounded-dashboard-production-promotion.md).
