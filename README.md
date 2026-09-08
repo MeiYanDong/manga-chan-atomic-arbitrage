@@ -1,8 +1,8 @@
 # Bounded Generic PAIR Atomic Arbitrage + Opportunity Board
 
-> The `live/spx-aapl-nvda-canary` branch is the protected production line for the retained fixed-route canaries,
-> generic-v2 USDG executor and active dual-v3 USDG/WETH lane. The generations retain separate contracts and state;
-> only dual-v3 currently owns the wallet's signing lane.
+> `main` is the reviewed release line for the retained fixed-route canaries, generic-v2 USDG executor and active
+> dual-v3 USDG/WETH lane. The generations retain separate contracts and state; only dual-v3 currently owns the
+> wallet's signing lane.
 
 The repository retains three deployed execution generations:
 
@@ -57,14 +57,16 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   [`0xee0c…f880`](https://robinhoodchain.blockscout.com/tx/0xee0cee4e11b383ff869be571db44f5fbebbe88c1793daf011f4fcb03ae78f880).
   USDG cycles retain and compound USDG; WETH cycles retain and compound WETH. Native ETH remains in the operator
   wallet for Gas.
-- The active authorization is `0x3922c6c44af592bf21a59839c59cdc3f3650d679320f26512130d12fb12fb696`. It is
+- The active authorization is `0x7039d0e14a6ccecb19f0ee4c75740362ab2a98b1e2eef43259a896bd3035cd62`. It is
   `UNTIL_REVOKED`, has unlimited count limits, uses `35.344393 USDG` and `0.0032 WETH` arm-time principal, and caps
-  authorized principal at `100 USDG` and `1 WETH`. The common minimum screened and exact net is `0.1 USDG`; the
-  cumulative failed-Gas breaker is `0.001 ETH` and the wallet reserve floor is `0.002 ETH`.
-- At the latest production readback, dual-v3 had observed current empty signer-free feeds but had zero exact preflights,
-  zero signed attempts, zero confirmed executions and zero failed Gas. Therefore dual-era realized profit is `0`, not
-  unknown positive profit. Automatic WETH compounding is deployed and armed but remains unexercised until a canonical
-  WETH execution receipt exists.
+  authorized principal at `100 USDG` and `1 WETH`. The proxy screen floor is `0.05 USDG`; signing independently requires
+  at least `0.1 USDG` exact net after Gas. The cumulative failed-Gas breaker is `0.001 ETH` and the wallet reserve floor
+  is `0.002 ETH`.
+- At the latest production readback, the active authorization had processed current empty signer-free feeds but had
+  zero exact preflights, zero signed attempts, zero confirmed executions and zero failed Gas. Its immediate predecessor
+  performed four exact preflights; all were exact-negative and produced no signature, broadcast or Gas. Therefore
+  dual-era realized profit is `0`, not unknown positive profit. Automatic USDG/WETH compounding is deployed and armed
+  but remains unexercised until a canonical execution receipt exists.
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
   disabled. Their public evidence is under [`deployments`](deployments).
@@ -83,7 +85,7 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free board and dual watcher are running release `803caaaaae11a5c8cbef00bcab4aaa23ac2eb919`. The source
+- The signer-free board and dual watcher are running release `0bfa3ac2f32ae36714129c66e746f526b0c78884`. The source
   census remains in its streamed catalog and evidence stores, while dashboard control routes build no opportunity
   objects and Radar lists only the current board-admitted set. The board survived repeated production API reads and
   complete catalog streaming under the unchanged 448 MiB pressure threshold and 512 MiB hard limit with zero restarts
@@ -93,14 +95,14 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   same-day send, and is enabled as a five-minute refresh/retry timer with a 09:05 Beijing reporting cutoff. The latest
   browser view keeps historical receipt economics separate from the active dual authorization, whose realized net is
   still `0`.
-- A proxy-positive quote now checkpoints the compact execution feed before slower catalog maintenance, preserving the
-  30-second signer horizon without weakening the `0.1 USDG` screened/exact floor. Dual startup reads retry transient
-  RPC failures five times before loading the private credential. The production restart and subsequent public-RPC
-  throttle recovery are verified; the live positive-checkpoint path and live startup-retry branch remain unexercised.
-- The board and explicitly opted-in execution fallback currently use Robinhood's official public RPC because the
-  configured ChainStack service was paused for billing. Public RPC throttling, latency and ambiguous-broadcast risk
-  remain admitted limitations; idle dual-v3 reads only the local feed and touches execution RPC only after a screened
-  candidate.
+- A proxy-positive quote checkpoints the compact execution feed before slower catalog maintenance, preserving the
+  30-second signer horizon without weakening the separate `0.05 USDG` screen and `0.1 USDG` exact-net floors. Dual
+  startup reads retry transient RPC failures five times before loading the private credential.
+- The signer-free scanner uses Robinhood's official public RPC. Production event wakes are capped at one candidate,
+  one V4 pair, one proven V3 topology and two amounts per base; observed event-cycle latency still varied from 33.4 to
+  52.4 seconds because the public endpoint is rate-limited. Idle dual-v3 reads only the local feed. A screened candidate
+  escalates to the separately configured managed ChainStack RPC for exact simulation, signing, broadcast and receipt
+  reconciliation; the public endpoint is not the normal execution lane.
 - The bounded source backfill now renders NINECAT as `LONG_ROUTE / DOPPLER / UNISWAP_V4 / NINECAT-AI`, with zero PAIR
   listings for that address. NINECAT is still `UNQUOTED` and `UNPROVEN`; source coverage remains partial and current
   proxy-positive rows are not executable-profit or receipt evidence.
@@ -142,6 +144,10 @@ See
 [`docs/evidence/2026-09-08-business-dashboard-feishu-production-promotion.md`](docs/evidence/2026-09-08-business-dashboard-feishu-production-promotion.md)
 for the encrypted webhook boundary, response-code-0 delivery, idempotency check, narrow-browser correction and final
 production runtime readback.
+See
+[`docs/evidence/2026-09-09-public-rpc-event-hot-path-production-promotion.md`](docs/evidence/2026-09-09-public-rpc-event-hot-path-production-promotion.md)
+for the bounded public-RPC event path, rejected canaries, v0.7.9 artifact gates, controlled signer re-arm and current
+receipt-separated production status.
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
@@ -314,16 +320,14 @@ immutable plan, raw-before-broadcast journal and UNKNOWN barrier. Disabled quote
 hooks remain shadow-only. Chain discovery reports completeness only from its configured start block; arbitrary earlier
 V4 history is not claimed as covered.
 
-The hot path uses bounded public-HTTP `eth_getLogs` ranges for PoolManager and previously quoted V3 pools. Every event
-cycle consumes at most four queued candidates, and priority, positive and coverage rows share the same four-candidate
-periodic cap. Route topology can be reused across cycles, but every retained V3 path is freshly quoted at the current
-fixed block. Event cycles do not enumerate every fee route; periodic cycles refresh at most two stale directions so
-coverage work remains bounded. A direction without prior successful evidence probes at most eight deterministic
-low-fee paths until a periodic full-discovery slot is available. For multiple amounts in one cycle, the first amount
-searches the complete V4 pool set and later amounts freshly quote only its three strongest pool pairs at that same
-block. Events only choose what to requote; they never substitute a local price calculation for the fixed-block Quoter
-result. Runtime evidence is available at `/api/event-metrics` and `/api/chain-catalog` through the same loopback-only
-SSH tunnel.
+The hot path uses bounded public-HTTP `eth_getLogs` ranges for PoolManager and previously quoted V3 pools. An event
+cycle chooses the freshest one candidate and probes at most two amounts per base through one touched/previous V4 pair
+and the strongest previously proven V3 topology. It uses one fast logical retry and never expands into route discovery.
+Every selected leg is still freshly quoted at one current fixed block. Periodic work retains the four-candidate cap,
+broader retry policy, complete V4 first-amount search, up to three strongest later-amount V4 pairs, two stale-direction
+refresh slots and bounded eight-route V3 bootstrap. Events only choose what to requote; they never substitute a local
+price calculation for the fixed-block Quoter result. Runtime evidence is available at `/api/event-metrics` and
+`/api/chain-catalog` through the same loopback-only SSH tunnel.
 
 The private source-aware console and read-only API are served on the same loopback listener. The console uses four
 operator tasks: 总览, 机会, 账单 and 更多. It starts with the current strategy result, separates account-wide history,
