@@ -10,6 +10,8 @@
   the trading key, write trading state or affect trading-service success.
 - Start the constrained one-shot reporter with one direct Node process so its 16-task systemd limit cannot be exhausted
   by nested npm and report runtimes before the script begins.
+- Accept systemd's immutable `0440 root:root` runtime credential only inside the unit-specific credentials directory,
+  while continuing to reject ordinary group-readable webhook files.
 - Retry transient dual-watcher startup chain readback five times with bounded exponential backoff, persist degraded
   retry telemetry, and load the private credential only after chain identity, deployments, balances and nonce converge.
   Wrong-chain, authorization, ledger and state mismatches still fail immediately.

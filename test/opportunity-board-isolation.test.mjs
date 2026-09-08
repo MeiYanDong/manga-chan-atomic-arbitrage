@@ -114,6 +114,8 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.doesNotMatch(service, /^ExecStart=.*npm/m)
   assert.doesNotMatch(service, /manga-private-key|MANGA_PRIVATE_KEY|MANGA_RPC_URL|MANGA_WS_URL/)
   assert.doesNotMatch(source, /createWalletClient|privateKeyToAccount|eth_sendRawTransaction/)
+  assert.match(source, /isSecureSystemdCredential/)
+  assert.match(source, /process\.env\.CREDENTIALS_DIRECTORY/)
   assert.match(source, /status: 'DELIVERED'/)
   assert.match(source, /receipt\?\.periodKey === schedule\.periodKey/)
   assert.match(source, /deriveDeliveryState/)
