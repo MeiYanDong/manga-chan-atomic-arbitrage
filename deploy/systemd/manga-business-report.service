@@ -19,7 +19,7 @@ Environment=MANGA_BUSINESS_REPORT_MINUTE=5
 LoadCredentialEncrypted=manga-feishu-webhook:/etc/credstore.encrypted/manga-feishu-webhook
 Environment=MANGA_FEISHU_WEBHOOK_FILE=%d/manga-feishu-webhook
 UMask=0027
-ExecStart=/usr/bin/env npm run business:report:tick
+ExecStart=/usr/bin/env node scripts/business-report.mjs tick
 TimeoutStartSec=45
 StateDirectory=manga-business-report
 StateDirectoryMode=0750
@@ -42,4 +42,3 @@ SystemCallArchitectures=native
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/manga-business-report
-

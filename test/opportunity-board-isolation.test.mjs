@@ -110,6 +110,8 @@ test('business reporter can read ledgers but cannot sign or write trading state'
     /^LoadCredentialEncrypted=manga-feishu-webhook:\/etc\/credstore\.encrypted\/manga-feishu-webhook$/m,
   )
   assert.match(service, /^Environment=MANGA_FEISHU_WEBHOOK_FILE=%d\/manga-feishu-webhook$/m)
+  assert.match(service, /^ExecStart=\/usr\/bin\/env node scripts\/business-report\.mjs tick$/m)
+  assert.doesNotMatch(service, /^ExecStart=.*npm/m)
   assert.doesNotMatch(service, /manga-private-key|MANGA_PRIVATE_KEY|MANGA_RPC_URL|MANGA_WS_URL/)
   assert.doesNotMatch(source, /createWalletClient|privateKeyToAccount|eth_sendRawTransaction/)
   assert.match(source, /status: 'DELIVERED'/)

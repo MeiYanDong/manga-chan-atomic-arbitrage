@@ -8,6 +8,8 @@
 - Add an independent 09:05 Beijing Feishu daily report backed by an encrypted systemd credential, a five-minute retry
   timer, period-keyed fsynced delivery receipts and crash recovery. Reporting can read canonical ledgers but cannot load
   the trading key, write trading state or affect trading-service success.
+- Start the constrained one-shot reporter with one direct Node process so its 16-task systemd limit cannot be exhausted
+  by nested npm and report runtimes before the script begins.
 - Retry transient dual-watcher startup chain readback five times with bounded exponential backoff, persist degraded
   retry telemetry, and load the private credential only after chain identity, deployments, balances and nonce converge.
   Wrong-chain, authorization, ledger and state mismatches still fail immediately.
