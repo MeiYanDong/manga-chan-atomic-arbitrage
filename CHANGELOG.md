@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Count every distinct signer-free feed generation in dual-watcher liveness telemetry, including generations with zero
+  screened-positive rows. Report screened-positive generations separately so an idle-but-observing watcher cannot be
+  mistaken for a stopped watcher; signing and exact-preflight behavior are unchanged.
 - Separate dashboard control-plane, admitted-opportunity summary and one-ID evidence projections after the production
   `/api/v1/system` path expanded 41,652 source discoveries and exhausted V8 old space. Keep the complete source census
   in evidence storage and coverage metrics, drop duplicate in-memory Doppler detail objects, and retain the existing

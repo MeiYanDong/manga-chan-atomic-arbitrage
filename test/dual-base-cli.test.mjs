@@ -39,12 +39,24 @@ test('dual watcher exits without an explicit arm and performs no startup RPC', (
 test('dual status remains a local readback when the strategy RPC is unreachable', (context) => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manga-dual-status-'))
   context.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
-  const result = run('watch-status', runDir)
+  const emptyFeed = path.join(runDir, 'execution-snapshot.json')
+  const snapshot = JSON.parse(fs.readFileSync(fixture, 'utf8'))
+  snapshot.schemaVersion = 5
+  snapshot.generatedAt = '2026-09-08T07:00:00.000Z'
+  snapshot.items = []
+  snapshot.selection = { executionAuthorized: false }
+  snapshot.baseSelection = { executionAuthorized: false }
+  snapshot.health = { signerLoaded: false }
+  fs.writeFileSync(emptyFeed, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 })
+  const result = run('watch-status', runDir, { MANGA_GENERIC_BOARD_SNAPSHOT: emptyFeed })
   assert.equal(result.status, 0, result.stderr)
   const output = JSON.parse(result.stdout)
   assert.equal(output.status, 'NOT_CONFIGURED')
   assert.equal(output.evidence, 'LOCAL_RUNTIME_AUTHORIZATION_AND_SIGNER_FREE_BOARD_READBACK_NO_CHAIN_QUERY')
-  assert.equal(output.board.status, 'NO_FRESH_ELIGIBLE_DUAL_SCREEN')
+  assert.equal(output.board.evidence, 'LOCAL_SIGNER_FREE_BOARD_SCREEN_ONLY')
+  assert.equal(output.board.generatedAt, snapshot.generatedAt)
+  assert.equal(output.board.candidateCount, 0)
+  assert.equal(output.board.top, null)
 })
 
 test('dual snapshot reader rejects a group-writable execution feed', (context) => {
