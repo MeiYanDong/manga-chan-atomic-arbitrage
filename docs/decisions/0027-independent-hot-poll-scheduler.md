@@ -17,17 +17,20 @@ provider response limits but cannot make a serial scheduler real-time while a di
 2. Only that task calls `pollHotEvents`, so cursor advancement, reorg handling and log ingestion remain serial.
 3. The poller never consumes candidate wakes. It coalesces them into the bounded queue; the existing main scheduler is
    the only consumer and retains the four-candidate quote cap and mandatory periodic-reconciliation deadline.
-4. The existing shared RPC concurrency gate still bounds public-provider pressure. Successful polls target the configured
+4. Within each fetched range, swap logs are reduced to the latest revision per pool before candidate fan-out. Raw log
+   count and the number removed by coalescing remain separate metrics; every Initialize event remains a catalog fact.
+5. The existing shared RPC concurrency gate still bounds public-provider pressure. Successful polls target the configured
    cadence; transient errors use the existing capped exponential backoff.
-5. A newly populated queue releases the main scheduler's wait immediately. Event state remains wake evidence only; each
+6. A newly populated queue releases the main scheduler's wait immediately. Event state remains wake evidence only; each
    candidate still needs a fresh canonical fixed-block quote and the separate signer exact preflight.
-6. Each quote cycle rebuilds the dependency index from the current catalog and persisted observations before selecting
+7. Each quote cycle rebuilds the dependency index from the current catalog and persisted observations before selecting
    its fixed block. Events that arrive during a slow quote therefore retain candidate routing even on the first cycle.
-7. Graceful shutdown stops and joins the poll task before closing the durable store.
+8. Graceful shutdown stops and joins the poll task before closing the durable store.
 
 ## Consequences
 
 - Slow quotes no longer stop cursor discovery or force routine coverage gaps.
+- Repeated swaps in one pool no longer multiply the same pending candidate set thousands of times.
 - Poll and quote requests may interleave, but their combined HTTP concurrency remains bounded by the same gate.
 - A reorg can replace a queue after a wake was already consumed. That wake cannot authorize a transaction; at worst it
   causes an unnecessary canonical re-quote, which is safe.

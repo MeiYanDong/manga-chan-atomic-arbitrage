@@ -8,6 +8,7 @@ import {
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
   capEventWaitForReconciliation,
+  coalesceLatestSwapPerPool,
   nextHotPollDelay,
   planHotLogRange,
   recoverStaleHotCursor,
@@ -260,6 +261,35 @@ test('wake queue deduplicates logs and coalesces revisions per candidate', () =>
   assert.equal(wake.triggers[0].maxBlock, 12n)
   assert.equal(queue.size, 1)
   assert.equal(queue.dedupedEvents, 1)
+})
+
+test('hot ranges retain only the latest swap revision per pool while preserving initialize facts', () => {
+  const initialize = {
+    type: ShadowWakeSource.V4_INITIALIZE,
+    poolId: POOL_A,
+    blockNumber: 9n,
+    logIndex: 0,
+  }
+  const olderV4 = {
+    type: ShadowWakeSource.V4_SWAP,
+    poolId: POOL_A,
+    blockNumber: 10n,
+    logIndex: 1,
+  }
+  const latestV4 = { ...olderV4, blockNumber: 12n, logIndex: 2 }
+  const sameBlockLaterV4 = { ...latestV4, logIndex: 3 }
+  const v3 = {
+    type: ShadowWakeSource.V3_SWAP,
+    poolAddress: V3_A,
+    blockNumber: 11n,
+    logIndex: 4,
+  }
+
+  assert.deepEqual(coalesceLatestSwapPerPool([latestV4, initialize, olderV4, v3, sameBlockLaterV4]), [
+    initialize,
+    v3,
+    sameBlockLaterV4,
+  ])
 })
 
 test('independent hot polling keeps a fixed success cadence and bounded error backoff', () => {
