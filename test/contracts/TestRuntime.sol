@@ -15,7 +15,9 @@ interface ISettlementRecorder {
 }
 
 contract MockToken {
+    address internal constant POOL_MANAGER = 0x8366a39CC670B4001A1121B8F6A443A643e40951;
     mapping(address account => uint256 amount) public balanceOf;
+    mapping(address owner => mapping(address spender => uint256 amount)) public allowance;
 
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
@@ -25,7 +27,89 @@ contract MockToken {
         require(balanceOf[msg.sender] >= amount, "BALANCE");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
+        if (to == POOL_MANAGER) ISettlementRecorder(POOL_MANAGER).recordSettlement(amount);
         return true;
+    }
+
+    function deposit() external payable {
+        balanceOf[msg.sender] += msg.value;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        require(balanceOf[from] >= amount, "BALANCE");
+        require(allowance[from][msg.sender] >= amount, "ALLOWANCE");
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
+contract MockV3Factory {
+    mapping(bytes32 key => address pool) private pools;
+
+    function setPool(address tokenA, address tokenB, uint24 fee, address pool) external {
+        pools[_key(tokenA, tokenB, fee)] = pool;
+    }
+
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool) {
+        return pools[_key(tokenA, tokenB, fee)];
+    }
+
+    function _key(address tokenA, address tokenB, uint24 fee) private pure returns (bytes32) {
+        (address token0, address token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
+        return keccak256(abi.encode(token0, token1, fee));
+    }
+}
+
+contract MockV3Router {
+    address internal constant USDG = 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168;
+    address internal constant POOL_MANAGER = 0x8366a39CC670B4001A1121B8F6A443A643e40951;
+
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    uint256 public exitProfit;
+    address public profitToken;
+
+    function configure(uint256 exitProfit_) external {
+        exitProfit = exitProfit_;
+    }
+
+    function configureProfitToken(address profitToken_) external {
+        profitToken = profitToken_;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut) {
+        require(params.path.length >= 43, "PATH");
+        address tokenIn = _pathAddress(params.path, 0);
+        address tokenOut = _pathAddress(params.path, params.path.length - 20);
+        if (msg.value != 0) {
+            require(msg.value == params.amountIn, "VALUE");
+            amountOut = params.amountIn;
+        } else {
+            require(MockToken(tokenIn).transferFrom(msg.sender, address(this), params.amountIn), "TRANSFER_FROM");
+            address selectedProfitToken = profitToken == address(0) ? USDG : profitToken;
+            amountOut = tokenOut == selectedProfitToken ? params.amountIn + exitProfit : params.amountIn;
+        }
+        require(amountOut >= params.amountOutMinimum, "MIN_OUT");
+        MockToken(tokenOut).mint(params.recipient, amountOut);
+        if (params.recipient == POOL_MANAGER) ISettlementRecorder(POOL_MANAGER).recordSettlement(amountOut);
+    }
+
+    function _pathAddress(bytes calldata path, uint256 offset) private pure returns (address token) {
+        assembly ("memory-safe") {
+            token := shr(96, calldataload(add(path.offset, offset)))
+        }
     }
 }
 
@@ -44,8 +128,13 @@ contract MockPoolManager {
         uint160 sqrtPriceLimitX96;
     }
 
-    address internal constant MSFT = 0xe93237C50D904957Cf27E7B1133b510C669c2e74;
+    address internal constant ENTRY_TOKEN = 0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9;
     uint256 private settlement;
+    bool private mintOnTake;
+
+    function configureTakeMint(bool enabled) external {
+        mintOnTake = enabled;
+    }
 
     function recordSettlement(uint256 amount) external {
         settlement = amount;
@@ -66,11 +155,13 @@ contract MockPoolManager {
         uint256 input = uint256(-params.amountSpecified);
         require(input <= uint256(uint128(type(int128).max)), "INPUT");
         int128 signedInput = int128(int256(input));
-        if (key.currency1 == MSFT) return _pack(signedInput, -signedInput);
+        if (key.currency1 == ENTRY_TOKEN) return _pack(signedInput, -signedInput);
         return _pack(-signedInput, signedInput);
     }
 
-    function take(address, address, uint256) external pure {}
+    function take(address currency, address to, uint256 amount) external {
+        if (mintOnTake) MockToken(currency).mint(to, amount);
+    }
 
     function _pack(int128 amount0, int128 amount1) private pure returns (int256) {
         return (int256(amount0) << 128) | int256(uint256(uint128(amount1)));
@@ -83,10 +174,15 @@ contract MockV3Pool {
 
     uint8 public mode;
     uint256 public profit;
+    address public outputToken;
 
     function configure(uint8 mode_, uint256 profit_) external {
         mode = mode_;
         profit = profit_;
+    }
+
+    function configureOutputToken(address outputToken_) external {
+        outputToken = outputToken_;
     }
 
     function swap(address recipient, bool, int256 amountSpecified, uint160, bytes calldata)
@@ -102,7 +198,7 @@ contract MockV3Pool {
         require(mode == 2, "MODE");
         uint256 output = input + profit;
         IExecutorCallbacks(msg.sender).uniswapV3SwapCallback(-int256(output), int256(input), bytes(""));
-        IMintableToken(USDG).mint(recipient, output);
+        IMintableToken(outputToken == address(0) ? USDG : outputToken).mint(recipient, output);
         return (-int256(output), int256(input));
     }
 }

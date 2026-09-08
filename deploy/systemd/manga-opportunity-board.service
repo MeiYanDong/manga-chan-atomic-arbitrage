@@ -11,16 +11,25 @@ User=manga-board
 Group=manga-board
 WorkingDirectory=/opt/manga-chan-arbitrage/current
 EnvironmentFile=/etc/manga-opportunity-board/live.env
+EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board
+Environment=MANGA_BOARD_EXECUTION_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
+Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=/var/lib/manga-business-report/business-snapshot.json
 UMask=0027
-ExecStart=/usr/bin/env npm run board
+# ExecStart-level values intentionally override a retained live.env from an
+# older release. Historical catalog completeness uses separate cursors.
+ExecStart=/usr/bin/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 MANGA_BOARD_RPC_BATCH_SIZE=1 MANGA_BOARD_RPC_RETRY_DELAY_MS=1000 MANGA_BOARD_MULTICALL_MAX_CALLS=4 MANGA_BOARD_CYCLE_MAX_CANDIDATES=4 MANGA_BOARD_V3_SHORTLIST_REFRESH_MS=300000 MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE=2 npm run board
 Restart=on-failure
 RestartSec=10s
 TimeoutStopSec=20
 KillSignal=SIGTERM
 StateDirectory=manga-opportunity-board
 StateDirectoryMode=0750
-MemoryMax=256M
+RuntimeDirectory=manga-opportunity-board-feed
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
+MemoryHigh=448M
+MemoryMax=512M
 TasksMax=48
 CPUQuota=60%
 OOMPolicy=stop

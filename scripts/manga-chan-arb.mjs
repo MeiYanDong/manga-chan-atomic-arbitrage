@@ -31,8 +31,10 @@ import {
   RpcErrorClass,
   classifyReconciliation,
   classifyRpcError,
+  diagnosticErrorText,
   errorText,
   evaluateArmBudget,
+  genericSignerLaneConflict,
   isTransientRpcError,
   latestUnresolvedMutation,
   quoteFailure,
@@ -51,29 +53,29 @@ const KEYCHAIN_SERVICE = RUNTIME_CONFIG.keychainService
 const WALLET = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
 const WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
 const USDG = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
-const MANGA = getAddress('0xc28068cb109Dd0a0d5C6C6a925B048fEA00E31a6')
-const MSFT = getAddress('0xe93237C50D904957Cf27E7B1133b510C669c2e74')
-const NVDA = getAddress('0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC')
+const TARGET_TOKEN = getAddress('0x3363Cd5019Aa1F3E50C73086d5F5dCab3D90f558')
+const ENTRY_TOKEN = getAddress('0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9')
+const EXIT_TOKEN = getAddress('0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC')
 const HOOK = getAddress('0x16D1560630Ce74af4478d9b8AD46548A092A2000')
 const POOL_MANAGER = getAddress('0x8366a39CC670B4001A1121B8F6A443A643e40951')
 const V3_ROUTER = getAddress('0xCaf681a66D020601342297493863E78C959E5cb2')
 const V3_QUOTER = getAddress('0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7')
 const V4_QUOTER = getAddress('0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94')
-const ENTRY_V3_POOL = getAddress('0xeb60bCD1D920ad6E102690CCFC6fB488899E1510')
+const ENTRY_V3_POOL = getAddress('0xAae0d815EE56e4092a5E5C2911E676Fea50B2d6D')
 const EXIT_V3_POOL = getAddress('0xd4EB21209C4D6093f80B5b84f5C45cc093EA14a3')
 
-const MSFT_MANGA_POOL_ID = '0x03b8a1d48536a15116713d1f697528bfd8ccde233a9a93f736684886c1a890f5'
-const MANGA_NVDA_POOL_ID = '0x2a3a91cb47030dc14ab6a8639b18f9fa431311ea241893220d4ce0b2f81d9779'
+const ENTRY_V4_POOL_ID = '0x54c85546c76662aa0480b9a32e2e98ace9b7ccda5ce27c0cc698f6cf218e0691'
+const EXIT_V4_POOL_ID = '0xb6d7c4cfef3f707fc339158e346f9f092e5080599baa4be4c0a3ab86b849e7d9'
 const V3_SWAP_TOPIC = keccak256(toHex('Swap(address,address,int256,int256,uint160,uint128,int24)'))
 const V4_SWAP_TOPIC = keccak256(toHex('Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)'))
-const WATCHED_V4_POOL_IDS = new Set([MSFT_MANGA_POOL_ID.toLowerCase(), MANGA_NVDA_POOL_ID.toLowerCase()])
-const msftMangaPoolKey = { currency0: MANGA, currency1: MSFT, fee: 10_000, tickSpacing: 200, hooks: HOOK }
-const mangaNvdaPoolKey = { currency0: MANGA, currency1: NVDA, fee: 10_000, tickSpacing: 200, hooks: HOOK }
+const WATCHED_V4_POOL_IDS = new Set([ENTRY_V4_POOL_ID.toLowerCase(), EXIT_V4_POOL_ID.toLowerCase()])
+const entryV4PoolKey = { currency0: TARGET_TOKEN, currency1: ENTRY_TOKEN, fee: 10_000, tickSpacing: 200, hooks: HOOK }
+const exitV4PoolKey = { currency0: TARGET_TOKEN, currency1: EXIT_TOKEN, fee: 10_000, tickSpacing: 200, hooks: HOOK }
 
-const SEED_ETH = parseEther('0.004')
+const SEED_ETH = parseEther('0.0021')
 const FORK_TEST_SEED_ETH = parseEther('0.006')
 const SEED_SLIPPAGE_BPS = 100n
-const MIN_WALLET_ETH_RESERVE = parseEther('0.004')
+const MIN_WALLET_ETH_RESERVE = parseEther('0.0029')
 const MIN_GROSS_PROFIT = 50_000n
 const MIN_NET_PROFIT = 20_000n
 const PROFIT_FLOOR_BPS = 9_500n
@@ -84,8 +86,8 @@ const DEADLINE_SECONDS = 90n
 const AMOUNT_GRID = [5_000_000n, 7_500_000n, 10_000_000n, 12_500_000n, 15_000_000n]
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const CONTRACT_PATH = path.join(ROOT, 'contracts', 'MangaChanAtomicArb.sol')
-const DEPLOYMENT_MANIFEST_PATH = path.join(ROOT, 'deployments', 'robinhood-mainnet.json')
+const CONTRACT_PATH = path.join(ROOT, 'contracts', 'FixedRouteAtomicArb.sol')
+const DEPLOYMENT_MANIFEST_PATH = path.join(ROOT, 'deployments', 'spx-aapl-nvda-mainnet.json')
 const RUN_DIR = RUNTIME_CONFIG.runDir ? path.resolve(RUNTIME_CONFIG.runDir) : path.join(ROOT, 'runs')
 const STATE_PATH = path.join(RUN_DIR, 'state.json')
 const AUDIT_PATH = path.join(RUN_DIR, 'audit.jsonl')
@@ -93,6 +95,8 @@ const LOCK_PATH = path.join(RUN_DIR, 'wallet.lock')
 const WATCH_ARM_PATH = path.join(RUN_DIR, 'watch-arm.json')
 const WATCH_STATE_PATH = path.join(RUN_DIR, 'watch-state.json')
 const WATCH_LOCK_PATH = path.join(RUN_DIR, 'watch.lock')
+const GENERIC_WATCH_ARM_PATH = path.join(RUN_DIR, 'generic-watch-arm.json')
+const GENERIC_WATCH_LOCK_PATH = path.join(RUN_DIR, 'generic-watch.lock')
 const SIGNED_TX_DIR = path.join(RUN_DIR, 'signed')
 const WATCH_POLL_MS = 5_000
 const WATCH_RECOVERY_POLL_MS = 30_000
@@ -333,8 +337,21 @@ function watchLockHolder() {
   return { pid: Number.isSafeInteger(pid) ? pid : null, alive: processIsAlive(pid) }
 }
 
+function assertGenericSignerInactive() {
+  const arm = readJsonIfExists(GENERIC_WATCH_ARM_PATH)
+  const lockExists = fs.existsSync(GENERIC_WATCH_LOCK_PATH)
+  let lockPid = null
+  if (lockExists) {
+    try {
+      lockPid = Number(fs.readFileSync(GENERIC_WATCH_LOCK_PATH, 'utf8').trim().split(/\s+/)[0])
+    } catch {}
+  }
+  const conflict = genericSignerLaneConflict({ arm, lockExists, lockPid, processIsAlive })
+  if (conflict) throw new Error(`${conflict}; disarm or cleanly stop it before using the fixed-route lane`)
+}
+
 function assertWatchArm(arm, state) {
-  if (!arm || arm.status !== 'ARMED') throw new Error('MANGA watcher 尚未 arm')
+  if (!arm || arm.status !== 'ARMED') throw new Error('SPX watcher 尚未 arm')
   if (arm.chainId !== CHAIN_ID || arm.wallet?.toLowerCase() !== WALLET.toLowerCase())
     throw new Error('watch arm 的链或钱包不匹配')
   if (arm.executor?.toLowerCase() !== state?.executor?.toLowerCase()) throw new Error('watch arm 的执行器不匹配')
@@ -396,14 +413,14 @@ function compileContract() {
   const source = fs.readFileSync(CONTRACT_PATH, 'utf8')
   const input = {
     language: 'Solidity',
-    sources: { 'MangaChanAtomicArb.sol': { content: source } },
+    sources: { 'FixedRouteAtomicArb.sol': { content: source } },
     settings: {
       evmVersion: 'cancun',
       optimizer: { enabled: true, runs: 200 },
       viaIR: true,
       outputSelection: {
         '*': {
-          MangaChanAtomicArb: ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object', 'evm.immutableReferences'],
+          FixedRouteAtomicArb: ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object', 'evm.immutableReferences'],
         },
       },
     },
@@ -411,8 +428,8 @@ function compileContract() {
   const output = JSON.parse(solc.compile(JSON.stringify(input)))
   const errors = (output.errors || []).filter((item) => item.severity === 'error')
   if (errors.length) throw new Error(errors.map((item) => item.formattedMessage).join('\n'))
-  const contract = output.contracts?.['MangaChanAtomicArb.sol']?.MangaChanAtomicArb
-  if (!contract) throw new Error('未生成 MangaChanAtomicArb 编译产物')
+  const contract = output.contracts?.['FixedRouteAtomicArb.sol']?.FixedRouteAtomicArb
+  if (!contract) throw new Error('未生成 FixedRouteAtomicArb 编译产物')
   const bytecode = `0x${contract.evm.bytecode.object}`
   const deployedTemplate = `0x${contract.evm.deployedBytecode.object}`
   return {
@@ -465,19 +482,19 @@ async function quoteRoute(amountIn, blockNumber) {
       throw wrapped
     }
   }
-  const entry = await leg('USDG_TO_MSFT_V3', () => quoteV3(USDG, 3_000, MSFT, amountIn, blockNumber))
-  const first = await leg('MSFT_TO_MANGA_V4', () => quoteV4(msftMangaPoolKey, false, entry.amountOut, blockNumber))
-  const second = await leg('MANGA_TO_NVDA_V4', () => quoteV4(mangaNvdaPoolKey, true, first.amountOut, blockNumber))
-  const exit = await leg('NVDA_TO_USDG_V3', () => quoteV3(NVDA, 500, USDG, second.amountOut, blockNumber))
+  const entry = await leg('USDG_TO_AAPL_V3', () => quoteV3(USDG, 500, ENTRY_TOKEN, amountIn, blockNumber))
+  const first = await leg('AAPL_TO_SPX_V4', () => quoteV4(entryV4PoolKey, false, entry.amountOut, blockNumber))
+  const second = await leg('SPX_TO_NVDA_V4', () => quoteV4(exitV4PoolKey, true, first.amountOut, blockNumber))
+  const exit = await leg('NVDA_TO_USDG_V3', () => quoteV3(EXIT_TOKEN, 500, USDG, second.amountOut, blockNumber))
   return {
     amountIn,
     amountOut: exit.amountOut,
     grossProfit: exit.amountOut - amountIn,
     legs: {
-      usdgToMsft: entry.amountOut,
-      msftToManga: first.amountOut,
-      mangaToNvda: second.amountOut,
-      nvdaToUsdg: exit.amountOut,
+      usdgToEntry: entry.amountOut,
+      entryToTarget: first.amountOut,
+      targetToExit: second.amountOut,
+      exitToUsdg: exit.amountOut,
     },
     quoterGas: [entry.gasEstimate, first.gasEstimate, second.gasEstimate, exit.gasEstimate],
   }
@@ -573,9 +590,9 @@ async function assertCanonicalTargets() {
   const targets = [
     WETH,
     USDG,
-    MANGA,
-    MSFT,
-    NVDA,
+    TARGET_TOKEN,
+    ENTRY_TOKEN,
+    EXIT_TOKEN,
     HOOK,
     POOL_MANAGER,
     V3_ROUTER,
@@ -591,9 +608,9 @@ async function assertCanonicalTargets() {
   const [
     usdgSymbol,
     usdgDecimals,
-    mangaSymbol,
-    msftSymbol,
-    nvdaSymbol,
+    targetSymbol,
+    entrySymbol,
+    exitSymbol,
     entry0,
     entry1,
     entryFee,
@@ -603,9 +620,9 @@ async function assertCanonicalTargets() {
   ] = await Promise.all([
     publicClient.readContract({ address: USDG, abi: ERC20_ABI, functionName: 'symbol' }),
     publicClient.readContract({ address: USDG, abi: ERC20_ABI, functionName: 'decimals' }),
-    publicClient.readContract({ address: MANGA, abi: ERC20_ABI, functionName: 'symbol' }),
-    publicClient.readContract({ address: MSFT, abi: ERC20_ABI, functionName: 'symbol' }),
-    publicClient.readContract({ address: NVDA, abi: ERC20_ABI, functionName: 'symbol' }),
+    publicClient.readContract({ address: TARGET_TOKEN, abi: ERC20_ABI, functionName: 'symbol' }),
+    publicClient.readContract({ address: ENTRY_TOKEN, abi: ERC20_ABI, functionName: 'symbol' }),
+    publicClient.readContract({ address: EXIT_TOKEN, abi: ERC20_ABI, functionName: 'symbol' }),
     publicClient.readContract({ address: ENTRY_V3_POOL, abi: V3_POOL_ABI, functionName: 'token0' }),
     publicClient.readContract({ address: ENTRY_V3_POOL, abi: V3_POOL_ABI, functionName: 'token1' }),
     publicClient.readContract({ address: ENTRY_V3_POOL, abi: V3_POOL_ABI, functionName: 'fee' }),
@@ -616,20 +633,24 @@ async function assertCanonicalTargets() {
   if (
     usdgSymbol !== 'USDG' ||
     usdgDecimals !== 6 ||
-    mangaSymbol !== 'MANGA' ||
-    msftSymbol !== 'MSFT' ||
-    nvdaSymbol !== 'NVDA'
+    targetSymbol !== 'SPX' ||
+    entrySymbol !== 'AAPL' ||
+    exitSymbol !== 'NVDA'
   ) {
-    throw new Error(`代币元数据异常：${usdgSymbol}/${usdgDecimals}, ${mangaSymbol}, ${msftSymbol}, ${nvdaSymbol}`)
+    throw new Error(`代币元数据异常：${usdgSymbol}/${usdgDecimals}, ${targetSymbol}, ${entrySymbol}, ${exitSymbol}`)
   }
   if (
     entry0.toLowerCase() !== USDG.toLowerCase() ||
-    entry1.toLowerCase() !== MSFT.toLowerCase() ||
-    entryFee !== 3_000
+    entry1.toLowerCase() !== ENTRY_TOKEN.toLowerCase() ||
+    entryFee !== 500
   ) {
     throw new Error('入口 V3 池的 token0/token1/fee 不匹配')
   }
-  if (exit0.toLowerCase() !== USDG.toLowerCase() || exit1.toLowerCase() !== NVDA.toLowerCase() || exitFee !== 500) {
+  if (
+    exit0.toLowerCase() !== USDG.toLowerCase() ||
+    exit1.toLowerCase() !== EXIT_TOKEN.toLowerCase() ||
+    exitFee !== 500
+  ) {
     throw new Error('出口 V3 池的 token0/token1/fee 不匹配')
   }
 }
@@ -691,7 +712,7 @@ async function deployPreflight({ print = true } = {}) {
       maxGasBudgetEth: formatEther(maxGasBudgetWei),
     },
     walletEthAfterWorstCase: formatEther(snapshot.ethBalance - SEED_ETH - maxGasBudgetWei),
-    route: { entry: 'USDG→MSFT', bridge: 'MSFT→MANGA→NVDA', exit: 'NVDA→USDG' },
+    route: { entry: 'USDG→AAPL', bridge: 'AAPL→SPX→NVDA', exit: 'NVDA→USDG' },
   }
   appendAudit('deploy_preflight', report)
   if (print) console.log(stringify(report))
@@ -701,6 +722,7 @@ async function deployPreflight({ print = true } = {}) {
 async function deploy() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     const check = await deployPreflight({ print: true })
     const account = loadAccount()
@@ -808,7 +830,7 @@ async function deploy() {
     const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
     const state = {
       schemaVersion: 2,
-      name: 'MANGA CHAN atomic arbitrage live one',
+      name: 'SPX AAPL-to-NVDA atomic arbitrage live canary',
       status: 'deployed',
       chainId: CHAIN_ID,
       wallet: WALLET,
@@ -817,13 +839,13 @@ async function deploy() {
       sourceHash: check.compiled.sourceHash,
       creationCodeHash: check.compiled.creationCodeHash,
       route: {
-        token: MANGA,
-        entryToken: MSFT,
-        exitToken: NVDA,
+        token: TARGET_TOKEN,
+        entryToken: ENTRY_TOKEN,
+        exitToken: EXIT_TOKEN,
         entryV3Pool: ENTRY_V3_POOL,
         exitV3Pool: EXIT_V3_POOL,
-        msftMangaPoolId: MSFT_MANGA_POOL_ID,
-        mangaNvdaPoolId: MANGA_NVDA_POOL_ID,
+        entryV4PoolId: ENTRY_V4_POOL_ID,
+        exitV4PoolId: EXIT_V4_POOL_ID,
       },
       policy: {
         maxAmountInUsdg: '15',
@@ -886,6 +908,7 @@ async function deploy() {
 async function recoverDeployment() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     if (readState()?.executor) throw new Error('部署状态已经存在，无需恢复')
     await assertCanonicalTargets()
     const compiled = compileContract()
@@ -942,7 +965,7 @@ async function recoverDeployment() {
 
     const state = {
       schemaVersion: 1,
-      name: 'MANGA CHAN atomic arbitrage live one',
+      name: 'SPX AAPL-to-NVDA atomic arbitrage live canary',
       status: 'deployed',
       chainId: CHAIN_ID,
       wallet: WALLET,
@@ -951,13 +974,13 @@ async function recoverDeployment() {
       sourceHash: compiled.sourceHash,
       creationCodeHash: compiled.creationCodeHash,
       route: {
-        token: MANGA,
-        entryToken: MSFT,
-        exitToken: NVDA,
+        token: TARGET_TOKEN,
+        entryToken: ENTRY_TOKEN,
+        exitToken: EXIT_TOKEN,
         entryV3Pool: ENTRY_V3_POOL,
         exitV3Pool: EXIT_V3_POOL,
-        msftMangaPoolId: MSFT_MANGA_POOL_ID,
-        mangaNvdaPoolId: MANGA_NVDA_POOL_ID,
+        entryV4PoolId: ENTRY_V4_POOL_ID,
+        exitV4PoolId: EXIT_V4_POOL_ID,
       },
       policy: {
         maxAmountInUsdg: '15',
@@ -1011,7 +1034,7 @@ async function recoverDeployment() {
 
 async function assertDeployedState(state, compiled) {
   if (!state?.executor || state.chainId !== CHAIN_ID || state.wallet?.toLowerCase() !== WALLET.toLowerCase()) {
-    throw new Error('缺少有效的 MANGA 实盘部署状态')
+    throw new Error('缺少有效的 SPX 实盘部署状态')
   }
   const executor = getAddress(state.executor)
   const [code, operator] = await Promise.all([
@@ -1045,7 +1068,7 @@ async function executionPreflight({ print = true } = {}) {
     args: [executor],
   })
   const { quotes, best } = await quoteGrid(principal < 15_000_000n ? principal : 15_000_000n, snapshot.blockNumber)
-  if (!best || best.grossProfit < MIN_GROSS_PROFIT) throw new Error('当前没有达到 0.05 USDG 毛利下限的 MANGA 路径')
+  if (!best || best.grossProfit < MIN_GROSS_PROFIT) throw new Error('当前没有达到 0.05 USDG 毛利下限的 SPX 路径')
 
   const block = await publicClient.getBlock({ blockNumber: snapshot.blockNumber })
   const provisionalDeadline = block.timestamp + DEADLINE_SECONDS
@@ -1166,6 +1189,7 @@ async function executionPreflight({ print = true } = {}) {
 async function execute() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     const check = await executionPreflight({ print: true })
     const account = loadAccount()
@@ -1558,7 +1582,7 @@ async function finalizeReconciledSuccess(mutation, plan, receipt) {
     if (seededUsdg < BigInt(plan.minimumSeedOut)) throw new Error('部署种子余额低于计划保护线，保持 UNKNOWN')
     const state = {
       schemaVersion: 2,
-      name: 'MANGA CHAN atomic arbitrage',
+      name: 'SPX AAPL-to-NVDA atomic arbitrage',
       status: 'deployed',
       chainId: CHAIN_ID,
       wallet: WALLET,
@@ -1567,13 +1591,13 @@ async function finalizeReconciledSuccess(mutation, plan, receipt) {
       sourceHash: compiled.sourceHash,
       creationCodeHash: compiled.creationCodeHash,
       route: {
-        token: MANGA,
-        entryToken: MSFT,
-        exitToken: NVDA,
+        token: TARGET_TOKEN,
+        entryToken: ENTRY_TOKEN,
+        exitToken: EXIT_TOKEN,
         entryV3Pool: ENTRY_V3_POOL,
         exitV3Pool: EXIT_V3_POOL,
-        msftMangaPoolId: MSFT_MANGA_POOL_ID,
-        mangaNvdaPoolId: MANGA_NVDA_POOL_ID,
+        entryV4PoolId: ENTRY_V4_POOL_ID,
+        exitV4PoolId: EXIT_V4_POOL_ID,
       },
       policy: {
         maxAmountInUsdg: '15',
@@ -1623,6 +1647,7 @@ async function finalizeReconciledSuccess(mutation, plan, receipt) {
 
 async function reconcile() {
   assertLiveTransport(RUNTIME_CONFIG)
+  assertGenericSignerInactive()
   const release = acquireLock()
   try {
     const records = readAuditRecords()
@@ -1747,6 +1772,7 @@ async function reconcile() {
 async function withdrawAll() {
   const release = acquireLock()
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG)
     const unresolved = latestUnresolvedExecution()
     if (unresolved)
@@ -1929,6 +1955,7 @@ async function withdrawAll() {
 async function armWatcher() {
   const release = acquireLock(WATCH_LOCK_PATH)
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG, { requireWss: true })
     const unresolved = latestUnresolvedExecution()
     if (unresolved) throw new Error(`存在未收敛执行 ${unresolved.hash}，禁止 arm`)
@@ -1949,7 +1976,7 @@ async function armWatcher() {
     const issuedAt = new Date()
     const expiresAt = new Date(issuedAt.getTime() + WATCH_ARM_DURATION_MS)
     const scope = {
-      policyVersion: 'manga-chan-watch-v1',
+      policyVersion: 'spx-fixed-route-watch-v1',
       chainId: CHAIN_ID,
       wallet: WALLET,
       executor,
@@ -2032,6 +2059,7 @@ async function watch() {
   process.once('SIGINT', requestStop)
   let watchState = null
   try {
+    assertGenericSignerInactive()
     assertLiveTransport(RUNTIME_CONFIG, { requireWss: true })
     const arm = readWatchArm()
     const state = readState()
@@ -2115,11 +2143,11 @@ async function watch() {
           watchState = {
             ...watchState,
             status: 'STOPPED_POLICY',
-            reason: error.message,
+            reason: errorText(error),
             updatedAt: new Date().toISOString(),
           }
           writeWatchState(watchState)
-          appendAudit('watch_stopped_policy', { reason: error.message, authorizationId: arm.authorizationId })
+          appendAudit('watch_stopped_policy', { reason: errorText(error), authorizationId: arm.authorizationId })
           return watchState
         }
 
@@ -2232,14 +2260,14 @@ async function watch() {
               watchState = {
                 ...watchState,
                 status: 'HALTED_UNKNOWN',
-                reason: error.message,
+                reason: errorText(error),
                 transaction: unresolvedAfter.hash,
                 updatedAt: new Date().toISOString(),
               }
               writeWatchState(watchState)
               appendAudit('watch_halted_unknown', {
                 hash: unresolvedAfter.hash,
-                reason: error.message,
+                reason: errorText(error),
                 authorizationId: arm.authorizationId,
               })
               return watchState
@@ -2249,22 +2277,28 @@ async function watch() {
                 ...watchState,
                 status: 'RUNNING',
                 lastDecision: 'CANDIDATE_EVAPORATED',
-                reason: error.message,
+                reason: errorText(error),
                 updatedAt: new Date().toISOString(),
               }
               writeWatchState(watchState)
-              appendAudit('watch_candidate_evaporated', { reason: error.message, authorizationId: arm.authorizationId })
+              appendAudit('watch_candidate_evaporated', {
+                reason: errorText(error),
+                authorizationId: arm.authorizationId,
+              })
             } else if (isTransientRpcError(error)) {
               throw error
             } else {
               watchState = {
                 ...watchState,
                 status: 'HALTED_INVARIANT',
-                reason: error.message,
+                reason: errorText(error),
                 updatedAt: new Date().toISOString(),
               }
               writeWatchState(watchState)
-              appendAudit('watch_halted_invariant', { reason: error.message, authorizationId: arm.authorizationId })
+              appendAudit('watch_halted_invariant', {
+                reason: errorText(error),
+                authorizationId: arm.authorizationId,
+              })
               return watchState
             }
           }
@@ -2310,14 +2344,14 @@ async function watch() {
           watchState = {
             ...watchState,
             status: 'HALTED_UNKNOWN',
-            reason: error.message,
+            reason: errorText(error),
             transaction: unresolved.hash,
             updatedAt: new Date().toISOString(),
           }
           writeWatchState(watchState)
           appendAudit('watch_halted_unknown', {
             hash: unresolved.hash,
-            reason: error.message,
+            reason: errorText(error),
             authorizationId: arm.authorizationId,
           })
           return watchState
@@ -2326,11 +2360,14 @@ async function watch() {
           watchState = {
             ...watchState,
             status: 'HALTED_INVARIANT',
-            reason: error.message,
+            reason: errorText(error),
             updatedAt: new Date().toISOString(),
           }
           writeWatchState(watchState)
-          appendAudit('watch_halted_invariant', { reason: error.message, authorizationId: arm.authorizationId })
+          appendAudit('watch_halted_invariant', {
+            reason: errorText(error),
+            authorizationId: arm.authorizationId,
+          })
           return watchState
         }
         const consecutiveErrors = (watchState.consecutiveErrors || 0) + 1
@@ -2374,7 +2411,7 @@ async function watch() {
         executor: readState()?.executor || null,
       }),
       status: unresolved ? 'HALTED_UNKNOWN' : 'HALTED_STARTUP',
-      reason: error.shortMessage || error.message,
+      reason: errorText(error),
       transaction: unresolved?.hash || null,
       authorizationId: currentArm?.authorizationId || null,
       updatedAt: new Date().toISOString(),
@@ -2382,10 +2419,10 @@ async function watch() {
     writeWatchState(watchState)
     appendAudit('watch_halted_startup', {
       authorizationId: currentArm?.authorizationId || null,
-      reason: error.shortMessage || error.message,
+      reason: errorText(error),
       unresolvedHash: unresolved?.hash || null,
     })
-    console.error(error.stack || error)
+    console.error(diagnosticErrorText(error))
     return watchState
   } finally {
     stopPoolSubscriptions()
@@ -2555,26 +2592,30 @@ async function runtimeVerify() {
   ) {
     throw new Error('部署 manifest、运行账本、本地源码或链上执行器不一致')
   }
-  const [snapshot, wsChainId, wsHead, executorUsdg] = await Promise.all([
+  const eventClient = watchClient || secondaryPublicClient || publicClient
+  const eventTransport = watchClient ? 'WSS' : secondaryPublicClient ? 'SECONDARY_HTTP_POLLING' : 'PRIMARY_HTTP_POLLING'
+  const [snapshot, eventChainId, eventHead, executorUsdg] = await Promise.all([
     walletSnapshot(),
-    watchClient.getChainId(),
-    watchClient.getBlockNumber(),
+    eventClient.getChainId(),
+    eventClient.getBlockNumber(),
     publicClient.readContract({ address: USDG, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
   ])
-  if (wsChainId !== CHAIN_ID) throw new Error(`WSS chainId=${wsChainId}，预期 ${CHAIN_ID}`)
-  const headDistance = snapshot.blockNumber > wsHead ? snapshot.blockNumber - wsHead : wsHead - snapshot.blockNumber
-  if (headDistance > 100n) throw new Error(`HTTP/WSS head 相差 ${headDistance} 个区块，拒绝进入 ready 状态`)
+  if (eventChainId !== CHAIN_ID) throw new Error(`event transport chainId=${eventChainId}，预期 ${CHAIN_ID}`)
+  const headDistance =
+    snapshot.blockNumber > eventHead ? snapshot.blockNumber - eventHead : eventHead - snapshot.blockNumber
+  if (headDistance > 100n) throw new Error(`HTTP/event head 相差 ${headDistance} 个区块，拒绝进入 ready 状态`)
   if (snapshot.nonceLatest !== snapshot.noncePending) throw new Error('latest/pending nonce 未收敛')
   const unresolved = latestUnresolvedExecution()
   if (unresolved) throw new Error(`存在未收敛 ${unresolved.kind || 'mutation'} ${unresolved.hash}`)
   const arm = readWatchArm()
   const result = {
-    status: 'RUNTIME_VERIFIED_READY_FOR_ARM',
+    status: watchClient ? 'RUNTIME_VERIFIED_READY_FOR_ARM' : 'RUNTIME_VERIFIED_POLLING_ONLY',
     releaseSha: process.env.MANGA_RELEASE_SHA || 'UNKNOWN',
     chainId: CHAIN_ID,
     rpcSource: RPC_SOURCE,
     httpHead: snapshot.blockNumber,
-    wsHead,
+    eventTransport,
+    eventHead,
     headDistance,
     wallet: WALLET,
     executor,
@@ -2805,15 +2846,15 @@ async function forkTest() {
   const acceptedHash = await walletClient.sendRawTransaction({ serializedTransaction })
   if (acceptedHash.toLowerCase() !== executeHash.toLowerCase()) throw new Error('fork raw 广播哈希不一致')
   const executeReceipt = await publicClient.waitForTransactionReceipt({ hash: executeHash })
-  const [after, residualMsft, residualManga, residualNvda] = await Promise.all([
+  const [after, residualEntry, residualTarget, residualExit] = await Promise.all([
     publicClient.readContract({ address: USDG, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
-    publicClient.readContract({ address: MSFT, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
-    publicClient.readContract({ address: MANGA, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
-    publicClient.readContract({ address: NVDA, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
+    publicClient.readContract({ address: ENTRY_TOKEN, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
+    publicClient.readContract({ address: TARGET_TOKEN, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
+    publicClient.readContract({ address: EXIT_TOKEN, abi: ERC20_ABI, functionName: 'balanceOf', args: [executor] }),
   ])
   if (executeReceipt.status !== 'success' || after - before !== simulation.result[1])
     throw new Error('fork 正向执行或利润读回不一致')
-  if (residualMsft !== 0n || residualManga !== 0n || residualNvda !== 0n) throw new Error('fork 执行留下中间资产残余')
+  if (residualEntry !== 0n || residualTarget !== 0n || residualExit !== 0n) throw new Error('fork 执行留下中间资产残余')
 
   console.log(
     stringify({
@@ -2831,7 +2872,7 @@ async function forkTest() {
         grossProfitUsdg: formatUnits(after - before, 6),
       },
       negativeChecks,
-      residuals: { msft: residualMsft, manga: residualManga, nvda: residualNvda },
+      residuals: { entryToken: residualEntry, targetToken: residualTarget, exitToken: residualExit },
     }),
   )
 }
@@ -2872,7 +2913,7 @@ main()
   .then(closeWatchTransport)
   .catch(async (error) => {
     appendAudit('command_failed', { command: process.argv[2] || 'status', error: errorText(error) })
-    console.error(error.stack || error)
+    console.error(diagnosticErrorText(error))
     process.exitCode = 1
     await closeWatchTransport()
   })

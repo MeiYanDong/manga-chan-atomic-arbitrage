@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "chainId": 4663,
+  "network": "Robinhood Chain Mainnet",
+  "operator": "0x77f771E83f118C32547A1291dda438a757B4b91B",
+  "executor": "0x5eA86EAFB0F918557E1cE76E68F407568Dc2bCcd",
+  "deploymentTransaction": "0xb187570120b4d19d1baa9fbeb203adf29e808e50d033a1795d077b448eede0f0",
+  "deploymentBlock": 54358113,
+  "sourceHash": "0x0a085f1ecd1af15b6007b5c9450cc73dc3a2e84a738094e5789d80a7c0fc8755",
+  "runtimeCodeHash": "0x27d996f187b176942b3181a93bbb061ddf96e99406752ea1290a663d40627577",
+  "compiler": "solc 0.8.26",
+  "evmVersion": "cancun",
+  "optimizerRuns": 200,
+  "seededUsdgAtomic": "5128343",
+  "deploymentGasWei": "432354300196000"
+}

@@ -1,0 +1,54 @@
+[Unit]
+Description=MANGA until-revoked dual USDG/WETH autonomous arbitrage watcher
+Wants=network-online.target manga-opportunity-board.service
+After=network-online.target manga-opportunity-board.service
+Conflicts=manga-chan-watcher.service manga-generic-watcher.service manga-generic-arm.service manga-generic-deploy.service
+OnFailure=manga-chan-alert@%n.service
+StartLimitIntervalSec=10min
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=manga-chan-arb
+Group=manga-chan-arb
+SupplementaryGroups=manga-board
+WorkingDirectory=/opt/manga-chan-arbitrage/current
+EnvironmentFile=/etc/manga-chan-arbitrage/live.env
+EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
+Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
+Environment=MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
+LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
+Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
+UMask=0077
+# The ExecStart-level screen value wins over a retained live.env. Signing still
+# requires the exact MANGA_GENERIC_MIN_NET_USDG authorization floor.
+ExecStart=/usr/bin/env MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0.05 npm run dual:watch
+Restart=on-abnormal
+RestartSec=5s
+TimeoutStopSec=20
+KillSignal=SIGTERM
+StateDirectory=manga-chan-arbitrage
+StateDirectoryMode=0700
+MemoryMax=512M
+TasksMax=64
+CPUWeight=200
+OOMPolicy=stop
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/manga-chan-arbitrage
+
+[Install]
+WantedBy=multi-user.target

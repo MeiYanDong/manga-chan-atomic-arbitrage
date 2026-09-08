@@ -2,6 +2,7 @@
 Description=MANGA CHAN bounded atomic-arbitrage watcher
 Wants=network-online.target
 After=network-online.target
+Conflicts=manga-generic-watcher.service manga-generic-arm.service manga-generic-deploy.service manga-dual-watcher.service manga-dual-arm.service manga-dual-weth-deploy.service
 OnFailure=manga-chan-alert@%n.service
 StartLimitIntervalSec=10min
 StartLimitBurst=3

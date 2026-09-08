@@ -33,6 +33,7 @@ getent group "${service_group}" >/dev/null || groupadd --system "${service_group
 id "${service_user}" >/dev/null 2>&1 || useradd --system --gid "${service_group}" --home-dir "${runtime_dir}" --shell /usr/sbin/nologin "${service_user}"
 getent group "${board_group}" >/dev/null || groupadd --system "${board_group}"
 id "${board_user}" >/dev/null 2>&1 || useradd --system --gid "${board_group}" --home-dir "${board_runtime_dir}" --shell /usr/sbin/nologin "${board_user}"
+usermod --append --groups "${board_group}" "${service_user}"
 install -d -o root -g root -m 0755 "${prefix}/releases"
 install -d -o "${service_user}" -g "${service_group}" -m 0700 "${runtime_dir}"
 install -d -o root -g "${service_group}" -m 0750 "${config_dir}"
@@ -57,8 +58,16 @@ mv "${config_dir}/release.env.tmp" "${config_dir}/release.env"
 ln -sfn "${release_dir}" "${prefix}/current.next"
 mv -Tf "${prefix}/current.next" "${prefix}/current"
 install -o root -g root -m 0644 deploy/systemd/manga-chan-watcher.service /etc/systemd/system/manga-chan-watcher.service
+install -o root -g root -m 0644 deploy/systemd/manga-generic-arm.service /etc/systemd/system/manga-generic-arm.service
+install -o root -g root -m 0644 deploy/systemd/manga-generic-deploy.service /etc/systemd/system/manga-generic-deploy.service
+install -o root -g root -m 0644 deploy/systemd/manga-generic-watcher.service /etc/systemd/system/manga-generic-watcher.service
+install -o root -g root -m 0644 deploy/systemd/manga-dual-weth-deploy.service /etc/systemd/system/manga-dual-weth-deploy.service
+install -o root -g root -m 0644 deploy/systemd/manga-dual-arm.service /etc/systemd/system/manga-dual-arm.service
+install -o root -g root -m 0644 deploy/systemd/manga-dual-watcher.service /etc/systemd/system/manga-dual-watcher.service
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
+install -o root -g root -m 0644 deploy/systemd/manga-business-report.service /etc/systemd/system/manga-business-report.service
+install -o root -g root -m 0644 deploy/systemd/manga-business-report.timer /etc/systemd/system/manga-business-report.timer
 systemctl daemon-reload
 
 echo "installed ${release_sha}; service was not armed or started"

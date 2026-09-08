@@ -4,13 +4,15 @@
     "checkJs": true,
     "noEmit": true,
     "target": "ES2024",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
     "strict": false,
     "noImplicitAny": false,
     "skipLibCheck": true,
     "types": ["node"],
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.mjs", "test/*.test.mjs"]
+  "include": ["src/**/*.mjs", "test/*.test.mjs", "ui/**/*.mjs", "ui/**/*.jsx", "ui/**/*.d.ts"]
 }

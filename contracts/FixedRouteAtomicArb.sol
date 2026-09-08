@@ -2,7 +2,7 @@
 pragma solidity 0.8.26;
 
 /// @notice Minimal interfaces kept local so the deployed runtime only contains
-/// the exact MANGA CHAN route that has been reviewed.
+/// the exact SPX AAPL-to-NVDA route that has been reviewed.
 interface IUniswapV3PoolMinimal {
     function swap(
         address recipient,
@@ -48,12 +48,12 @@ interface IPoolManagerMinimal {
     function take(address currency, address to, uint256 amount) external;
 }
 
-/// @title MANGA CHAN MSFT -> MANGA -> NVDA atomic arbitrage executor
+/// @title SPX AAPL -> SPX -> NVDA atomic arbitrage executor
 /// @notice Holds a small USDG float and executes one fixed, fully atomic route:
-/// USDG -(V3)-> MSFT -(V4)-> MANGA -(V4)-> NVDA -(V3)-> USDG.
+/// USDG -(V3)-> AAPL -(V4)-> SPX -(V4)-> NVDA -(V3)-> USDG.
 /// Every external target and pool key is fixed in bytecode. A losing route
 /// reverts, returning all pool state and token transfers to their prior state.
-contract MangaChanAtomicArb {
+contract FixedRouteAtomicArb {
     error NotOperator();
     error Reentered();
     error Expired();
@@ -76,12 +76,12 @@ contract MangaChanAtomicArb {
 
     address internal constant USDG = 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168;
     address internal constant WETH = 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73;
-    address internal constant MANGA = 0xc28068cb109Dd0a0d5C6C6a925B048fEA00E31a6;
-    address internal constant MSFT = 0xe93237C50D904957Cf27E7B1133b510C669c2e74;
-    address internal constant NVDA = 0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC;
+    address internal constant TARGET_TOKEN = 0x3363Cd5019Aa1F3E50C73086d5F5dCab3D90f558;
+    address internal constant ENTRY_TOKEN = 0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9;
+    address internal constant EXIT_TOKEN = 0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC;
     address internal constant HOOK = 0x16D1560630Ce74af4478d9b8AD46548A092A2000;
 
-    address internal constant ENTRY_V3_POOL = 0xeb60bCD1D920ad6E102690CCFC6fB488899E1510;
+    address internal constant ENTRY_V3_POOL = 0xAae0d815EE56e4092a5E5C2911E676Fea50B2d6D;
     address internal constant EXIT_V3_POOL = 0xd4EB21209C4D6093f80B5b84f5C45cc093EA14a3;
 
     uint160 internal constant MIN_SQRT_PRICE_PLUS_ONE = 4_295_128_740;
@@ -94,7 +94,7 @@ contract MangaChanAtomicArb {
     uint256 private constant PHASE_UNLOCK = 1;
     uint256 private constant PHASE_ENTRY_CALLBACK = 2;
     uint256 private constant PHASE_EXIT_CALLBACK = 3;
-    bytes32 private constant PHASE_SLOT = keccak256("manga.chan.atomic.arb.phase");
+    bytes32 private constant PHASE_SLOT = keccak256("spx.aapl.nvda.atomic.arb.phase");
 
     constructor(address operator_, uint256 minimumSeedOut) payable {
         if (operator_ == address(0)) revert NotOperator();
@@ -152,10 +152,10 @@ contract MangaChanAtomicArb {
         if (msg.sender != POOL_MANAGER || _phase() != PHASE_UNLOCK) revert UnauthorizedCallback();
         uint128 amountIn = abi.decode(data, (uint128));
 
-        // V3 entry sends MSFT straight into PoolManager. sync/settle turns that
-        // balance increase into this executor's positive MSFT currency delta.
+        // V3 entry sends ENTRY_TOKEN straight into PoolManager. sync/settle turns that
+        // balance increase into this executor's positive ENTRY_TOKEN currency delta.
         IPoolManagerMinimal manager = IPoolManagerMinimal(POOL_MANAGER);
-        manager.sync(MSFT);
+        manager.sync(ENTRY_TOKEN);
         _setPhase(PHASE_ENTRY_CALLBACK);
         (int256 entryAmount0, int256 entryAmount1) = IUniswapV3PoolMinimal(ENTRY_V3_POOL).swap(
             POOL_MANAGER,
@@ -166,66 +166,66 @@ contract MangaChanAtomicArb {
         );
         _setPhase(PHASE_UNLOCK);
         if (entryAmount0 != int256(uint256(amountIn)) || entryAmount1 >= 0) revert InvalidSwapDelta();
-        uint256 msftAmount = uint256(-entryAmount1);
-        if (manager.settle() != msftAmount) revert SettlementMismatch();
+        uint256 entryTokenAmount = uint256(-entryAmount1);
+        if (manager.settle() != entryTokenAmount) revert SettlementMismatch();
 
-        // MSFT (currency1) -> MANGA (currency0).
-        IPoolManagerMinimal.PoolKey memory msftManga = IPoolManagerMinimal.PoolKey({
-            currency0: MANGA,
-            currency1: MSFT,
+        // ENTRY_TOKEN (currency1) -> TARGET_TOKEN (currency0).
+        IPoolManagerMinimal.PoolKey memory entryV4 = IPoolManagerMinimal.PoolKey({
+            currency0: TARGET_TOKEN,
+            currency1: ENTRY_TOKEN,
             fee: 10_000,
             tickSpacing: 200,
             hooks: HOOK
         });
         int256 firstDelta = manager.swap(
-            msftManga,
+            entryV4,
             IPoolManagerMinimal.SwapParams({
                 zeroForOne: false,
-                amountSpecified: -int256(msftAmount),
+                amountSpecified: -int256(entryTokenAmount),
                 sqrtPriceLimitX96: MAX_SQRT_PRICE_MINUS_ONE
             }),
             bytes("")
         );
         int128 firstAmount0 = _amount0(firstDelta);
         int128 firstAmount1 = _amount1(firstDelta);
-        if (firstAmount0 <= 0 || firstAmount1 != -int128(int256(msftAmount))) revert InvalidSwapDelta();
-        uint256 mangaAmount = uint128(firstAmount0);
+        if (firstAmount0 <= 0 || firstAmount1 != -int128(int256(entryTokenAmount))) revert InvalidSwapDelta();
+        uint256 targetTokenAmount = uint128(firstAmount0);
 
-        // MANGA (currency0) -> NVDA (currency1).
-        IPoolManagerMinimal.PoolKey memory mangaNvda = IPoolManagerMinimal.PoolKey({
-            currency0: MANGA,
-            currency1: NVDA,
+        // TARGET_TOKEN (currency0) -> EXIT_TOKEN (currency1).
+        IPoolManagerMinimal.PoolKey memory exitV4 = IPoolManagerMinimal.PoolKey({
+            currency0: TARGET_TOKEN,
+            currency1: EXIT_TOKEN,
             fee: 10_000,
             tickSpacing: 200,
             hooks: HOOK
         });
         int256 secondDelta = manager.swap(
-            mangaNvda,
+            exitV4,
             IPoolManagerMinimal.SwapParams({
                 zeroForOne: true,
-                amountSpecified: -int256(mangaAmount),
+                amountSpecified: -int256(targetTokenAmount),
                 sqrtPriceLimitX96: MIN_SQRT_PRICE_PLUS_ONE
             }),
             bytes("")
         );
         int128 secondAmount0 = _amount0(secondDelta);
         int128 secondAmount1 = _amount1(secondDelta);
-        if (secondAmount0 != -int128(int256(mangaAmount)) || secondAmount1 <= 0) revert InvalidSwapDelta();
-        uint256 nvdaAmount = uint128(secondAmount1);
+        if (secondAmount0 != -int128(int256(targetTokenAmount)) || secondAmount1 <= 0) revert InvalidSwapDelta();
+        uint256 exitTokenAmount = uint128(secondAmount1);
 
-        // V3 exit pays its NVDA input directly from PoolManager in the swap
-        // callback. `take` consumes the positive NVDA currency delta, so the
+        // V3 exit pays its EXIT_TOKEN input directly from PoolManager in the swap
+        // callback. `take` consumes the positive EXIT_TOKEN currency delta, so the
         // PoolManager unlock finishes with every currency delta exactly zero.
         _setPhase(PHASE_EXIT_CALLBACK);
         (int256 exitAmount0, int256 exitAmount1) = IUniswapV3PoolMinimal(EXIT_V3_POOL).swap(
             address(this),
             false,
-            int256(nvdaAmount),
+            int256(exitTokenAmount),
             MAX_SQRT_PRICE_MINUS_ONE,
             bytes("")
         );
         _setPhase(PHASE_UNLOCK);
-        if (exitAmount0 >= 0 || exitAmount1 != int256(nvdaAmount)) revert InvalidSwapDelta();
+        if (exitAmount0 >= 0 || exitAmount1 != int256(exitTokenAmount)) revert InvalidSwapDelta();
 
         return abi.encode(uint256(-exitAmount0));
     }
@@ -246,7 +246,7 @@ contract MangaChanAtomicArb {
             if (msg.sender != EXIT_V3_POOL || amount0Delta >= 0 || amount1Delta <= 0) {
                 revert UnauthorizedCallback();
             }
-            IPoolManagerMinimal(POOL_MANAGER).take(NVDA, EXIT_V3_POOL, uint256(amount1Delta));
+            IPoolManagerMinimal(POOL_MANAGER).take(EXIT_TOKEN, EXIT_V3_POOL, uint256(amount1Delta));
             return;
         }
 

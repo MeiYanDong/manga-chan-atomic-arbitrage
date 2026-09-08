@@ -10,10 +10,32 @@ const CONFIG_KEYS = new Set([
   'MANGA_PRIVATE_KEY_FILE',
   'MANGA_RUN_DIR',
   'MANGA_ALLOW_POLLING_ONLY',
+  'MANGA_ALLOW_PUBLIC_EXECUTION_RPC',
   'MANGA_FINALITY_CONFIRMATIONS',
   'MANGA_MAX_ATTEMPTS',
   'MANGA_MAX_FAILED_GAS_WEI',
   'MANGA_PROVIDER_LABEL',
+  'MANGA_GENERIC_BOARD_URL',
+  'MANGA_GENERIC_BOARD_SNAPSHOT',
+  'MANGA_GENERIC_MAX_QUOTE_AGE_MS',
+  'MANGA_GENERIC_MIN_NET_USDG',
+  'MANGA_GENERIC_SEED_ETH',
+  'MANGA_GENERIC_MIN_ETH_RESERVE',
+  'MANGA_GENERIC_PROFIT_RETENTION_BPS',
+  'MANGA_GENERIC_PREFLIGHT_CANDIDATES',
+  'MANGA_GENERIC_WATCH_POLL_MS',
+  'MANGA_GENERIC_WATCH_ARM_HOURS',
+  'MANGA_GENERIC_WATCH_AUTO_RENEW',
+  'MANGA_GENERIC_WATCH_UNTIL_REVOKED',
+  'MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS',
+  'MANGA_GENERIC_WATCH_MAX_ATTEMPTS',
+  'MANGA_GENERIC_WATCH_MAX_EXECUTIONS',
+  'MANGA_GENERIC_WATCH_MAX_PREFLIGHTS',
+  'MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG',
+  'MANGA_GENERIC_WATCH_MAX_CONSECUTIVE_ERRORS',
+  'MANGA_WETH_SEED_ETH',
+  'MANGA_WETH_MAX_AMOUNT_WETH',
+  'MANGA_WETH_MIN_GROSS_PROFIT_WETH',
 ])
 
 /** @param {string} file */
@@ -40,6 +62,17 @@ export function loadRuntimeConfig(environment = process.env) {
   const rpcUrl = value('MANGA_RPC_URL')
   const wsUrl = value('MANGA_WS_URL')
   const readRpcUrl = value('MANGA_READ_RPC_URL')
+  const maxAttempts = positiveInteger(value('MANGA_MAX_ATTEMPTS'), 5)
+  const genericWatchArmHours = boundedPositiveInteger(value('MANGA_GENERIC_WATCH_ARM_HOURS'), 24, 168)
+  const genericWatchAutoRenew = strictBoolean(value('MANGA_GENERIC_WATCH_AUTO_RENEW'), false)
+  const genericWatchUntilRevoked = strictBoolean(value('MANGA_GENERIC_WATCH_UNTIL_REVOKED'), false)
+  const genericWatchRenewBeforeHours = boundedPositiveInteger(value('MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS'), 6, 167)
+  if (genericWatchAutoRenew && genericWatchUntilRevoked) {
+    throw new Error('MANGA_GENERIC_WATCH_AUTO_RENEW 与 MANGA_GENERIC_WATCH_UNTIL_REVOKED 不能同时启用')
+  }
+  if (genericWatchAutoRenew && genericWatchRenewBeforeHours >= genericWatchArmHours) {
+    throw new Error('MANGA_GENERIC_WATCH_RENEW_BEFORE_HOURS 必须小于 MANGA_GENERIC_WATCH_ARM_HOURS')
+  }
 
   return {
     configPath,
@@ -50,12 +83,51 @@ export function loadRuntimeConfig(environment = process.env) {
     privateKeyFile: value('MANGA_PRIVATE_KEY_FILE'),
     runDir: value('MANGA_RUN_DIR'),
     allowPollingOnly: value('MANGA_ALLOW_POLLING_ONLY') === '1',
+    allowPublicExecutionRpc: strictBoolean(value('MANGA_ALLOW_PUBLIC_EXECUTION_RPC'), false),
     finalityConfirmations: positiveInteger(value('MANGA_FINALITY_CONFIRMATIONS'), 3),
-    maxAttempts: positiveInteger(value('MANGA_MAX_ATTEMPTS'), 5),
+    maxAttempts,
     maxFailedGasWei: nonNegativeBigInt(value('MANGA_MAX_FAILED_GAS_WEI'), 1_000_000_000_000_000n),
     providerLabel: value('MANGA_PROVIDER_LABEL') || 'managed-provider',
+    genericBoardUrl: value('MANGA_GENERIC_BOARD_URL') || 'http://127.0.0.1:8788/api/snapshot',
+    genericBoardSnapshot: value('MANGA_GENERIC_BOARD_SNAPSHOT'),
+    genericMaxQuoteAgeMs: positiveInteger(value('MANGA_GENERIC_MAX_QUOTE_AGE_MS'), 45_000),
+    genericMinNetUsdg: value('MANGA_GENERIC_MIN_NET_USDG') || '0.1',
+    genericSeedEth: value('MANGA_GENERIC_SEED_ETH') || '0',
+    genericMinEthReserve: value('MANGA_GENERIC_MIN_ETH_RESERVE') || '0.002',
+    genericProfitRetentionBps: boundedBps(value('MANGA_GENERIC_PROFIT_RETENTION_BPS'), 9_500),
+    genericPreflightCandidates: boundedPositiveInteger(value('MANGA_GENERIC_PREFLIGHT_CANDIDATES'), 6, 32),
+    genericWatchPollMs: boundedInteger(value('MANGA_GENERIC_WATCH_POLL_MS'), 1_000, 250, 60_000),
+    genericWatchArmHours,
+    genericWatchAutoRenew,
+    genericWatchUntilRevoked,
+    genericWatchRenewBeforeHours,
+    genericWatchMaxAttempts: positiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_ATTEMPTS'), maxAttempts),
+    genericWatchMaxExecutions: boundedPositiveIntegerOrUnlimited(value('MANGA_GENERIC_WATCH_MAX_EXECUTIONS'), 5, 20),
+    genericWatchMaxPreflights: boundedPositiveIntegerOrUnlimited(
+      value('MANGA_GENERIC_WATCH_MAX_PREFLIGHTS'),
+      24,
+      1_000,
+    ),
+    genericWatchMinScreenedNetUsdg: value('MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG'),
+    genericWatchMaxConsecutiveErrors: boundedPositiveInteger(
+      value('MANGA_GENERIC_WATCH_MAX_CONSECUTIVE_ERRORS'),
+      10,
+      100,
+    ),
+    wethSeedEth: value('MANGA_WETH_SEED_ETH') || '0',
+    wethMaxAmountWeth: value('MANGA_WETH_MAX_AMOUNT_WETH') || '1',
+    wethMinGrossProfitWeth: value('MANGA_WETH_MIN_GROSS_PROFIT_WETH') || '0.000001',
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
+}
+
+/** @param {string | null} value @param {number} fallback @param {number} minimum @param {number} maximum */
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = value === null ? fallback : Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`配置值必须在 ${minimum}..${maximum}：${value}`)
+  }
+  return parsed
 }
 
 /** @param {string | null} value @param {number} fallback */
@@ -66,6 +138,28 @@ function positiveInteger(value, fallback) {
   return parsed
 }
 
+/** @param {string | null} value @param {number} fallback @param {number} maximum */
+function boundedPositiveInteger(value, fallback, maximum) {
+  const parsed = positiveInteger(value, fallback)
+  if (parsed > maximum) throw new Error(`配置值必须在 1..${maximum}：${value}`)
+  return parsed
+}
+
+/** @param {string | null} value @param {number | null} fallback */
+function positiveIntegerOrUnlimited(value, fallback) {
+  if (value === null) return fallback
+  if (String(value).trim().toLowerCase() === 'unlimited') return null
+  return positiveInteger(value, fallback ?? 1)
+}
+
+/** @param {string | null} value @param {number | null} fallback @param {number} maximum */
+function boundedPositiveIntegerOrUnlimited(value, fallback, maximum) {
+  const parsed = positiveIntegerOrUnlimited(value, fallback)
+  if (parsed === null) return null
+  if (parsed > maximum) throw new Error(`配置值必须是 unlimited 或在 1..${maximum}：${value}`)
+  return parsed
+}
+
 /** @param {string | null} value @param {bigint} fallback */
 function nonNegativeBigInt(value, fallback) {
   if (value === null) return fallback
@@ -73,13 +167,38 @@ function nonNegativeBigInt(value, fallback) {
   return BigInt(value)
 }
 
+/** @param {string | null} value @param {number} fallback */
+function boundedBps(value, fallback) {
+  const parsed = positiveInteger(value, fallback)
+  if (parsed > 10_000) throw new Error(`配置值必须在 1..10000 bps：${value}`)
+  return parsed
+}
+
+/** @param {string | null} value @param {boolean} fallback */
+function strictBoolean(value, fallback) {
+  if (value === null) return fallback
+  if (value === '1') return true
+  if (value === '0') return false
+  throw new Error(`配置值必须是 0 或 1：${value}`)
+}
+
 /**
- * Live signing must not silently fall back to a public endpoint.
+ * Live signing must not silently fall back to a public endpoint. The explicit
+ * exception exists for a reviewed outage response and remains off by default.
  * @param {ReturnType<typeof loadRuntimeConfig>} config
  * @param {{ requireWss?: boolean }} [options]
  */
 export function assertLiveTransport(config, { requireWss = false } = {}) {
   if (!config.rpcUrl) throw new Error('实盘命令必须配置策略专用 MANGA_RPC_URL')
+  let rpc
+  try {
+    rpc = new URL(config.rpcUrl)
+  } catch {
+    throw new Error('MANGA_RPC_URL 不是有效 URL')
+  }
+  if (rpc.hostname === 'rpc.mainnet.chain.robinhood.com' && !config.allowPublicExecutionRpc) {
+    throw new Error('官方公共 RPC 仅允许只读观察板使用；实盘精确模拟与广播必须使用策略专用 RPC')
+  }
   if (requireWss && !config.wsUrl && !config.allowPollingOnly) {
     throw new Error('watch 模式必须配置 MANGA_WS_URL；仅恢复演练可显式设置 MANGA_ALLOW_POLLING_ONLY=1')
   }

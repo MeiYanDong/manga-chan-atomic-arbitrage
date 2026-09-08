@@ -1,0 +1,41 @@
+[Unit]
+Description=MANGA bounded generic-v2 watcher authorization
+Wants=network-online.target manga-opportunity-board.service
+After=network-online.target manga-opportunity-board.service
+Conflicts=manga-chan-watcher.service manga-dual-watcher.service
+OnFailure=manga-chan-alert@%n.service
+
+[Service]
+Type=oneshot
+User=manga-chan-arb
+Group=manga-chan-arb
+SupplementaryGroups=manga-board
+WorkingDirectory=/opt/manga-chan-arbitrage/current
+EnvironmentFile=/etc/manga-chan-arbitrage/live.env
+EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
+Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
+Environment=MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
+LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
+Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
+UMask=0077
+ExecStart=/usr/bin/env npm run generic:watch:arm
+StateDirectory=manga-chan-arbitrage
+StateDirectoryMode=0700
+MemoryMax=512M
+TasksMax=64
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/manga-chan-arbitrage
