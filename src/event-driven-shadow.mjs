@@ -127,6 +127,25 @@ export function nextHotPollDelay(baseMs, consecutiveErrors, elapsedMs) {
 }
 
 /**
+ * Give latency-sensitive event quotes a smaller retry budget without changing
+ * the more complete periodic reconciliation policy.
+ *
+ * @param {{eventHotPath?: boolean} | undefined} context
+ * @param {{periodic: {attempts: number, delayMs: number}, event: {attempts: number, delayMs: number}}} policies
+ */
+export function selectRpcRetryPolicy(context, policies) {
+  const eventHotPath = context?.eventHotPath === true
+  const selected = eventHotPath ? policies.event : policies.periodic
+  if (!Number.isSafeInteger(selected?.attempts) || selected.attempts < 1) {
+    throw new Error('RPC retry attempts must be a positive safe integer')
+  }
+  if (!Number.isSafeInteger(selected.delayMs) || selected.delayMs < 0) {
+    throw new Error('RPC retry delay must be a non-negative safe integer')
+  }
+  return { ...selected, eventHotPath }
+}
+
+/**
  * Retry only failures explicitly classified as transient by the caller. This
  * helper has no default retry policy, so an EVM/business revert cannot be
  * retried accidentally.

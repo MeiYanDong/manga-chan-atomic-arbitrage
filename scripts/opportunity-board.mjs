@@ -31,6 +31,7 @@ import {
   retryReadOnly,
   rotatingSlice,
   routeShadowEvent,
+  selectRpcRetryPolicy,
   selectPeriodicShadowCandidates,
   shouldPreemptPeriodicQuote,
 } from '../src/event-driven-shadow.mjs'
@@ -88,6 +89,7 @@ import { readWithBoundedMulticall } from '../src/rpc-multicall.mjs'
 import {
   V3ShortlistCache,
   seedV3ShortlistsFromObservations,
+  selectEventV3Routes,
   selectV3BootstrapRoutes,
   v3DirectionKey,
 } from '../src/v3-shortlist-cache.mjs'
@@ -311,6 +313,9 @@ function loadConfig() {
     eventWakeMaxAgeMs: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_AGE_MS, 20_000, 1_000),
     eventV4PairLimit: integer(process.env.MANGA_BOARD_EVENT_V4_PAIR_LIMIT, 1),
     eventAmountLimit: integer(process.env.MANGA_BOARD_EVENT_AMOUNT_LIMIT, 2),
+    eventV3ShortlistSize: integer(process.env.MANGA_BOARD_EVENT_V3_SHORTLIST_SIZE, 1),
+    eventRpcLogicalAttempts: integer(process.env.MANGA_BOARD_EVENT_RPC_LOGICAL_ATTEMPTS, 2),
+    eventRpcRetryDelayMs: integer(process.env.MANGA_BOARD_EVENT_RPC_RETRY_DELAY_MS, 200, 0),
     eventV3MaxAddresses: integer(process.env.MANGA_BOARD_EVENT_V3_MAX_ADDRESSES, 200),
     eventReorgLookback: BigInt(integer(process.env.MANGA_BOARD_EVENT_REORG_LOOKBACK, 12)),
     chainCatalogStartBlock: BigInt(integer(process.env.MANGA_BOARD_CHAIN_CATALOG_START_BLOCK, 45_000_000, 0)),
@@ -714,6 +719,9 @@ class OpportunityBoard {
       v3PersistentShortlistRebuilds: 0,
       v3PersistentShortlistInvalidations: 0,
       v3PersistentSeededRoutes: this.v3PersistentSeededRoutes,
+      eventV3RoutesQuoted: 0,
+      eventV3TopologyMisses: 0,
+      eventRpcLogicalRetries: 0,
       v3BoundedBootstraps: 0,
       v3BoundedBootstrapRoutes: 0,
       v3BoundedBootstrapMisses: 0,
@@ -834,6 +842,9 @@ class OpportunityBoard {
           eventWakeMaxAgeMs: this.config.eventWakeMaxAgeMs,
           eventV4PairLimit: this.config.eventV4PairLimit,
           eventAmountLimit: this.config.eventAmountLimit,
+          eventV3ShortlistSize: this.config.eventV3ShortlistSize,
+          eventRpcLogicalAttempts: this.config.eventRpcLogicalAttempts,
+          eventRpcRetryDelayMs: this.config.eventRpcRetryDelayMs,
           cycleMaxCandidates: this.config.cycleMaxCandidates,
           eventMaxBlockRange: this.config.eventMaxBlockRange.toString(),
           eventMaxLagBlocks: this.config.eventMaxLagBlocks.toString(),
@@ -1858,12 +1869,17 @@ class OpportunityBoard {
 
   /** @param {() => Promise<any>} operation @param {(error: unknown) => boolean} [shouldRetry] */
   retryRpc(operation, shouldRetry = quoteTransportIsIncomplete) {
+    const policy = selectRpcRetryPolicy(this.rpcCallContext.getStore(), {
+      periodic: { attempts: this.config.rpcLogicalAttempts, delayMs: this.config.rpcRetryDelayMs },
+      event: { attempts: this.config.eventRpcLogicalAttempts, delayMs: this.config.eventRpcRetryDelayMs },
+    })
     return retryReadOnly(operation, {
-      attempts: this.config.rpcLogicalAttempts,
-      delayMs: this.config.rpcRetryDelayMs,
+      attempts: policy.attempts,
+      delayMs: policy.delayMs,
       shouldRetry,
       onRetry: (error) => {
         this.quoteRpcMetrics.rpcLogicalRetries += 1
+        if (policy.eventHotPath) this.quoteRpcMetrics.eventRpcLogicalRetries += 1
         this.activateUnbatchedTransport(error)
       },
     })
@@ -1954,11 +1970,16 @@ class OpportunityBoard {
   async discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken) {
     const directionKey = v3DirectionKey(tokenIn, tokenOut, bridgeToken)
     const persistent = this.v3PersistentShortlists.get(directionKey)
+    const eventHotPath = this.rpcCallContext.getStore()?.eventHotPath === true
     const refreshPersistent = (!persistent || persistent.stale) && this.v3ShortlistRefreshBudget > 0
     if (persistent && !refreshPersistent) {
-      const successful = await this.quoteV3Routes(persistent.routes, amountIn, blockNumber)
+      const routes = eventHotPath
+        ? selectEventV3Routes(persistent.routes, this.config.eventV3ShortlistSize)
+        : persistent.routes
+      if (eventHotPath) this.quoteRpcMetrics.eventV3RoutesQuoted += routes.length
+      const successful = await this.quoteV3Routes(routes, amountIn, blockNumber)
       if (successful.length > 0) {
-        const routes = successful.slice(0, this.config.v3ShortlistSize).map((result) => ({
+        const retainedRoutes = successful.slice(0, this.config.v3ShortlistSize).map((result) => ({
           tokens: result.tokens,
           fees: result.fees,
           poolAddresses: result.poolAddresses,
@@ -1969,10 +1990,18 @@ class OpportunityBoard {
         // the RPC. The next periodic cycle must retain that refresh request.
         this.quoteRpcMetrics.v3PersistentShortlistHits += 1
         if (persistent.stale) this.quoteRpcMetrics.v3PersistentShortlistStaleUses += 1
-        return { amountIn, best: successful[0], routes }
+        return { amountIn, best: successful[0], routes: retainedRoutes }
+      }
+      if (eventHotPath) {
+        this.quoteRpcMetrics.eventV3TopologyMisses += 1
+        throw new Error('event V3 shortlist did not quote; periodic discovery required')
       }
       this.v3PersistentShortlists.delete(directionKey)
       this.quoteRpcMetrics.v3PersistentShortlistRebuilds += 1
+    }
+    if (eventHotPath) {
+      this.quoteRpcMetrics.eventV3TopologyMisses += 1
+      throw new Error('event V3 topology unavailable; periodic discovery required')
     }
     if (refreshPersistent) {
       this.v3ShortlistRefreshBudget -= 1
@@ -2716,6 +2745,7 @@ class OpportunityBoard {
     const eventWake = options.eventWake ?? null
     const callContext = {
       preemptible: eventWake === null && this.observations.size > 0,
+      eventHotPath: eventWake !== null,
       acceptedEventsAtStart: this.eventQueue.acceptedEvents,
       preempted: false,
     }

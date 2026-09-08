@@ -5,8 +5,10 @@
 - Turn event wakes into a bounded hot path: discard candidate backlog older than 20 seconds, prioritize the freshest
   candidate, quote one touched/previous V4 pool pair and at most two sizes per base, and let a new accepted event
   cooperatively preempt a warm periodic reconciliation before its next RPC read. Treat a provider-wrapped preemption as
-  an intentional yield instead of a network fault. Every event probe remains a fresh fixed-block Quoter screen; full
-  topology and sizing coverage stays in periodic reconciliation, and signing gates are unchanged.
+  an intentional yield instead of a network fault. Re-quote only the strongest previously proven V3 route during an
+  event wake and use one fast retry there, while periodic reconciliation retains its broader topology discovery and
+  three-attempt read policy. Every event probe remains a fresh fixed-block Quoter screen; full topology and sizing
+  coverage stays in periodic reconciliation, and signing gates are unchanged.
 - Bound previously unseen V3 directions to eight deterministic low-fee bootstrap paths unless a periodic cycle has one
   of its two full-discovery slots available. Reuse the three strongest V4 entry/exit pool pairs for later amounts only
   inside the same fixed block, deduplicating identical V4 calls there. Every reused pair and path still receives a fresh
