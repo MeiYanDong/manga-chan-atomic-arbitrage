@@ -164,7 +164,7 @@ test('schema-v3 execution plans require same-block executable pool attestations'
   )
 })
 
-test('schema-v4 board snapshots retain the schema-v3 execution safety boundary', () => {
+test('schema-v4 and schema-v5 board snapshots retain the schema-v3 execution safety boundary', () => {
   const fixture = schema3SnapshotFixture()
   fixture.schemaVersion = 4
   const candidate = buildGenericExecutionCandidate(fixture, {
@@ -173,8 +173,15 @@ test('schema-v4 board snapshots retain the schema-v3 execution safety boundary',
   assert.equal(candidate.economicEpisodeId, 'episode:test')
   assert.equal(candidate.route.targetToken, TARGET)
 
+  const versionFive = schema3SnapshotFixture()
+  versionFive.schemaVersion = 5
+  assert.equal(
+    buildGenericExecutionCandidate(versionFive, { nowMs: Date.parse('2026-09-05T00:00:10.000Z') }).route.targetToken,
+    TARGET,
+  )
+
   const unsupported = schema3SnapshotFixture()
-  unsupported.schemaVersion = 5
+  unsupported.schemaVersion = 6
   assert.throws(
     () => buildGenericExecutionCandidate(unsupported, { nowMs: Date.parse('2026-09-05T00:00:10.000Z') }),
     /read-only boundary/,

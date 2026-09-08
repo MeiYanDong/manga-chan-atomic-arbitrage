@@ -2,7 +2,7 @@
 Description=MANGA bounded generic-v2 autonomous arbitrage watcher
 Wants=network-online.target manga-opportunity-board.service
 After=network-online.target manga-opportunity-board.service
-Conflicts=manga-chan-watcher.service
+Conflicts=manga-chan-watcher.service manga-dual-watcher.service manga-dual-arm.service manga-dual-weth-deploy.service
 OnFailure=manga-chan-alert@%n.service
 StartLimitIntervalSec=10min
 StartLimitBurst=3

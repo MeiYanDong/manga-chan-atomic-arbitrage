@@ -2,7 +2,7 @@
 Description=MANGA bounded generic-v2 watcher authorization
 Wants=network-online.target manga-opportunity-board.service
 After=network-online.target manga-opportunity-board.service
-Conflicts=manga-chan-watcher.service
+Conflicts=manga-chan-watcher.service manga-dual-watcher.service
 OnFailure=manga-chan-alert@%n.service
 
 [Service]

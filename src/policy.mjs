@@ -221,7 +221,9 @@ export function classifyReconciliation(observations, nonce, minConfirmations = 3
  * @param {Array<{source: string, receipt?: any, transaction?: any, latestNonce?: number, pendingNonce?: number, head?: bigint, headTimestamp?: string | number | bigint, error?: unknown}>} observations
  */
 export function evaluateExpiredMutationAbandonment(plan, observations) {
-  if (plan.kind !== 'generic-execute') return { allowed: false, reason: 'unsupported-mutation-kind' }
+  if (!['generic-execute', 'weth-execute'].includes(plan.kind)) {
+    return { allowed: false, reason: 'unsupported-mutation-kind' }
+  }
   if (plan.nonce === undefined || !Number.isSafeInteger(Number(plan.nonce))) {
     return { allowed: false, reason: 'invalid-mutation-nonce' }
   }
@@ -255,7 +257,7 @@ export function evaluateExpiredMutationAbandonment(plan, observations) {
  * @param {Array<{source: string, headTimestamp?: string | number | bigint, error?: unknown}>} observations
  */
 export function evaluateRawReplayDeadline(plan, observations) {
-  if (plan.kind !== 'generic-execute') return { allowed: true, reason: null }
+  if (!['generic-execute', 'weth-execute'].includes(plan.kind)) return { allowed: true, reason: null }
   let deadline
   try {
     deadline = BigInt(plan.deadline)

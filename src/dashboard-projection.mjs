@@ -1,5 +1,5 @@
 import { getAddress } from 'viem'
-import { BoardStatus } from './opportunity-board.mjs'
+import { BoardStatus, finiteNumber } from './opportunity-board.mjs'
 import { sourceFactEvidenceId } from './source-adapters.mjs'
 import { AttributionStatus, PlatformId, ProtocolId, VenueId, stablePayloadHash } from './source-provenance.mjs'
 
@@ -104,11 +104,40 @@ function classify(address, registry) {
   }
 }
 
-function quoteState(item) {
-  if (!item || !item.quotedAt) return 'UNQUOTED'
-  if (item.status === BoardStatus.STALE || item.fresh === false) return 'STALE'
-  if (item.status === BoardStatus.UNQUOTABLE) return 'UNQUOTABLE'
-  if (item.status === BoardStatus.SCREENED_POSITIVE) return 'FRESH_PROXY_POSITIVE'
+function lanePriority(lane) {
+  if (!lane) return 0
+  if (lane.fresh === true && lane.status === BoardStatus.SCREENED_POSITIVE) return 5
+  if (lane.fresh === true && [BoardStatus.NO_EDGE, BoardStatus.GROSS_POSITIVE].includes(lane.status)) return 4
+  if (lane.fresh === true && lane.status === BoardStatus.UNQUOTABLE) return 3
+  if (lane.status === BoardStatus.STALE || lane.fresh === false) return 2
+  return lane.quotedAt ? 1 : 0
+}
+
+function preferredQuoteLane(item) {
+  const lanes = Object.values(item?.baseOpportunities || {}).filter(Boolean)
+  if (lanes.length === 0) return item
+  const declared = lanes.find((lane) => lane.baseAsset === item.preferredBaseAsset)
+  if (declared?.status === BoardStatus.SCREENED_POSITIVE && declared.fresh === true) return declared
+  return lanes.toSorted((left, right) => {
+    const priorityDelta = lanePriority(right) - lanePriority(left)
+    if (priorityDelta !== 0) return priorityDelta
+    const leftNet = finiteNumber(left.normalizedScreenedNetUsdg ?? left.screenedNetUsdg)
+    const rightNet = finiteNumber(right.normalizedScreenedNetUsdg ?? right.screenedNetUsdg)
+    if (leftNet !== null || rightNet !== null) {
+      if (leftNet === null) return 1
+      if (rightNet === null) return -1
+      if (leftNet !== rightNet) return rightNet - leftNet
+    }
+    if (left.baseAsset === right.baseAsset) return 0
+    return left.baseAsset === 'USDG' ? -1 : 1
+  })[0]
+}
+
+function quoteState(lane) {
+  if (!lane || !lane.quotedAt) return 'UNQUOTED'
+  if (lane.status === BoardStatus.STALE || lane.fresh === false) return 'STALE'
+  if (lane.status === BoardStatus.UNQUOTABLE) return 'UNQUOTABLE'
+  if (lane.status === BoardStatus.SCREENED_POSITIVE) return 'FRESH_PROXY_POSITIVE'
   return 'FRESH_NO_EDGE'
 }
 
@@ -270,8 +299,10 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
           }
         : { protocolId: ProtocolId.UNKNOWN, status: AttributionStatus.UNKNOWN, evidenceIds: [] }
     const venue = facts.pools.length > 0 || item?.pools?.length > 0 ? VenueId.UNISWAP_V4 : VenueId.UNKNOWN
-    const state = quoteState(item)
-    const currentNet = item?.screenedNetUsdg ?? null
+    const selectedLane = preferredQuoteLane(item)
+    const state = quoteState(selectedLane)
+    const baseAsset = selectedLane?.baseAsset || 'USDG'
+    const currentNet = selectedLane?.normalizedScreenedNetUsdg ?? selectedLane?.screenedNetUsdg ?? null
     const sourceRouteQuotes = quotes.slice(0, 5).map((quote) => quote.symbol)
     const sourceRouteSuffix =
       quotes.length > sourceRouteQuotes.length ? ` +${quotes.length - sourceRouteQuotes.length}` : ''
@@ -281,7 +312,7 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
       quoteAssets: quotes,
       pairClass: `${target.classification.value}/${quoteClass}`,
       routeLabel:
-        item?.route ||
+        selectedLane?.route ||
         `${target.symbol} / ${sourceRouteQuotes.length > 0 ? sourceRouteQuotes.join(' · ') : 'UNKNOWN'}${sourceRouteSuffix}`,
       provenance: {
         discovery: [
@@ -309,14 +340,16 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
       },
       quote: {
         state,
-        blockNumber: item?.blockNumber || null,
-        blockHash: item?.blockHash || null,
-        quotedAt: item?.quotedAt || null,
-        bestSizeUsdg: item?.amountInUsdg || null,
-        grossProfitUsdg: item?.grossProfitUsdg || null,
-        gasCostProxyUsdg: item?.gasCostProxyUsdg || null,
+        baseAsset,
+        blockNumber: selectedLane?.blockNumber || null,
+        blockHash: selectedLane?.blockHash || null,
+        quotedAt: selectedLane?.quotedAt || null,
+        bestSizeBase: selectedLane?.amountInBase ?? selectedLane?.amountInUsdg ?? null,
+        bestSizeUsdg: selectedLane?.normalizedAmountInUsdg ?? selectedLane?.amountInUsdg ?? null,
+        grossProfitUsdg: selectedLane?.normalizedGrossProfitUsdg ?? selectedLane?.grossProfitUsdg ?? null,
+        gasCostProxyUsdg: selectedLane?.normalizedGasCostProxyUsdg ?? selectedLane?.gasCostProxyUsdg ?? null,
         screenedNetUsdg: currentNet,
-        method: item?.evidenceLevel || null,
+        method: selectedLane?.evidenceLevel || null,
       },
       execution: {
         state: 'NONE',
@@ -333,7 +366,7 @@ export function projectDashboardOpportunities({ snapshot, sourceCatalog }) {
         pools: facts.pools,
         sourceEvidence: sourceCatalog?.evidence,
       }),
-      rawBoardStatus: item?.status || BoardStatus.DISCOVERED,
+      rawBoardStatus: selectedLane?.status || BoardStatus.DISCOVERED,
       rank: item?.rank || null,
     })
   }
@@ -426,6 +459,8 @@ export function summarizeDashboardOpportunity(item) {
     quote: {
       state: item.quote.state,
       quotedAt: item.quote.quotedAt,
+      baseAsset: item.quote.baseAsset,
+      bestSizeBase: item.quote.bestSizeBase,
       bestSizeUsdg: item.quote.bestSizeUsdg,
       screenedNetUsdg: item.quote.screenedNetUsdg,
       method: item.quote.method,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deriveExecutionEconomics } from '../src/execution-economics.mjs'
+import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
 
 const base = {
   simulatedGrossProfit: 1_000_000n,
@@ -29,4 +29,35 @@ test('execution economics fails closed when exact gas consumes the edge', () => 
     /net floor/,
   )
   assert.throws(() => deriveExecutionEconomics({ ...base, profitRetentionBps: 10_001n }), /invalid/)
+})
+
+test('WETH execution economics protects net profit in the same unit as native Gas', () => {
+  const economics = deriveWethExecutionEconomics({
+    simulatedGrossProfit: 500_000_000_000_000n,
+    estimatedGas: 200_000n,
+    gasPriceWei: 1_000_000_000n,
+    minimumGrossProfit: 10_000_000_000_000n,
+    minimumNetProfit: 100_000_000_000_000n,
+    profitRetentionBps: 9_000n,
+  })
+
+  assert.equal(economics.estimatedGasCostWei, 200_000_000_000_000n)
+  assert.equal(economics.expectedNetProfitWei, 300_000_000_000_000n)
+  assert.equal(economics.minimumProfit, 450_000_000_000_000n)
+  assert.ok(economics.minimumProfit >= economics.maximumGasCostWei + 100_000_000_000_000n)
+})
+
+test('WETH execution economics rejects a gross edge that cannot pay Gas and the net floor', () => {
+  assert.throws(
+    () =>
+      deriveWethExecutionEconomics({
+        simulatedGrossProfit: 250_000_000_000_000n,
+        estimatedGas: 200_000n,
+        gasPriceWei: 1_000_000_000n,
+        minimumGrossProfit: 10_000_000_000_000n,
+        minimumNetProfit: 100_000_000_000_000n,
+        profitRetentionBps: 9_500n,
+      }),
+    /net floor/,
+  )
 })

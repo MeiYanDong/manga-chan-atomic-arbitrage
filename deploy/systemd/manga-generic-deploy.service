@@ -2,7 +2,7 @@
 Description=MANGA guarded generic-v2 executor deployment
 Wants=network-online.target
 After=network-online.target
-Conflicts=manga-chan-watcher.service manga-generic-watcher.service
+Conflicts=manga-chan-watcher.service manga-generic-watcher.service manga-dual-watcher.service
 OnFailure=manga-chan-alert@%n.service
 
 [Service]

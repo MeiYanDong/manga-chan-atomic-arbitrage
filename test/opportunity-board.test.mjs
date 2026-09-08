@@ -5,8 +5,11 @@ import path from 'node:path'
 import test from 'node:test'
 import {
   BoardStatus,
+  EpisodeObservation,
+  EpisodeState,
   applyFreshness,
   buildBoardSnapshot,
+  chooseBestBaseOpportunity,
   catalogIsComplete,
   compactExecutionBoardSnapshot,
   materialEvents,
@@ -16,6 +19,7 @@ import {
   publicError,
   reconcileOpportunityEpisodes,
   screenRoundTrip,
+  screenWethRoundTrip,
   writeExecutionBoardSnapshot,
   writeJsonAtomic,
   writeStableJsonAtomic,
@@ -49,6 +53,92 @@ test('execution snapshot keeps only fresh positive rows without mutating the ful
   assert.deepEqual(compact.items, [positive])
   assert.equal(compact.selection, snapshot.selection)
   assert.equal(snapshot.items.length, 3)
+})
+
+test('execution snapshot retains a WETH-only positive lane while legacy USDG remains non-positive', () => {
+  const wethOnly = {
+    id: 'weth-only',
+    status: BoardStatus.NO_EDGE,
+    fresh: true,
+    baseOpportunities: {
+      WETH: { baseAsset: 'WETH', status: BoardStatus.SCREENED_POSITIVE, fresh: true },
+    },
+  }
+  const compact = compactExecutionBoardSnapshot({ schemaVersion: 5, items: [wethOnly] })
+  assert.deepEqual(compact.items, [wethOnly])
+})
+
+test('WETH screening subtracts native Gas exactly and normalizes conservatively to USDG', () => {
+  const result = screenWethRoundTrip({
+    amountIn: 4_000_000_000_000_000n,
+    amountOut: 4_500_000_000_000_000n,
+    quoterGas: [50_000n, 50_000n, 50_000n, 50_000n],
+    overheadGas: 100_000n,
+    gasPriceWei: 1_000_000_000n,
+    nativeMarkInWei: 4_000_000_000_000_000n,
+    nativeMarkOutUsdg: 10_000_000n,
+  })
+
+  assert.equal(result.grossProfitWei, 500_000_000_000_000n)
+  assert.equal(result.gasCostWei, 300_000_000_000_000n)
+  assert.equal(result.screenedNetWei, 200_000_000_000_000n)
+  assert.equal(result.normalizedGrossProfitUsdg, 1_250_000n)
+  assert.equal(result.normalizedGasCostUsdg, 750_000n)
+  assert.equal(result.normalizedScreenedNetUsdg, 500_000n)
+  assert.equal(result.status, BoardStatus.SCREENED_POSITIVE)
+})
+
+test('WETH screening does not promote an edge that rounds below one normalized USDG unit', () => {
+  const result = screenWethRoundTrip({
+    amountIn: 1_000_000n,
+    amountOut: 1_000_002n,
+    quoterGas: [1n],
+    overheadGas: 0n,
+    gasPriceWei: 1n,
+    nativeMarkInWei: 1_000_000_000_000_000_000n,
+    nativeMarkOutUsdg: 1_000_000n,
+  })
+  assert.equal(result.screenedNetWei, 1n)
+  assert.equal(result.normalizedScreenedNetUsdg, -1n)
+  assert.equal(result.status, BoardStatus.GROSS_POSITIVE)
+})
+
+test('global base selection compares only fresh positive lanes in normalized USDG', () => {
+  const selected = chooseBestBaseOpportunity([
+    {
+      baseAsset: 'WETH',
+      status: BoardStatus.SCREENED_POSITIVE,
+      fresh: true,
+      normalizedAmountInUsdg: '1',
+      normalizedGrossProfitUsdg: '1',
+      normalizedScreenedNetUsdg: '-1',
+    },
+    {
+      baseAsset: 'USDG',
+      status: BoardStatus.SCREENED_POSITIVE,
+      fresh: true,
+      normalizedAmountInUsdg: '25',
+      normalizedGrossProfitUsdg: '0.9',
+      normalizedScreenedNetUsdg: '0.4',
+    },
+    {
+      baseAsset: 'WETH',
+      status: BoardStatus.SCREENED_POSITIVE,
+      fresh: true,
+      normalizedAmountInUsdg: '10',
+      normalizedGrossProfitUsdg: '1.2',
+      normalizedScreenedNetUsdg: '0.7',
+    },
+    {
+      baseAsset: 'WETH',
+      status: BoardStatus.SCREENED_POSITIVE,
+      fresh: false,
+      normalizedAmountInUsdg: '5',
+      normalizedGrossProfitUsdg: '5',
+      normalizedScreenedNetUsdg: '4',
+    },
+  ])
+  assert.equal(selected.baseAsset, 'WETH')
 })
 
 test('large stable JSON writes are atomic, parseable and hash-identical to canonical provenance', (context) => {
@@ -437,6 +527,80 @@ test('UNQUOTABLE is unknown continuity and only a fresh economic negative closes
   assert.equal(closed.events[0].previousGrossProfitUsdg, '0.600000')
   assert.equal(closed.events[0].currentStatus, BoardStatus.GROSS_POSITIVE)
   assert.equal(closed.snapshot.items[0].economicEpisode.state, 'CLOSED')
+})
+
+test('economic episodes include WETH-only positives and remain unknown until every base is freshly negative', () => {
+  const quotedAt = '2026-09-04T00:00:00.000Z'
+  const lane = (baseAsset, status, net, overrides = {}) => ({
+    baseAsset,
+    status,
+    quotedAt,
+    route: `WETH → SIGMA → ${baseAsset}`,
+    routeKey: `pool-a:pool-b`,
+    amountInBase: baseAsset === 'WETH' ? '0.004' : '10',
+    normalizedAmountInUsdg: '10',
+    normalizedAmountOutUsdg: '10.8',
+    normalizedGrossProfitUsdg: '0.8',
+    normalizedGasCostProxyUsdg: '0.2',
+    normalizedScreenedNetUsdg: net,
+    ...overrides,
+  })
+  const previous = snapshotAt('2026-09-04T00:00:01.000Z', {
+    status: BoardStatus.NO_EDGE,
+    quotedAt,
+    screenedNetUsdg: '-0.1',
+    baseOpportunities: {
+      USDG: lane('USDG', BoardStatus.NO_EDGE, '-0.1'),
+      WETH: lane('WETH', BoardStatus.NO_EDGE, '-0.2'),
+    },
+  })
+  const positive = snapshotAt('2026-09-04T00:00:02.000Z', {
+    status: BoardStatus.NO_EDGE,
+    quotedAt: '2026-09-04T00:00:02.000Z',
+    screenedNetUsdg: '-0.1',
+    baseOpportunities: {
+      USDG: lane('USDG', BoardStatus.NO_EDGE, '-0.1', { quotedAt: '2026-09-04T00:00:02.000Z' }),
+      WETH: lane('WETH', BoardStatus.SCREENED_POSITIVE, '0.6', {
+        quotedAt: '2026-09-04T00:00:02.000Z',
+      }),
+    },
+  })
+  const entered = reconcileOpportunityEpisodes(previous, positive)
+  assert.deepEqual(
+    entered.events.map((event) => event.type),
+    ['SCREENED_POSITIVE_ENTERED'],
+  )
+  assert.equal(entered.events[0].baseAsset, 'WETH')
+  assert.equal(entered.events[0].amountInBase, '0.004')
+  assert.equal(entered.events[0].screenedNetUsdg, '0.6')
+  assert.equal(entered.snapshot.items[0].economicEpisode.lastPositiveBaseAsset, 'WETH')
+
+  const incomplete = snapshotAt('2026-09-04T00:00:03.000Z', {
+    ...positive.items[0],
+    quotedAt: '2026-09-04T00:00:03.000Z',
+    baseOpportunities: {
+      USDG: lane('USDG', BoardStatus.NO_EDGE, '-0.1', { quotedAt: '2026-09-04T00:00:03.000Z' }),
+      WETH: lane('WETH', BoardStatus.UNQUOTABLE, null, { quotedAt: '2026-09-04T00:00:03.000Z' }),
+    },
+  })
+  const unknown = reconcileOpportunityEpisodes(entered.snapshot, incomplete)
+  assert.deepEqual(unknown.events, [])
+  assert.equal(unknown.snapshot.items[0].economicEpisode.observation, EpisodeObservation.UNKNOWN)
+
+  const negative = snapshotAt('2026-09-04T00:00:04.000Z', {
+    ...positive.items[0],
+    quotedAt: '2026-09-04T00:00:04.000Z',
+    baseOpportunities: {
+      USDG: lane('USDG', BoardStatus.NO_EDGE, '-0.1', { quotedAt: '2026-09-04T00:00:04.000Z' }),
+      WETH: lane('WETH', BoardStatus.GROSS_POSITIVE, '-0.05', { quotedAt: '2026-09-04T00:00:04.000Z' }),
+    },
+  })
+  const closed = reconcileOpportunityEpisodes(unknown.snapshot, negative)
+  assert.deepEqual(
+    closed.events.map((event) => event.type),
+    ['SCREENED_POSITIVE_LEFT'],
+  )
+  assert.equal(closed.snapshot.items[0].economicEpisode.state, EpisodeState.CLOSED)
 })
 
 test('snapshot publishing is atomic, private to the service group and contains no endpoint error', () => {

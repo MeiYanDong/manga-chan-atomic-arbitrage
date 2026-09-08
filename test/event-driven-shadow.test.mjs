@@ -194,6 +194,25 @@ test('dependency index routes V4 and previously quoted V3 changes to only affect
   })
 })
 
+test('dependency index includes V3 pools from nested WETH base lanes', () => {
+  const catalog = [{ id: 'token-a', pools: [{ poolId: POOL_A }] }]
+  const observations = new Map([
+    [
+      'token-a',
+      {
+        baseOpportunities: {
+          WETH: { entryV3Pools: [V3_A], exitV3Pools: [], amountQuotes: [] },
+        },
+      },
+    ],
+  ])
+  const index = buildShadowDependencyIndex(catalog, observations)
+  assert.deepEqual(routeShadowEvent({ type: ShadowWakeSource.V3_SWAP, poolAddress: V3_A }, index), {
+    candidateIds: ['token-a'],
+    catalogRefresh: false,
+  })
+})
+
 test('wake queue deduplicates logs and coalesces revisions per candidate', () => {
   const queue = new CandidateWakeQueue()
   const event = {
