@@ -207,7 +207,17 @@ marked executor-compatible.
 
 Priority candidates and current positive rows are covered by the periodic reconciliation cursor. Between those sweeps,
 PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call counts and event-to-quote latency
-are published as runtime metrics. Equivalent V3 anchor requests are deduplicated only within the same fixed block.
+are published as runtime metrics. Priority, current-positive and coverage work share one four-candidate total cycle
+cap, with at least one slot reserved for coverage whenever the catalog is non-empty.
+
+Equivalent V3 anchor requests are deduplicated within the same fixed block. Across blocks and restarts, the board may
+reuse at most three structurally validated route topologies for a direction; it never reuses an amount output. Every
+retained path receives a fresh Quoter call at the cycle's current fixed block. A swap in a retained V3 pool marks its
+direction stale, while a five-minute age bound and a maximum of two full rediscoveries per periodic cycle provide
+bounded alternative-route coverage. Event cycles spend no topology-refresh budget, and a missing shortlist or a
+shortlist whose paths all fail is rebuilt. This can delay discovery of a newly superior non-retained fee route until a
+periodic refresh; it cannot satisfy the separate current-block exact executor preflight or authorize a signature.
+
 V3 Factory reads and V3 Quoter paths are grouped in at most four calls through the code-hash-pinned canonical
 Multicall3 contract at that same block. Every failed aggregate subcall is repeated once through the original direct read
 path: a direct success recovers a provider execution-budget false negative, while a direct contract revert remains an
@@ -232,10 +242,10 @@ candidate starts with 5/10 USDG probes. A gross-positive probe or a previously a
 grid; no-edge priority status alone does not authorize a large quote fan-out. This is discovery scheduling, not execution
 authorization.
 
-For each direction at a fixed block, the first requested amount runs the complete allowed direct-or-one-WETH-bridge V3
-path set and retains the top three successful paths. Other amounts at that same block receive fresh Quoter results only
-for that shortlist. The snapshot labels this policy; it is not represented as an exhaustive all-path search at every
-amount. A new block starts a new competition.
+For a direction without a reusable shortlist, the first requested amount runs the complete allowed
+direct-or-one-WETH-bridge V3 path set and retains the top three successful paths. Other amounts and later blocks receive
+fresh Quoter results only for that shortlist until its bounded refresh becomes due. The snapshot labels this policy; it
+is not represented as an exhaustive all-path search at every amount or block.
 
 Economic opportunity frequency uses episode semantics. One fresh positive opens an episode; stale, unquotable and
 missing observations preserve it as unknown continuity; only a fresh non-positive quote closes it. A one-time epoch

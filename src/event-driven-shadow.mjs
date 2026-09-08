@@ -141,20 +141,24 @@ export async function retryReadOnly(operation, options) {
  *
  * @param {Record<string, any>[]} catalog
  * @param {Map<string, Record<string, any>>} observations
- * @param {{priorityIds: string[], positiveStatuses: string[], topRefreshSize: number, batchSize: number, cursor: number}} options
+ * @param {{priorityIds: string[], positiveStatuses: string[], topRefreshSize: number, batchSize: number, cursor: number, maxCandidates?: number}} options
  */
 export function selectPeriodicShadowCandidates(catalog, observations, options) {
+  const maxCandidates = options.maxCandidates ?? Number.MAX_SAFE_INTEGER
+  if (!Number.isSafeInteger(maxCandidates) || maxCandidates < 1) {
+    throw new Error('periodic candidate cap must be a positive safe integer')
+  }
   const byId = new Map(catalog.map((candidate) => [candidate.id, candidate]))
   const selected = []
   const seen = new Set()
   const add = (candidate) => {
-    if (!candidate || seen.has(candidate.id)) return false
+    if (!candidate || seen.has(candidate.id) || selected.length >= maxCandidates) return false
     seen.add(candidate.id)
     selected.push(candidate)
     return true
   }
 
-  for (const id of options.priorityIds) add(byId.get(id.toLowerCase()))
+  const highPriority = options.priorityIds.map((id) => byId.get(id.toLowerCase())).filter(Boolean)
   const currentPositive = [...observations.entries()]
     .filter(([, observation]) =>
       [observation.status, ...Object.values(observation.baseOpportunities || {}).map((lane) => lane?.status)].some(
@@ -167,19 +171,34 @@ export function selectPeriodicShadowCandidates(catalog, observations, options) {
         Number(left[1].preferredNormalizedScreenedNetUsdg ?? left[1].screenedNetUsdg),
     )
     .slice(0, options.topRefreshSize)
-  for (const [id] of currentPositive) add(byId.get(id))
+  highPriority.push(...currentPositive.map(([id]) => byId.get(id)).filter(Boolean))
+
+  const highPriorityTarget = Math.max(0, maxCandidates - 1)
+  for (const candidate of highPriority) {
+    if (selected.length >= highPriorityTarget) break
+    add(candidate)
+  }
 
   let coverageAdded = 0
   for (const candidate of catalog) {
-    if (coverageAdded >= options.batchSize) break
+    if (coverageAdded >= options.batchSize || selected.length >= maxCandidates) break
     if (!observations.has(candidate.id) && add(candidate)) coverageAdded += 1
   }
 
   let examined = 0
-  while (catalog.length > 0 && coverageAdded < options.batchSize && examined < catalog.length) {
+  while (
+    catalog.length > 0 &&
+    coverageAdded < options.batchSize &&
+    selected.length < maxCandidates &&
+    examined < catalog.length
+  ) {
     const candidate = catalog[(options.cursor + examined) % catalog.length]
     examined += 1
     if (add(candidate)) coverageAdded += 1
+  }
+  for (const candidate of highPriority) {
+    if (selected.length >= maxCandidates) break
+    add(candidate)
   }
   const nextCursor = catalog.length > 0 ? (options.cursor + Math.max(examined, options.batchSize)) % catalog.length : 0
   return { selected, nextCursor, coverageAdded }

@@ -79,6 +79,7 @@ import {
 } from '../src/route-optimizer.mjs'
 import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
 import { readWithBoundedMulticall } from '../src/rpc-multicall.mjs'
+import { V3ShortlistCache, seedV3ShortlistsFromObservations, v3DirectionKey } from '../src/v3-shortlist-cache.mjs'
 import { BoardStore } from '../src/board-store.mjs'
 import { readPublicBusinessSnapshot } from '../src/business-operations.mjs'
 import {
@@ -256,6 +257,7 @@ function loadConfig() {
     catalogIntervalMs: integer(process.env.MANGA_BOARD_CATALOG_INTERVAL_MS, 300_000, 30_000),
     staleMs: integer(process.env.MANGA_BOARD_STALE_MS, 180_000, 30_000),
     batchSize: integer(process.env.MANGA_BOARD_BATCH_SIZE, 4),
+    cycleMaxCandidates: integer(process.env.MANGA_BOARD_CYCLE_MAX_CANDIDATES, 4),
     priorityRefreshSize: integer(process.env.MANGA_BOARD_PRIORITY_REFRESH_SIZE, 2),
     topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 4),
     quoteConcurrency: integer(process.env.MANGA_BOARD_QUOTE_CONCURRENCY, 2),
@@ -263,6 +265,8 @@ function loadConfig() {
     catalogConcurrency: integer(process.env.MANGA_BOARD_CATALOG_CONCURRENCY, 6),
     amountQuoteConcurrency: integer(process.env.MANGA_BOARD_AMOUNT_QUOTE_CONCURRENCY, 1),
     v3ShortlistSize: integer(process.env.MANGA_BOARD_V3_SHORTLIST_SIZE, 3),
+    v3ShortlistRefreshMs: integer(process.env.MANGA_BOARD_V3_SHORTLIST_REFRESH_MS, 300_000, 30_000),
+    v3ShortlistRefreshesPerCycle: integer(process.env.MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE, 2, 0),
     fullGridEveryCycles: integer(process.env.MANGA_BOARD_FULL_GRID_EVERY_CYCLES, 0, 0),
     fullGridRefreshMs: integer(process.env.MANGA_BOARD_FULL_GRID_REFRESH_MS, 300_000),
     blockLag: BigInt(integer(process.env.MANGA_BOARD_BLOCK_LAG, 1, 0)),
@@ -608,6 +612,15 @@ class OpportunityBoard {
     this.v3PoolDiscoveryCache = new FixedBlockPromiseCache()
     this.v3RouteShortlistCache = new FixedBlockPromiseCache()
     this.v3QuoteCache = new FixedBlockPromiseCache()
+    this.v3PersistentShortlists = new V3ShortlistCache({
+      maxRoutes: config.v3ShortlistSize,
+      refreshMs: config.v3ShortlistRefreshMs,
+    })
+    this.v3PersistentSeededRoutes = seedV3ShortlistsFromObservations(this.v3PersistentShortlists, this.observations, {
+      USDG,
+      WETH,
+    })
+    this.v3ShortlistRefreshBudget = 0
     this.cursor = Number(persistedState.cursor || 0)
     this.cycleNumber = Number(persistedState.cycleNumber || 0)
     this.hotCursor = persistedState.hotCursor || {
@@ -661,6 +674,12 @@ class OpportunityBoard {
       v3QuoterCacheHits: 0,
       v3ShortlistDiscoveries: 0,
       v3ShortlistHits: 0,
+      v3PersistentShortlistHits: 0,
+      v3PersistentShortlistStaleUses: 0,
+      v3PersistentShortlistRefreshes: 0,
+      v3PersistentShortlistRebuilds: 0,
+      v3PersistentShortlistInvalidations: 0,
+      v3PersistentSeededRoutes: this.v3PersistentSeededRoutes,
       v4QuoterCalls: 0,
       multicallRpcBatches: 0,
       multicallSubcalls: 0,
@@ -767,6 +786,7 @@ class OpportunityBoard {
         reorgCount: Number(this.hotCursor.reorgCount || 0),
         limits: {
           eventWakeMaxCandidates: this.config.eventWakeMaxCandidates,
+          cycleMaxCandidates: this.config.cycleMaxCandidates,
           eventMaxBlockRange: this.config.eventMaxBlockRange.toString(),
           eventMaxLagBlocks: this.config.eventMaxLagBlocks.toString(),
           quoteConcurrency: this.config.quoteConcurrency,
@@ -775,8 +795,10 @@ class OpportunityBoard {
           rpcLogicalAttempts: this.config.rpcLogicalAttempts,
           rpcRetryDelayMs: this.config.rpcRetryDelayMs,
           multicallMaxCalls: this.config.multicallMaxCalls,
+          v3ShortlistRefreshMs: this.config.v3ShortlistRefreshMs,
+          v3ShortlistRefreshesPerCycle: this.config.v3ShortlistRefreshesPerCycle,
         },
-        quoteRpcTotals: { ...this.quoteRpcMetrics },
+        quoteRpcTotals: { ...this.quoteRpcMetrics, v3PersistentShortlists: this.v3PersistentShortlists.size },
       },
     }
   }
@@ -1593,6 +1615,12 @@ class OpportunityBoard {
       ...v3Logs.map((log) => decodeV3SwapLog(log)),
     ].filter(Boolean)
     const events = coalesceLatestSwapPerPool(decodedEvents)
+    for (const event of events) {
+      if (event.type !== 'V3_SWAP' || !event.poolAddress) continue
+      this.quoteRpcMetrics.v3PersistentShortlistInvalidations += this.v3PersistentShortlists.invalidateByPool(
+        event.poolAddress,
+      )
+    }
     const initializeEvents = events.filter((event) => event.type === 'V4_INITIALIZE')
     const initializeResult = this.ingestInitializeEvents(initializeEvents)
     if (initializeResult.discoveredPools > 0) {
@@ -1839,7 +1867,7 @@ class OpportunityBoard {
     if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
       return { amountOut: amountIn, gasEstimate: 0n, fees: [], tokens: [tokenIn], poolAddresses: [], path: '0x' }
     }
-    const directionKey = `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}:${bridgeToken.toLowerCase()}`
+    const directionKey = v3DirectionKey(tokenIn, tokenOut, bridgeToken)
     const shortlist = this.v3RouteShortlistCache.getOrCreate(blockNumber, directionKey, () =>
       this.discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken),
     )
@@ -1853,6 +1881,32 @@ class OpportunityBoard {
 
   /** @param {string} tokenIn @param {string} tokenOut @param {bigint} amountIn @param {bigint} blockNumber @param {string} bridgeToken */
   async discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken) {
+    const directionKey = v3DirectionKey(tokenIn, tokenOut, bridgeToken)
+    const persistent = this.v3PersistentShortlists.get(directionKey)
+    const refreshPersistent = persistent?.stale && this.v3ShortlistRefreshBudget > 0
+    if (persistent && !refreshPersistent) {
+      const successful = await this.quoteV3Routes(persistent.routes, amountIn, blockNumber)
+      if (successful.length > 0) {
+        const routes = successful.slice(0, this.config.v3ShortlistSize).map((result) => ({
+          tokens: result.tokens,
+          fees: result.fees,
+          poolAddresses: result.poolAddresses,
+          path: result.path,
+        }))
+        // Do not write the old freshness timestamp back here: the independent
+        // hot poller may have invalidated this entry while the quote awaited
+        // the RPC. The next periodic cycle must retain that refresh request.
+        this.quoteRpcMetrics.v3PersistentShortlistHits += 1
+        if (persistent.stale) this.quoteRpcMetrics.v3PersistentShortlistStaleUses += 1
+        return { amountIn, best: successful[0], routes }
+      }
+      this.v3PersistentShortlists.delete(directionKey)
+      this.quoteRpcMetrics.v3PersistentShortlistRebuilds += 1
+    } else if (refreshPersistent) {
+      this.v3ShortlistRefreshBudget -= 1
+      this.quoteRpcMetrics.v3PersistentShortlistRefreshes += 1
+    }
+
     this.quoteRpcMetrics.v3ShortlistDiscoveries += 1
     const candidates = []
     const directPools = await this.availableV3Pools(tokenIn, tokenOut, blockNumber)
@@ -1892,6 +1946,7 @@ class OpportunityBoard {
       poolAddresses: result.poolAddresses,
       path: result.path,
     }))
+    this.v3PersistentShortlists.set(directionKey, routes)
     return { amountIn, best: successful[0], routes }
   }
 
@@ -2351,6 +2406,7 @@ class OpportunityBoard {
       topRefreshSize: this.config.topRefreshSize,
       batchSize: this.config.batchSize,
       cursor: this.cursor,
+      maxCandidates: this.config.cycleMaxCandidates,
     })
     this.cursor = result.nextCursor
     return result.selected
@@ -2433,6 +2489,7 @@ class OpportunityBoard {
     if (this.inCycle) return null
     this.inCycle = true
     this.cycleRpcFailure = null
+    this.v3ShortlistRefreshBudget = eventWake ? 0 : this.config.v3ShortlistRefreshesPerCycle
     const quoterCallsBefore = this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls
     try {
       const fullCatalogDue =

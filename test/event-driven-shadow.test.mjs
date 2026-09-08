@@ -178,7 +178,7 @@ test('fixed-block evidence cache can retain a rejection until the block changes'
   assert.equal(calls, 2)
 })
 
-test('periodic selection never fills an empty positive quota with extra unobserved rows', () => {
+test('periodic selection caps total work while reserving coverage', () => {
   const catalog = Array.from({ length: 50 }, (_, index) => ({ id: `candidate-${index}` }))
   const observations = new Map([
     ['candidate-1', { status: 'SCREENED_NET_POSITIVE', screenedNetUsdg: '1.5' }],
@@ -190,13 +190,39 @@ test('periodic selection never fills an empty positive quota with extra unobserv
     topRefreshSize: 32,
     batchSize: 4,
     cursor: 0,
+    maxCandidates: 4,
   })
 
   assert.deepEqual(
     result.selected.map((candidate) => candidate.id),
-    ['candidate-0', 'candidate-1', 'candidate-3', 'candidate-4', 'candidate-5', 'candidate-6'],
+    ['candidate-0', 'candidate-1', 'candidate-3', 'candidate-4'],
   )
-  assert.equal(result.coverageAdded, 4)
+  assert.equal(result.coverageAdded, 2)
+})
+
+test('periodic selection cannot let priority and positive rows starve coverage', () => {
+  const catalog = Array.from({ length: 10 }, (_, index) => ({ id: `candidate-${index}` }))
+  const observations = new Map(
+    Array.from({ length: 6 }, (_, index) => [
+      `candidate-${index}`,
+      { status: 'SCREENED_NET_POSITIVE', screenedNetUsdg: String(10 - index) },
+    ]),
+  )
+  const result = selectPeriodicShadowCandidates(catalog, observations, {
+    priorityIds: ['candidate-0', 'candidate-1'],
+    positiveStatuses: ['SCREENED_NET_POSITIVE'],
+    topRefreshSize: 6,
+    batchSize: 4,
+    cursor: 0,
+    maxCandidates: 4,
+  })
+
+  assert.equal(result.selected.length, 4)
+  assert.equal(result.coverageAdded, 1)
+  assert.equal(
+    result.selected.some((candidate) => candidate.id === 'candidate-6'),
+    true,
+  )
 })
 
 const POOL_A = `0x${'a'.repeat(64)}`

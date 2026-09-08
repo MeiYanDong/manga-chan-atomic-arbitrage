@@ -193,8 +193,9 @@ Acceptance:
 - a mandatory periodic deadline prevents continuous event traffic from starving coverage rotation and chain backfill.
 
 Status: revised implementation and deterministic tests are complete. The unbounded v0.7.3 Multicall canary was rejected
-after the public RPC refused an 18-path aggregate and produced a heavy-path false negative in a four-call group. The
-bounded direct-verification path remains pending production acceptance.
+after the public RPC refused an 18-path aggregate and produced a heavy-path false negative in a four-call group. v0.7.4
+then verified bounded direct recovery in production, but its eight-to-ten-minute cycles failed the throughput gate;
+S19 bounds the remaining workload without changing this transport boundary.
 
 ## S17 — Hot-cursor progress independent of quote latency
 
@@ -232,3 +233,22 @@ Acceptance:
 Status: implemented, passed protected-branch and Linux installer gates, and promoted through a clean schema-v1 disarm to
 schema-v2 re-arm. Production readback proved the exact release, active process, rolling policy, zero new-arm failed Gas
 and no unresolved mutation. The first real lease renewal is not yet observed.
+
+## S19 — Cross-cycle V3 shortlist and total work cap
+
+Acceptance:
+
+- priority, currently positive and coverage rows share a hard four-candidate total per-cycle cap, while a non-empty
+  catalog retains at least one coverage slot;
+- only structurally valid paths recovered from prior fixed-block successful quote evidence may seed the cache, and
+  seeds start stale;
+- every cached route is re-quoted at the current fixed block; cached output amounts are never reused;
+- event cycles perform no full route-topology refresh, while periodic cycles refresh at most two stale directions and
+  each direction becomes stale after five minutes;
+- an observed swap in a retained V3 pool invalidates its directions, while missing or wholly failing shortlists rebuild;
+- runtime separates persistent hits, stale uses, refreshes, rebuilds, invalidations and cache size from Quoter and HTTP
+  request totals;
+- newly superior non-retained fee routes may remain undiscovered until bounded periodic refresh, and this completeness
+  tradeoff never bypasses the current-block exact executor simulation, Gas, nonce, reserve or signing gates.
+
+Status: implementation and deterministic tests are complete; production throughput and cursor acceptance are pending.

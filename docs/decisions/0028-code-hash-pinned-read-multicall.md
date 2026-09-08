@@ -1,6 +1,6 @@
 # ADR 0028: code-hash-pinned read Multicall for the public RPC
 
-- Status: Revised after rejected v0.7.3 canary; production verification pending
+- Status: Mechanism verified in v0.7.4; throughput acceptance failed and is continued by ADR 0029
 - Date: 2026-09-09
 
 ## Context
@@ -45,7 +45,8 @@ therefore ambiguous evidence on this endpoint and cannot be cached as route abse
   individual-call storm.
 - Multicall reduces request count, not EVM work, provider billing units or economic uncertainty. Runtime metrics expose
   aggregate requests, subcall failures, direct fallbacks, direct recoveries and transport-stop events separately.
-  Production acceptance requires complete quote cycles with no throttling, current event-cursor evidence and measured
-  HTTP-post reduction.
+  Production verified direct recovery of aggregate false negatives, but complete quote cycles still took eight to ten
+  minutes and issued more than one thousand logical Quoter calls. The transport boundary is retained; ADR 0029 bounds
+  the workload above it.
 - The paid RPC remains isolated to same-block exact preflight, Gas estimation, signing/broadcast readback and receipt
   convergence after a signer-free proxy passes the configured threshold.

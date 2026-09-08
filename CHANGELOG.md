@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Cap priority, positive and coverage work at four total candidates per cycle. Reuse up to three structurally validated
+  V3 routes across blocks and restarts, re-quote every cached path at the current fixed block, invalidate observed
+  route pools on `Swap`, and spend at most two full topology rediscoveries per periodic cycle. Event cycles never spend
+  topology-refresh budget; exact execution preflight and signing gates are unchanged.
 - Run hot-log polling independently of slow quote cycles, coalesce each range to the latest swap per pool and rebuild
   dependencies before the cycle fixed block, while keeping events as non-executable wake evidence.
 - Replace unsupported public JSON-RPC batches with code-hash-pinned, four-call Multicall3 groups for V3 Factory and
