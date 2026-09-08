@@ -35,6 +35,12 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /multicallDirectRecoveries/)
   assert.match(source, /seedV3ShortlistsFromObservations/)
   assert.match(source, /v3PersistentShortlistHits/)
+  assert.match(source, /selectV3BootstrapRoutes/)
+  assert.match(source, /v3BoundedBootstrapMisses/)
+  assert.match(source, /v4RouteShortlistCache\.getOrCreate\(fixed\.blockNumber/)
+  assert.match(source, /selectV4RoutePairs/)
+  assert.match(source, /v4QuoteCache\.getOrCreate\(blockNumber/)
+  assert.match(source, /v4QuoterCacheHits/)
   assert.match(source, /maxCandidates: this\.config\.cycleMaxCandidates/)
   assert.match(source, /this\.client\.simulateContract\(/)
   assert.match(source, /if \(this\.eventQueue\.size > 0\)/)
@@ -105,7 +111,7 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   )
   assert.match(
     unit,
-    /^ExecStart=\/usr\/bin\/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 MANGA_BOARD_RPC_BATCH_SIZE=1 MANGA_BOARD_RPC_RETRY_DELAY_MS=1000 MANGA_BOARD_MULTICALL_MAX_CALLS=4 MANGA_BOARD_CYCLE_MAX_CANDIDATES=4 MANGA_BOARD_V3_SHORTLIST_REFRESH_MS=300000 MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE=2 npm run board$/m,
+    /^ExecStart=\/usr\/bin\/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 MANGA_BOARD_RPC_BATCH_SIZE=1 MANGA_BOARD_RPC_RETRY_DELAY_MS=1000 MANGA_BOARD_MULTICALL_MAX_CALLS=4 MANGA_BOARD_CYCLE_MAX_CANDIDATES=4 MANGA_BOARD_V3_BOOTSTRAP_MAX_ROUTES=8 MANGA_BOARD_V3_SHORTLIST_REFRESH_MS=300000 MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE=2 MANGA_BOARD_V4_SHORTLIST_SIZE=3 npm run board$/m,
   )
   assert.doesNotMatch(unit, /LoadCredential|manga-private-key|MANGA_PRIVATE_KEY/)
 
@@ -117,6 +123,8 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(example, /^MANGA_BOARD_RPC_RETRY_DELAY_MS=1000$/m)
   assert.match(example, /^MANGA_BOARD_MULTICALL_MAX_CALLS=4$/m)
   assert.match(example, /^MANGA_BOARD_CYCLE_MAX_CANDIDATES=4$/m)
+  assert.match(example, /^MANGA_BOARD_V3_BOOTSTRAP_MAX_ROUTES=8$/m)
+  assert.match(example, /^MANGA_BOARD_V4_SHORTLIST_SIZE=3$/m)
   assert.match(example, /^MANGA_BOARD_V3_SHORTLIST_REFRESH_MS=300000$/m)
   assert.match(example, /^MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE=2$/m)
   assert.match(example, /^MANGA_BOARD_RPC_HTTP_CONCURRENCY=1$/m)

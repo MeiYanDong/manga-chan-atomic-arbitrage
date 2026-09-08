@@ -1,6 +1,6 @@
 # ADR 0029: cross-cycle V3 shortlists and a total quote-work cap
 
-- Status: Accepted; production verification pending
+- Status: Work cap verified in v0.7.5; cold-start throughput rejected and continued by ADR 0030
 - Date: 2026-09-09
 
 ## Context
@@ -45,3 +45,12 @@ uses a separate current-block executor simulation and cannot treat board cache s
 - Production acceptance requires materially shorter completed cycles, lower logical Quoter-call counts, bounded cursor
   lag, a healthy signer-feed handoff and no increase in signer or failed-Gas usage absent a genuinely exact-positive
   candidate.
+
+## Production result
+
+v0.7.5 restored 109 directions and 149 route paths from structural evidence, enforced the four-candidate work cap and
+completed without changing signer usage. Its first production reconciliation nevertheless took about eight minutes and
+made 999 logical Quoter calls. One previously unobserved coverage row caused 18 direction discoveries, and those cache
+misses were not subject to the two-refresh budget. The next event cycle hit a public-RPC transient stop. The persistent
+cache decision remains valid, but its throughput gate failed; ADR 0030 bounds cache-miss bootstrap and repeated V4
+amount work.

@@ -75,11 +75,17 @@ import {
   formatAmountGrid,
   parseUsdgAmountGrid,
   refinementAmounts,
+  selectV4RoutePairs,
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
 import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
 import { readWithBoundedMulticall } from '../src/rpc-multicall.mjs'
-import { V3ShortlistCache, seedV3ShortlistsFromObservations, v3DirectionKey } from '../src/v3-shortlist-cache.mjs'
+import {
+  V3ShortlistCache,
+  seedV3ShortlistsFromObservations,
+  selectV3BootstrapRoutes,
+  v3DirectionKey,
+} from '../src/v3-shortlist-cache.mjs'
 import { BoardStore } from '../src/board-store.mjs'
 import { readPublicBusinessSnapshot } from '../src/business-operations.mjs'
 import {
@@ -265,6 +271,8 @@ function loadConfig() {
     catalogConcurrency: integer(process.env.MANGA_BOARD_CATALOG_CONCURRENCY, 6),
     amountQuoteConcurrency: integer(process.env.MANGA_BOARD_AMOUNT_QUOTE_CONCURRENCY, 1),
     v3ShortlistSize: integer(process.env.MANGA_BOARD_V3_SHORTLIST_SIZE, 3),
+    v3BootstrapMaxRoutes: integer(process.env.MANGA_BOARD_V3_BOOTSTRAP_MAX_ROUTES, 8),
+    v4ShortlistSize: integer(process.env.MANGA_BOARD_V4_SHORTLIST_SIZE, 3),
     v3ShortlistRefreshMs: integer(process.env.MANGA_BOARD_V3_SHORTLIST_REFRESH_MS, 300_000, 30_000),
     v3ShortlistRefreshesPerCycle: integer(process.env.MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE, 2, 0),
     fullGridEveryCycles: integer(process.env.MANGA_BOARD_FULL_GRID_EVERY_CYCLES, 0, 0),
@@ -612,6 +620,8 @@ class OpportunityBoard {
     this.v3PoolDiscoveryCache = new FixedBlockPromiseCache()
     this.v3RouteShortlistCache = new FixedBlockPromiseCache()
     this.v3QuoteCache = new FixedBlockPromiseCache()
+    this.v4QuoteCache = new FixedBlockPromiseCache()
+    this.v4RouteShortlistCache = new FixedBlockPromiseCache()
     this.v3PersistentShortlists = new V3ShortlistCache({
       maxRoutes: config.v3ShortlistSize,
       refreshMs: config.v3ShortlistRefreshMs,
@@ -680,7 +690,14 @@ class OpportunityBoard {
       v3PersistentShortlistRebuilds: 0,
       v3PersistentShortlistInvalidations: 0,
       v3PersistentSeededRoutes: this.v3PersistentSeededRoutes,
+      v3BoundedBootstraps: 0,
+      v3BoundedBootstrapRoutes: 0,
+      v3BoundedBootstrapMisses: 0,
       v4QuoterCalls: 0,
+      v4QuoterCacheHits: 0,
+      v4ShortlistDiscoveries: 0,
+      v4ShortlistHits: 0,
+      v4ShortlistRebuilds: 0,
       multicallRpcBatches: 0,
       multicallSubcalls: 0,
       multicallFailures: 0,
@@ -776,6 +793,8 @@ class OpportunityBoard {
           batchWaitMs: this.config.rpcBatchWaitMs,
           maxHttpConcurrency: this.config.rpcHttpConcurrency,
           multicallMaxCalls: this.config.multicallMaxCalls,
+          v3BootstrapMaxRoutes: this.config.v3BootstrapMaxRoutes,
+          v4ShortlistSize: this.config.v4ShortlistSize,
           activeMode: this.rpcTransportMode,
           fallbackAt: this.rpcBatchFallbackAt,
           fallbackReason: this.rpcBatchFallbackReason,
@@ -1883,7 +1902,7 @@ class OpportunityBoard {
   async discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken) {
     const directionKey = v3DirectionKey(tokenIn, tokenOut, bridgeToken)
     const persistent = this.v3PersistentShortlists.get(directionKey)
-    const refreshPersistent = persistent?.stale && this.v3ShortlistRefreshBudget > 0
+    const refreshPersistent = (!persistent || persistent.stale) && this.v3ShortlistRefreshBudget > 0
     if (persistent && !refreshPersistent) {
       const successful = await this.quoteV3Routes(persistent.routes, amountIn, blockNumber)
       if (successful.length > 0) {
@@ -1902,7 +1921,8 @@ class OpportunityBoard {
       }
       this.v3PersistentShortlists.delete(directionKey)
       this.quoteRpcMetrics.v3PersistentShortlistRebuilds += 1
-    } else if (refreshPersistent) {
+    }
+    if (refreshPersistent) {
       this.v3ShortlistRefreshBudget -= 1
       this.quoteRpcMetrics.v3PersistentShortlistRefreshes += 1
     }
@@ -1938,15 +1958,30 @@ class OpportunityBoard {
       }
     }
 
-    const successful = await this.quoteV3Routes(candidates, amountIn, blockNumber)
-    if (successful.length === 0) throw new Error('no quotable direct-or-approved-bridge V3 anchor route')
+    const attemptedRoutes = refreshPersistent
+      ? candidates
+      : selectV3BootstrapRoutes(candidates, this.config.v3BootstrapMaxRoutes)
+    if (!refreshPersistent) {
+      this.quoteRpcMetrics.v3BoundedBootstraps += 1
+      this.quoteRpcMetrics.v3BoundedBootstrapRoutes += attemptedRoutes.length
+    }
+    const successful = await this.quoteV3Routes(attemptedRoutes, amountIn, blockNumber)
+    if (successful.length === 0) {
+      if (!refreshPersistent) this.quoteRpcMetrics.v3BoundedBootstrapMisses += 1
+      throw new Error(
+        refreshPersistent
+          ? 'no quotable direct-or-approved-bridge V3 anchor route'
+          : 'no quotable route in bounded V3 bootstrap set',
+      )
+    }
     const routes = successful.slice(0, this.config.v3ShortlistSize).map((result) => ({
       tokens: result.tokens,
       fees: result.fees,
       poolAddresses: result.poolAddresses,
       path: result.path,
     }))
-    this.v3PersistentShortlists.set(directionKey, routes)
+    if (refreshPersistent) this.v3PersistentShortlists.set(directionKey, routes)
+    else this.v3PersistentShortlists.seed(directionKey, routes)
     return { amountIn, best: successful[0], routes }
   }
 
@@ -1995,30 +2030,35 @@ class OpportunityBoard {
     if (![currency0.toLowerCase(), currency1.toLowerCase()].includes(tokenIn.toLowerCase())) {
       throw new Error('token is not part of V4 pool key')
     }
-    this.quoteRpcMetrics.v4QuoterCalls += 1
-    const { result } = await this.retryRpc(() =>
-      this.client.simulateContract({
-        account: ZERO_ADDRESS,
-        address: V4_QUOTER,
-        abi: V4_QUOTER_ABI,
-        functionName: 'quoteExactInputSingle',
-        args: [
-          {
-            poolKey: {
-              currency0,
-              currency1,
-              fee: pool.fee,
-              tickSpacing: pool.tickSpacing,
-              hooks: pool.hookAddress,
+    const key = `${pool.poolId.toLowerCase()}:${tokenIn.toLowerCase()}:${amountIn.toString()}`
+    const cached = this.v4QuoteCache.getOrCreate(blockNumber, key, () => {
+      this.quoteRpcMetrics.v4QuoterCalls += 1
+      return this.retryRpc(() =>
+        this.client.simulateContract({
+          account: ZERO_ADDRESS,
+          address: V4_QUOTER,
+          abi: V4_QUOTER_ABI,
+          functionName: 'quoteExactInputSingle',
+          args: [
+            {
+              poolKey: {
+                currency0,
+                currency1,
+                fee: pool.fee,
+                tickSpacing: pool.tickSpacing,
+                hooks: pool.hookAddress,
+              },
+              zeroForOne: tokenIn.toLowerCase() === currency0.toLowerCase(),
+              exactAmount: amountIn,
+              hookData: '0x',
             },
-            zeroForOne: tokenIn.toLowerCase() === currency0.toLowerCase(),
-            exactAmount: amountIn,
-            hookData: '0x',
-          },
-        ],
-        blockNumber,
-      }),
-    )
+          ],
+          blockNumber,
+        }),
+      )
+    })
+    if (cached.hit) this.quoteRpcMetrics.v4QuoterCacheHits += 1
+    const { result } = await cached.promise
     const chainAttestation = {
       status: PoolEvidence.INITIALIZED_QUOTER_CONFIRMED,
       blockNumber: blockNumber.toString(),
@@ -2038,8 +2078,54 @@ class OpportunityBoard {
     return { amountOut: result[0], gasEstimate: result[1] }
   }
 
+  /** @param {bigint} amountIn @param {Record<string, any>} fixed @param {{symbol: string}} base @param {Record<string, any>} entry @param {Record<string, any>} exitPool @param {Record<string, any>} quoteAsset @param {Record<string, any>} exitAnchor */
+  screenCandidateRoute(amountIn, fixed, base, entry, exitPool, quoteAsset, exitAnchor) {
+    const screeningInput = {
+      amountIn,
+      amountOut: exitAnchor.amountOut,
+      quoterGas: [
+        entry.anchor.gasEstimate,
+        entry.tokenQuote.gasEstimate,
+        quoteAsset.gasEstimate,
+        exitAnchor.gasEstimate,
+      ],
+      overheadGas: this.config.overheadGas,
+      gasPriceWei: fixed.gasPrice,
+      nativeMarkInWei: fixed.nativeMarkIn,
+      nativeMarkOutUsdg: fixed.nativeMark.amountOut,
+    }
+    const screening = base.symbol === 'USDG' ? screenRoundTrip(screeningInput) : screenWethRoundTrip(screeningInput)
+    return { entry, exitPool, quoteAsset, exitAnchor, screening }
+  }
+
+  /** @param {Record<string, any>} best @param {bigint} amountIn @param {{symbol: string}} base @param {Record<string, any>[]} failures */
+  candidateBaseAmountResult(best, amountIn, base, failures) {
+    const normalizedGrossProfitUsdg = best.screening.normalizedGrossProfitUsdg ?? best.screening.grossProfitUsdg
+    const normalizedGasCostUsdg = best.screening.normalizedGasCostUsdg ?? best.screening.gasCostUsdg
+    const normalizedScreenedNetUsdg = best.screening.normalizedScreenedNetUsdg ?? best.screening.screenedNetUsdg
+    return {
+      ...best,
+      amountIn,
+      baseAsset: base.symbol,
+      normalizedGrossProfitUsdg,
+      normalizedGasCostUsdg,
+      normalizedScreenedNetUsdg,
+      ...(base.symbol === 'USDG'
+        ? {
+            grossProfitUsdg: best.screening.grossProfitUsdg,
+            screenedNetUsdg: best.screening.screenedNetUsdg,
+          }
+        : {
+            grossProfitWei: best.screening.grossProfitWei,
+            screenedNetWei: best.screening.screenedNetWei,
+          }),
+      failures: failures.slice(0, 12),
+    }
+  }
+
   /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base */
-  async quoteCandidateBaseAmount(candidate, fixed, amountIn, base) {
+  async discoverCandidateV4Shortlist(candidate, fixed, amountIn, base) {
+    this.quoteRpcMetrics.v4ShortlistDiscoveries += 1
     if (this.cycleRpcFailure) throw this.cycleRpcFailure
     const failures = []
     const entries = (
@@ -2092,23 +2178,7 @@ class OpportunityBoard {
             fixed.blockNumber,
             base.bridgeToken,
           )
-          const screeningInput = {
-            amountIn,
-            amountOut: anchor.amountOut,
-            quoterGas: [
-              entry.anchor.gasEstimate,
-              entry.tokenQuote.gasEstimate,
-              quoteAsset.gasEstimate,
-              anchor.gasEstimate,
-            ],
-            overheadGas: this.config.overheadGas,
-            gasPriceWei: fixed.gasPrice,
-            nativeMarkInWei: fixed.nativeMarkIn,
-            nativeMarkOutUsdg: fixed.nativeMark.amountOut,
-          }
-          const screening =
-            base.symbol === 'USDG' ? screenRoundTrip(screeningInput) : screenWethRoundTrip(screeningInput)
-          return { entry, exitPool: pool, quoteAsset, exitAnchor: anchor, screening }
+          return this.screenCandidateRoute(amountIn, fixed, base, entry, pool, quoteAsset, anchor)
         } catch (error) {
           if (quoteTransportIsIncomplete(error))
             this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
@@ -2123,8 +2193,8 @@ class OpportunityBoard {
     if (routes.length === 0) {
       return {
         amountIn,
-        error: 'UNQUOTABLE',
-        failures: failures.slice(0, 12),
+        best: { amountIn, error: 'UNQUOTABLE', failures: failures.slice(0, 12) },
+        pairs: [],
       }
     }
 
@@ -2134,27 +2204,90 @@ class OpportunityBoard {
       return leftNet > rightNet ? -1 : 1
     })
     const best = routes[0]
-    const normalizedGrossProfitUsdg = best.screening.normalizedGrossProfitUsdg ?? best.screening.grossProfitUsdg
-    const normalizedGasCostUsdg = best.screening.normalizedGasCostUsdg ?? best.screening.gasCostUsdg
-    const normalizedScreenedNetUsdg = best.screening.normalizedScreenedNetUsdg ?? best.screening.screenedNetUsdg
     return {
-      ...best,
       amountIn,
-      baseAsset: base.symbol,
-      normalizedGrossProfitUsdg,
-      normalizedGasCostUsdg,
-      normalizedScreenedNetUsdg,
-      ...(base.symbol === 'USDG'
-        ? {
-            grossProfitUsdg: best.screening.grossProfitUsdg,
-            screenedNetUsdg: best.screening.screenedNetUsdg,
-          }
-        : {
-            grossProfitWei: best.screening.grossProfitWei,
-            screenedNetWei: best.screening.screenedNetWei,
-          }),
-      failures: failures.slice(0, 12),
+      best: this.candidateBaseAmountResult(best, amountIn, base, failures),
+      pairs: selectV4RoutePairs(routes, this.config.v4ShortlistSize),
     }
+  }
+
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base @param {{entryPoolId: string, exitPoolId: string}[]} pairs */
+  async quoteCandidateV4Pairs(candidate, fixed, amountIn, base, pairs) {
+    const byPoolId = new Map(candidate.pools.map((pool) => [pool.poolId.toLowerCase(), pool]))
+    const failures = []
+    const routes = await mapLimit(this.config.legConcurrency, pairs, async (pair) => {
+      const entryPool = byPoolId.get(pair.entryPoolId)
+      const exitPool = byPoolId.get(pair.exitPoolId)
+      if (!entryPool || !exitPool || entryPool.poolId === exitPool.poolId) return null
+      try {
+        const anchor = await this.quoteBestV3(
+          base.token,
+          entryPool.quoteAddress,
+          amountIn,
+          fixed.blockNumber,
+          base.bridgeToken,
+        )
+        const tokenQuote = await this.quoteV4(
+          entryPool,
+          entryPool.quoteAddress,
+          anchor.amountOut,
+          fixed.blockNumber,
+          fixed.block.hash,
+        )
+        const entry = { pool: entryPool, anchor, tokenQuote }
+        const quoteAsset = await this.quoteV4(
+          exitPool,
+          candidate.tokenAddress,
+          tokenQuote.amountOut,
+          fixed.blockNumber,
+          fixed.block.hash,
+        )
+        const exitAnchor = await this.quoteBestV3(
+          exitPool.quoteAddress,
+          base.token,
+          quoteAsset.amountOut,
+          fixed.blockNumber,
+          base.bridgeToken,
+        )
+        return this.screenCandidateRoute(amountIn, fixed, base, entry, exitPool, quoteAsset, exitAnchor)
+      } catch (error) {
+        if (quoteTransportIsIncomplete(error)) {
+          this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
+        }
+        failures.push({
+          leg: `${base.symbol}_${entryPool.quoteSymbol}_TOKEN_${exitPool.quoteSymbol}_${base.symbol}`,
+          reason: publicError(error),
+        })
+        return null
+      }
+    })
+    if (this.cycleRpcFailure) throw this.cycleRpcFailure
+    const successful = routes.filter(Boolean).sort((left, right) => {
+      const leftNet = left.screening.normalizedScreenedNetUsdg ?? left.screening.screenedNetUsdg
+      const rightNet = right.screening.normalizedScreenedNetUsdg ?? right.screening.screenedNetUsdg
+      return leftNet > rightNet ? -1 : 1
+    })
+    if (successful.length > 0) {
+      return this.candidateBaseAmountResult(successful[0], amountIn, base, failures)
+    }
+    this.quoteRpcMetrics.v4ShortlistRebuilds += 1
+    return (await this.discoverCandidateV4Shortlist(candidate, fixed, amountIn, base)).best
+  }
+
+  /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn @param {{symbol: string, token: string, bridgeToken: string, decimals: number}} base */
+  async quoteCandidateBaseAmount(candidate, fixed, amountIn, base) {
+    const key = `${candidate.id.toLowerCase()}:${base.symbol}`
+    const shortlist = this.v4RouteShortlistCache.getOrCreate(fixed.blockNumber, key, () =>
+      this.discoverCandidateV4Shortlist(candidate, fixed, amountIn, base),
+    )
+    if (shortlist.hit) this.quoteRpcMetrics.v4ShortlistHits += 1
+    const discovery = await shortlist.promise
+    if (discovery.amountIn === amountIn) return discovery.best
+    if (discovery.pairs.length === 0) {
+      this.quoteRpcMetrics.v4ShortlistRebuilds += 1
+      return (await this.discoverCandidateV4Shortlist(candidate, fixed, amountIn, base)).best
+    }
+    return this.quoteCandidateV4Pairs(candidate, fixed, amountIn, base, discovery.pairs)
   }
 
   /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {bigint} amountIn */

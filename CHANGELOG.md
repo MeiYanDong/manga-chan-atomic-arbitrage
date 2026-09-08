@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bound previously unseen V3 directions to eight deterministic low-fee bootstrap paths unless a periodic cycle has one
+  of its two full-discovery slots available. Reuse the three strongest V4 entry/exit pool pairs for later amounts only
+  inside the same fixed block, deduplicating identical V4 calls there. Every reused pair and path still receives a fresh
+  canonical quote, and a wholly failing V4 shortlist falls back to the full current-block pool set.
 - Cap priority, positive and coverage work at four total candidates per cycle. Reuse up to three structurally validated
   V3 routes across blocks and restarts, re-quote every cached path at the current fixed block, invalidate observed
   route pools on `Swap`, and spend at most two full topology rediscoveries per periodic cycle. Event cycles never spend

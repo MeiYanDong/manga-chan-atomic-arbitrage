@@ -251,4 +251,26 @@ Acceptance:
 - newly superior non-retained fee routes may remain undiscovered until bounded periodic refresh, and this completeness
   tradeoff never bypasses the current-block exact executor simulation, Gas, nonce, reserve or signing gates.
 
-Status: implementation and deterministic tests are complete; production throughput and cursor acceptance are pending.
+Status: v0.7.5 verified the total work cap, cache hydration and current-block repricing in production, but failed the
+throughput gate: the first reconciliation still took about eight minutes and 999 logical Quoter calls because unseen
+directions bypassed the refresh budget. S20 closes that cache-miss path.
+
+## S20 — Bounded cold-start discovery and same-block V4 amount reuse
+
+Acceptance:
+
+- a previously unseen V3 direction uses at most eight deterministic low-fee/hop route candidates when no periodic
+  full-discovery slot remains;
+- a successful bounded bootstrap is stored stale so later periodic work still covers the complete allowed route set;
+- a bootstrap miss remains `UNQUOTABLE` rather than becoming false proof that no route exists;
+- the first amount for one candidate/base/fixed block searches all admitted V4 pools and retains at most three distinct
+  entry/exit pairs;
+- every later amount freshly quotes both V4 legs and both V3 anchors for only those pairs, and the shortlist never
+  crosses a block;
+- identical V4 pool/direction/amount requests at that fixed block share one in-flight or completed read result;
+- if all retained V4 pairs fail for a later amount, one full current-block V4 discovery rebuilds availability;
+- runtime separates V3 bootstrap calls/misses and V4 shortlist discoveries/hits/rebuilds from total Quoter calls;
+- exact execution simulation, Gas, profit, reserve, nonce and authorization gates remain unchanged.
+
+Status: implementation and deterministic helper tests are complete; full regression and production acceptance are
+pending.

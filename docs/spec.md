@@ -217,6 +217,10 @@ direction stale, while a five-minute age bound and a maximum of two full redisco
 bounded alternative-route coverage. Event cycles spend no topology-refresh budget, and a missing shortlist or a
 shortlist whose paths all fail is rebuilt. This can delay discovery of a newly superior non-retained fee route until a
 periodic refresh; it cannot satisfy the separate current-block exact executor preflight or authorize a signature.
+Before a direction has successful route evidence, and when no full-discovery slot remains, the board probes at most
+eight structurally valid candidates ordered by aggregate fee and hop count. A successful bootstrap remains stale until
+a periodic full search validates the wider topology. A failed bounded bootstrap is `UNQUOTABLE` evidence for that
+probe, not proof that no path exists.
 
 V3 Factory reads and V3 Quoter paths are grouped in at most four calls through the code-hash-pinned canonical
 Multicall3 contract at that same block. Every failed aggregate subcall is repeated once through the original direct read
@@ -242,10 +246,16 @@ candidate starts with 5/10 USDG probes. A gross-positive probe or a previously a
 grid; no-edge priority status alone does not authorize a large quote fan-out. This is discovery scheduling, not execution
 authorization.
 
-For a direction without a reusable shortlist, the first requested amount runs the complete allowed
-direct-or-one-WETH-bridge V3 path set and retains the top three successful paths. Other amounts and later blocks receive
-fresh Quoter results only for that shortlist until its bounded refresh becomes due. The snapshot labels this policy; it
-is not represented as an exhaustive all-path search at every amount or block.
+For a direction assigned a periodic full-discovery slot, the requested amount runs the complete allowed
+direct-or-one-WETH-bridge V3 path set and retains the top three successful paths. A direction without that slot uses the
+bounded bootstrap described above. Other amounts and later blocks receive fresh Quoter results only for the resulting
+shortlist until its bounded refresh becomes due. The snapshot labels this policy; it is not represented as an
+exhaustive all-path search at every amount or block.
+
+Within one candidate/base/fixed-block tuple, the first amount searches the complete admitted V4 pool set and retains
+the three strongest distinct entry/exit pool pairs. Later amounts issue fresh V4 and V3 quotes only for those pairs.
+The shortlist never crosses a block boundary, and if every retained pair fails at a later amount the board falls back
+to a complete current-block V4 search. This is amount-sizing reuse, not cached output or cross-block V4 price evidence.
 
 Economic opportunity frequency uses episode semantics. One fresh positive opens an episode; stale, unquotable and
 missing observations preserve it as unknown continuity; only a fresh non-positive quote closes it. A one-time epoch

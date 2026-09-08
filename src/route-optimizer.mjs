@@ -71,6 +71,47 @@ export function chooseBestAmountQuote(quotes) {
 }
 
 /**
+ * Retain a bounded set of distinct V4 entry/exit pool pairs after the first
+ * amount has been fully quoted at a fixed block. Later amounts still execute
+ * fresh V4 and V3 Quoter calls; only the pair topology is reused.
+ *
+ * @param {Record<string, any>[]} routes
+ * @param {number} limit
+ */
+export function selectV4RoutePairs(routes, limit) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('V4 shortlist limit must be a positive integer')
+  const selected = []
+  const seen = new Set()
+  const viable = routes
+    .filter((route) => {
+      const entryPoolId = route?.entry?.pool?.poolId
+      const exitPoolId = route?.exitPool?.poolId
+      const net = route?.screening?.normalizedScreenedNetUsdg ?? route?.screening?.screenedNetUsdg
+      return (
+        typeof entryPoolId === 'string' &&
+        typeof exitPoolId === 'string' &&
+        entryPoolId.toLowerCase() !== exitPoolId.toLowerCase() &&
+        typeof net === 'bigint'
+      )
+    })
+    .sort((left, right) => {
+      const leftNet = left.screening.normalizedScreenedNetUsdg ?? left.screening.screenedNetUsdg
+      const rightNet = right.screening.normalizedScreenedNetUsdg ?? right.screening.screenedNetUsdg
+      return leftNet === rightNet ? 0 : leftNet > rightNet ? -1 : 1
+    })
+  for (const route of viable) {
+    const entryPoolId = route.entry.pool.poolId.toLowerCase()
+    const exitPoolId = route.exitPool.poolId.toLowerCase()
+    const identity = `${entryPoolId}:${exitPoolId}`
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    selected.push({ entryPoolId, exitPoolId })
+    if (selected.length >= limit) break
+  }
+  return selected
+}
+
+/**
  * Add at most two midpoint quotes around the best coarse-grid amount. This is
  * deterministic and bounded; it improves sizing without turning every board
  * cycle into an unbounded search.
