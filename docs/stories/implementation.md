@@ -272,5 +272,6 @@ Acceptance:
 - runtime separates V3 bootstrap calls/misses and V4 shortlist discoveries/hits/rebuilds from total Quoter calls;
 - exact execution simulation, Gas, profit, reserve, nonce and authorization gates remain unchanged.
 
-Status: implementation and deterministic helper tests are complete; full regression and production acceptance are
-pending.
+Status: accepted in production on v0.7.6. The first healthy reconciliation used 516 logical Quoter calls versus 999 on
+v0.7.5, with no cursor-lag breach, service restart, signature or failed Gas. Its subsequent ordinary four-candidate
+event path remained too slow; S21 and ADR 0031 address that independent latency boundary.

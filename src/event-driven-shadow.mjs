@@ -85,6 +85,26 @@ export function capEventWaitForReconciliation(waitMs, nowMs, reconciliationAtMs)
 }
 
 /**
+ * A periodic read may yield only when a newer accepted pool event appeared
+ * after that read cycle began. Pending backlog from before the cycle is not a
+ * reason to abort mandatory reconciliation work.
+ *
+ * @param {{preemptible?: boolean, acceptedEventsAtStart?: number, preempted?: boolean} | undefined} context
+ * @param {number} currentAcceptedEvents
+ */
+export function shouldPreemptPeriodicQuote(context, currentAcceptedEvents) {
+  if (!Number.isSafeInteger(currentAcceptedEvents) || currentAcceptedEvents < 0) {
+    throw new Error('accepted event revision must be a non-negative safe integer')
+  }
+  if (!context?.preemptible) return false
+  const baseline = context.acceptedEventsAtStart ?? 0
+  if (!Number.isSafeInteger(baseline) || baseline < 0) {
+    throw new Error('accepted event baseline must be a non-negative safe integer')
+  }
+  return context.preempted === true || currentAcceptedEvents > baseline
+}
+
+/**
  * Keep the hot poller on a fixed success cadence while applying bounded
  * exponential backoff after public-RPC failures. Time already spent polling
  * counts toward the interval so a slow request is never followed by an
@@ -255,6 +275,7 @@ export class CandidateWakeQueue {
     this.pending = new Map()
     this.dedupedEvents = 0
     this.acceptedEvents = 0
+    this.staleCandidateDrops = 0
   }
 
   /** @param {Record<string, any>} event @param {string[]} candidateIds @param {number} [observedAtMs] */
@@ -270,6 +291,7 @@ export class CandidateWakeQueue {
     this.acceptedEvents += 1
 
     const uniqueIds = [...new Set(candidateIds.map((id) => String(id).toLowerCase()))]
+    const poolKey = event.poolId || event.poolAddress || null
     for (const candidateId of uniqueIds) {
       const before = this.pending.get(candidateId)
       if (!before) {
@@ -281,6 +303,7 @@ export class CandidateWakeQueue {
           maxBlock: event.blockNumber,
           eventCount: 1,
           sources: [event.type],
+          poolKeys: poolKey ? [String(poolKey).toLowerCase()] : [],
         })
         continue
       }
@@ -289,24 +312,46 @@ export class CandidateWakeQueue {
       before.maxBlock = event.blockNumber > before.maxBlock ? event.blockNumber : before.maxBlock
       before.eventCount += 1
       if (!before.sources.includes(event.type)) before.sources.push(event.type)
+      if (poolKey && !before.poolKeys.includes(String(poolKey).toLowerCase())) {
+        before.poolKeys.push(String(poolKey).toLowerCase())
+      }
     }
     return { accepted: true, candidateCount: uniqueIds.length }
   }
 
-  /** @param {number} limit */
-  take(limit) {
+  /**
+   * @param {number} limit
+   * @param {{nowMs?: number, maxAgeMs?: number, newestFirst?: boolean}} [options]
+   */
+  take(limit, options = {}) {
     if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('wake limit must be a positive safe integer')
+    const nowMs = options.nowMs ?? Date.now()
+    const maxAgeMs = options.maxAgeMs ?? Number.MAX_SAFE_INTEGER
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !Number.isSafeInteger(maxAgeMs) || maxAgeMs < 0) {
+      throw new Error('wake freshness values must be non-negative safe integers')
+    }
+    let staleDropped = 0
+    for (const [candidateId, item] of this.pending) {
+      if (nowMs - item.lastObservedAtMs <= maxAgeMs) continue
+      this.pending.delete(candidateId)
+      staleDropped += 1
+    }
+    this.staleCandidateDrops += staleDropped
     const selected = [...this.pending.values()]
-      .sort(
-        (left, right) =>
-          left.firstObservedAtMs - right.firstObservedAtMs || left.candidateId.localeCompare(right.candidateId),
-      )
+      .sort((left, right) => {
+        const timeOrder = options.newestFirst
+          ? right.lastObservedAtMs - left.lastObservedAtMs
+          : left.firstObservedAtMs - right.firstObservedAtMs
+        return timeOrder || left.candidateId.localeCompare(right.candidateId)
+      })
       .slice(0, limit)
     for (const item of selected) this.pending.delete(item.candidateId)
     return {
       candidateIds: selected.map((item) => item.candidateId),
       triggers: selected,
       oldestObservedAtMs: selected.length > 0 ? Math.min(...selected.map((item) => item.firstObservedAtMs)) : null,
+      newestObservedAtMs: selected.length > 0 ? Math.max(...selected.map((item) => item.lastObservedAtMs)) : null,
+      staleDropped,
     }
   }
 

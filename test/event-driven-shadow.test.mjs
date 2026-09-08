@@ -17,6 +17,7 @@ import {
   rotatingSlice,
   routeShadowEvent,
   selectPeriodicShadowCandidates,
+  shouldPreemptPeriodicQuote,
 } from '../src/event-driven-shadow.mjs'
 import { isTransientRpcError } from '../src/policy.mjs'
 
@@ -61,6 +62,15 @@ test('event waiting cannot cross the mandatory reconciliation deadline', () => {
   assert.equal(capEventWaitForReconciliation(4_000, 100_000, 105_000), 4_000)
   assert.equal(capEventWaitForReconciliation(60_000, 105_000, 105_000), 0)
   assert.throws(() => capEventWaitForReconciliation(-1, 100_000, 105_000), /non-negative/)
+})
+
+test('only a newer event revision preempts an eligible periodic quote', () => {
+  const context = { preemptible: true, acceptedEventsAtStart: 10, preempted: false }
+  assert.equal(shouldPreemptPeriodicQuote(context, 10), false)
+  assert.equal(shouldPreemptPeriodicQuote(context, 11), true)
+  assert.equal(shouldPreemptPeriodicQuote({ ...context, preemptible: false }, 11), false)
+  assert.equal(shouldPreemptPeriodicQuote({ ...context, preempted: true }, 10), true)
+  assert.throws(() => shouldPreemptPeriodicQuote(context, -1), /non-negative/)
 })
 
 test('bounded read retry recovers transient evidence but never retries a business revert', async () => {
@@ -285,8 +295,38 @@ test('wake queue deduplicates logs and coalesces revisions per candidate', () =>
   assert.equal(wake.triggers[0].eventCount, 2)
   assert.equal(wake.triggers[0].minBlock, 10n)
   assert.equal(wake.triggers[0].maxBlock, 12n)
+  assert.deepEqual(wake.triggers[0].poolKeys, [])
+  assert.equal(wake.newestObservedAtMs, 110)
+  assert.equal(wake.staleDropped, 0)
   assert.equal(queue.size, 1)
   assert.equal(queue.dedupedEvents, 1)
+})
+
+test('wake queue drops expired backlog and prioritizes the freshest affected candidate', () => {
+  const queue = new CandidateWakeQueue()
+  queue.offer(
+    { type: ShadowWakeSource.V4_SWAP, poolId: POOL_A, blockNumber: 10n, transactionHash: '0xold', logIndex: 1 },
+    ['old'],
+    100,
+  )
+  queue.offer(
+    { type: ShadowWakeSource.V4_SWAP, poolId: POOL_B, blockNumber: 11n, transactionHash: '0xnewer', logIndex: 2 },
+    ['newer'],
+    180,
+  )
+  queue.offer(
+    { type: ShadowWakeSource.V3_SWAP, poolAddress: V3_A, blockNumber: 12n, transactionHash: '0xnewest', logIndex: 3 },
+    ['newest'],
+    190,
+  )
+
+  const wake = queue.take(1, { nowMs: 200, maxAgeMs: 50, newestFirst: true })
+  assert.deepEqual(wake.candidateIds, ['newest'])
+  assert.deepEqual(wake.triggers[0].poolKeys, [V3_A])
+  assert.equal(wake.newestObservedAtMs, 190)
+  assert.equal(wake.staleDropped, 1)
+  assert.equal(queue.staleCandidateDrops, 1)
+  assert.equal(queue.size, 1)
 })
 
 test('hot ranges retain only the latest swap revision per pool while preserving initialize facts', () => {

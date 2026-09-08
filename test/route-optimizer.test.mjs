@@ -6,6 +6,8 @@ import {
   equivalentWethAmountGrid,
   parseUsdgAmountGrid,
   refinementAmounts,
+  selectEventProbeAmounts,
+  selectEventV4RoutePairs,
   selectV4RoutePairs,
   shouldExpandAmountGrid,
 } from '../src/route-optimizer.mjs'
@@ -68,6 +70,29 @@ test('V4 route-pair topology is ranked, deduplicated and bounded', () => {
   )
   assert.deepEqual(selectV4RoutePairs([route('0xAA', '0xaa', 3n)], 2), [])
   assert.throws(() => selectV4RoutePairs([], 0), /positive integer/)
+})
+
+test('event route probes prioritize the touched pool against the prior winning route', () => {
+  const pools = [{ poolId: '0xAA' }, { poolId: '0xBB' }, { poolId: '0xCC' }]
+  const previous = { legs: { entryPoolId: '0xAA', exitPoolId: '0xBB' } }
+  assert.deepEqual(selectEventV4RoutePairs(pools, previous, ['0xCC'], 2), [
+    { entryPoolId: '0xcc', exitPoolId: '0xbb' },
+    { entryPoolId: '0xaa', exitPoolId: '0xcc' },
+  ])
+  assert.deepEqual(selectEventV4RoutePairs(pools, previous, ['0xAA'], 2), [
+    { entryPoolId: '0xaa', exitPoolId: '0xbb' },
+    { entryPoolId: '0xbb', exitPoolId: '0xaa' },
+  ])
+  assert.deepEqual(selectEventV4RoutePairs(pools, null, ['0xCC'], 1), [{ entryPoolId: '0xcc', exitPoolId: '0xaa' }])
+  assert.deepEqual(selectEventV4RoutePairs([{ poolId: '0xAA' }], null, [], 2), [])
+  assert.throws(() => selectEventV4RoutePairs(pools, previous, [], 0), /positive integer/)
+})
+
+test('event amount probes retain the prior winner plus the smallest affordable probe', () => {
+  assert.deepEqual(selectEventProbeAmounts([10n, 5n], 17n, 100n, 2), [17n, 5n])
+  assert.deepEqual(selectEventProbeAmounts([10n, 5n], 150n, 100n, 2), [5n, 10n])
+  assert.deepEqual(selectEventProbeAmounts([5n, 10n], 5n, 100n, 2), [5n, 10n])
+  assert.throws(() => selectEventProbeAmounts([5n], null, 0n, 2), /maximum amount/)
 })
 
 test('adaptive expansion reacts to edge, previous actionability, priority and periodic coverage', () => {
