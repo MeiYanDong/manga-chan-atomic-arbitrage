@@ -17,6 +17,9 @@ EnvironmentFile=/etc/manga-chan-arbitrage/live.env
 EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
 Environment=MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
+# A lower screen only spends read RPC calls. Signing still requires the exact
+# MANGA_GENERIC_MIN_NET_USDG floor committed by the authorization.
+Environment=MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0.05
 LoadCredentialEncrypted=manga-private-key:/etc/credstore.encrypted/manga-private-key
 Environment=MANGA_PRIVATE_KEY_FILE=%d/manga-private-key
 UMask=0077

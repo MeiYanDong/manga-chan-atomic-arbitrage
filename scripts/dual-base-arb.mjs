@@ -25,6 +25,7 @@ import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
 import { buildDualBaseExecutionCandidates } from '../src/dual-base-plan.mjs'
 import {
   DUAL_AUTHORIZATION_LIFETIME,
+  DUAL_AUTHORIZATION_POLICY_VERSION,
   DUAL_PRINCIPAL_POLICY,
   ceilDiv,
   dualAuthorizationId,
@@ -34,6 +35,7 @@ import {
   normalizeWethToUsdg,
   selectBestExactEvaluation,
   validateDualSignedAttempt,
+  validateDualProfitFloors,
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
@@ -1840,15 +1842,13 @@ async function armDualWatcher() {
     if (wallet.ethBalance <= walletEthReserve) throw new Error('wallet ETH is at or below the authorized gas reserve')
     const minimumNetProfitUsdg = parseNonNegativeUnits(RUNTIME_CONFIG.genericMinNetUsdg, 6, 'minimum net USDG')
     const minimumScreenedNetProfitUsdg = minimumScreenedNetUsdg()
-    if (minimumNetProfitUsdg <= 0n || minimumScreenedNetProfitUsdg < minimumNetProfitUsdg) {
-      throw new Error('screened-net gate must be at least the exact minimum-net floor')
-    }
+    validateDualProfitFloors(minimumScreenedNetProfitUsdg, minimumNetProfitUsdg)
     if (RUNTIME_CONFIG.maxFailedGasWei <= 0n) throw new Error('dual watcher requires a positive failed-Gas breaker')
     const issuedAt = new Date().toISOString()
     const authorization = {
       schemaVersion: 1,
       mode: 'AUTO_POLICY',
-      policyVersion: 'dual-base-loopback-escalation-v1',
+      policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION,
       issuedAt,
       authorizationLifetime: DUAL_AUTHORIZATION_LIFETIME,
       principalPolicy: DUAL_PRINCIPAL_POLICY,
@@ -1924,6 +1924,7 @@ async function armDualWatcher() {
         weth: formatUnits(deployments.weth.amountCap, 18),
       },
       minimumNetProfitUsdg: formatUnits(minimumNetProfitUsdg, 6),
+      minimumScreenedNetProfitUsdg: formatUnits(minimumScreenedNetProfitUsdg, 6),
       countLimits: 'UNLIMITED',
       failedGasBreakerEth: formatEther(BigInt(arm.maxFailedGasWei)),
       idleRpcBehavior: arm.idleRpcBehavior,

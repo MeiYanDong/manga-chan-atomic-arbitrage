@@ -201,8 +201,9 @@ The fixed executors retain their original 15 USDG policy. Generic-v2 does not si
 - The USDG and WETH contracts keep separate principal and accounting ledgers but use exactly one signer process, wallet
   lock and nonce baseline.
 - A newly quoted proxy-positive batch is checkpointed to the compact execution feed before slower catalog maintenance.
-  This preserves the strict 30-second signer freshness boundary; it does not bypass the independent `0.1 USDG`
-  screened/exact floor or any typed route and receipt gate.
+  This preserves the strict 30-second signer freshness boundary. A `0.05 USDG` proxy screen can trigger read-only
+  exact simulation, but it does not bypass the independent `0.1 USDG` signed exact-net floor or any typed route and
+  receipt gate.
 - The dual watcher retries only transient startup-chain reads with bounded backoff and does not load the private
   credential until identity, deployments, balances, nonce and authorization evidence converge.
 

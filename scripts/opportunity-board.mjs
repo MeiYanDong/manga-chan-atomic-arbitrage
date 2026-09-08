@@ -22,6 +22,7 @@ import {
   capEventWaitForReconciliation,
   planHotLogRange,
   pollBeforeDrainingWakeQueue,
+  recoverStaleHotCursor,
   reconcileHotCursorAnchor,
   retryReadOnly,
   rotatingSlice,
@@ -273,7 +274,8 @@ function loadConfig() {
     rpcRetryDelayMs: integer(process.env.MANGA_BOARD_RPC_RETRY_DELAY_MS, 200, 0),
     eventPollMs: integer(process.env.MANGA_BOARD_EVENT_POLL_MS, 4_000, 1_000),
     eventConfirmations: BigInt(integer(process.env.MANGA_BOARD_EVENT_CONFIRMATIONS, 2, 0)),
-    eventMaxBlockRange: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_BLOCK_RANGE, 2_000)),
+    eventMaxBlockRange: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_BLOCK_RANGE, 200)),
+    eventMaxLagBlocks: BigInt(integer(process.env.MANGA_BOARD_EVENT_MAX_LAG_BLOCKS, 500)),
     eventWakeMaxCandidates: integer(process.env.MANGA_BOARD_EVENT_WAKE_MAX_CANDIDATES, 4),
     eventV3MaxAddresses: integer(process.env.MANGA_BOARD_EVENT_V3_MAX_ADDRESSES, 200),
     eventReorgLookback: BigInt(integer(process.env.MANGA_BOARD_EVENT_REORG_LOOKBACK, 12)),
@@ -631,6 +633,10 @@ class OpportunityBoard {
       lastCycleQuoterCalls: 0,
       lastPeriodicCycleAt: null,
       nextPeriodicCycleAt: null,
+      headLagBlocks: null,
+      cursorFastForwards: Number(this.hotCursor.fastForwardCount || 0),
+      skippedRealtimeBlocks: BigInt(this.hotCursor.skippedRealtimeBlocks || 0).toString(),
+      lastCoverageGap: this.hotCursor.lastCoverageGap || null,
       eventDrivenQuoterCalls: 0,
       reconciliationQuoterCalls: 0,
       executionFeedCheckpoints: 0,
@@ -740,6 +746,8 @@ class OpportunityBoard {
         reorgCount: Number(this.hotCursor.reorgCount || 0),
         limits: {
           eventWakeMaxCandidates: this.config.eventWakeMaxCandidates,
+          eventMaxBlockRange: this.config.eventMaxBlockRange.toString(),
+          eventMaxLagBlocks: this.config.eventMaxLagBlocks.toString(),
           quoteConcurrency: this.config.quoteConcurrency,
           legConcurrency: this.config.legConcurrency,
           amountQuoteConcurrency: this.config.amountQuoteConcurrency,
@@ -1461,10 +1469,26 @@ class OpportunityBoard {
     this.eventMetrics.lastError = null
     this.eventMetrics.consecutiveErrors = 0
     let nextBlock = this.hotCursor.nextBlock === null ? null : BigInt(this.hotCursor.nextBlock)
+    const recovered = recoverStaleHotCursor(this.hotCursor, head, {
+      confirmations: this.config.eventConfirmations,
+      maxLagBlocks: this.config.eventMaxLagBlocks,
+      reorgLookback: this.config.eventReorgLookback,
+      observedAt: new Date(observedAtMs).toISOString(),
+    })
+    if (recovered.fastForwarded) {
+      this.hotCursor = recovered.cursor
+      this.eventQueue = new CandidateWakeQueue()
+      nextBlock = BigInt(recovered.cursor.nextBlock)
+      this.eventMetrics.cursorFastForwards = recovered.cursor.fastForwardCount
+      this.eventMetrics.skippedRealtimeBlocks = recovered.cursor.skippedRealtimeBlocks
+      this.eventMetrics.lastCoverageGap = recovered.gap
+    }
     let planned = planHotLogRange(nextBlock, head, {
       confirmations: this.config.eventConfirmations,
       maxBlockRange: this.config.eventMaxBlockRange,
     })
+    this.eventMetrics.headLagBlocks =
+      nextBlock !== null && nextBlock <= planned.safeHead ? (planned.safeHead - nextBlock + 1n).toString() : '0'
     this.eventMetrics.polls += 1
     this.eventMetrics.lastPollAt = new Date(observedAtMs).toISOString()
 

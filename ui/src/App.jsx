@@ -280,6 +280,9 @@ function SummaryCards({ business, overview }) {
         <p>
           {overview?.screenedPositive ?? '—'} 条接近门槛 · {overview?.freshCandidates ?? '—'} 条最新报价
         </p>
+        <small className="summary-footnote">
+          当前授权已触发 {business?.strategy?.exactPreflights ?? '—'} 次成交前精确核验
+        </small>
         <a className="inline-link" href="#/opportunities">
           查看筛选过程
         </a>
@@ -723,6 +726,9 @@ function SystemSummary({ system, overview }) {
   const shadow = system?.health?.eventDrivenShadow
   const transport = shadow?.rpcTransport
   const backoff = Number(shadow?.consecutiveErrors || 0)
+  const realtimeLag = Number(shadow?.headLagBlocks)
+  const realtimeHealthy =
+    Number.isFinite(realtimeLag) && realtimeLag <= Number(shadow?.limits?.eventMaxLagBlocks || 500)
   return (
     <section className="panel system-panel">
       <div className="panel-heading">
@@ -747,10 +753,10 @@ function SystemSummary({ system, overview }) {
           </div>
         </article>
         <article>
-          <span className={`state-light ${backoff > 0 ? 'state-proxy' : 'state-verified'}`} />
+          <span className={`state-light ${backoff > 0 || !realtimeHealthy ? 'state-proxy' : 'state-verified'}`} />
           <div>
-            <strong>{backoff > 0 ? '自动恢复中' : '连接正常'}</strong>
-            <p>链上数据读取</p>
+            <strong>{backoff > 0 ? '自动恢复中' : realtimeHealthy ? '实时跟随' : '正在追赶'}</strong>
+            <p>链上事件监听</p>
           </div>
         </article>
         <article>
@@ -787,6 +793,10 @@ function SystemSummary({ system, overview }) {
           <div>
             <dt>RPC 自动重试 / 降级</dt>
             <dd>{backoff > 0 ? `连续 ${backoff} 次异常` : '当前无需降级'}</dd>
+          </div>
+          <div>
+            <dt>实时事件位置</dt>
+            <dd>{realtimeHealthy ? '靠近最新区块' : '正在恢复到最新区块'}</dd>
           </div>
         </dl>
       </details>

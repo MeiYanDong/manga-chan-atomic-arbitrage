@@ -10,6 +10,7 @@ import {
   capEventWaitForReconciliation,
   planHotLogRange,
   pollBeforeDrainingWakeQueue,
+  recoverStaleHotCursor,
   reconcileHotCursorAnchor,
   retryReadOnly,
   rotatingSlice,
@@ -405,6 +406,52 @@ test('hot log ranges start forward-only, remain bounded and wait for confirmatio
     toBlock: 94n,
   })
   assert.equal(planHotLogRange(99n, 100n, { confirmations: 2n, maxBlockRange: 5n }).range, null)
+})
+
+test('stale real-time cursor fast-forwards with an explicit coverage gap', () => {
+  const recovered = recoverStaleHotCursor(
+    {
+      nextBlock: '100',
+      lastProcessedBlock: '99',
+      lastProcessedBlockHash: `0x${'a'.repeat(64)}`,
+      fastForwardCount: 1,
+      skippedRealtimeBlocks: '10',
+    },
+    1_000n,
+    {
+      confirmations: 2n,
+      maxLagBlocks: 200n,
+      reorgLookback: 12n,
+      observedAt: '2030-01-01T00:00:00.000Z',
+    },
+  )
+  assert.equal(recovered.fastForwarded, true)
+  assert.equal(recovered.lagBlocks, 899n)
+  assert.equal(recovered.cursor.nextBlock, '987')
+  assert.equal(recovered.cursor.lastProcessedBlock, null)
+  assert.equal(recovered.cursor.fastForwardCount, 2)
+  assert.equal(recovered.cursor.skippedRealtimeBlocks, '897')
+  assert.deepEqual(recovered.gap, {
+    reason: 'STALE_REALTIME_CURSOR_FAST_FORWARD',
+    fromBlock: '100',
+    toBlock: '986',
+    skippedBlocks: '887',
+    resumedAtBlock: '987',
+    safeHead: '998',
+    observedAt: '2030-01-01T00:00:00.000Z',
+  })
+})
+
+test('current real-time cursor never creates a false coverage gap', () => {
+  const current = recoverStaleHotCursor({ nextBlock: '950', lastProcessedBlock: '949', fastForwardCount: 0 }, 1_000n, {
+    confirmations: 2n,
+    maxLagBlocks: 200n,
+    reorgLookback: 12n,
+  })
+  assert.equal(current.fastForwarded, false)
+  assert.equal(current.lagBlocks, 49n)
+  assert.equal(current.gap, null)
+  assert.equal(current.cursor.nextBlock, '950')
 })
 
 test('canonical anchor mismatch rewinds and records a reorg', () => {

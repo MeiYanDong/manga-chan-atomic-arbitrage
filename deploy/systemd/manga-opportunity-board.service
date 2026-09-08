@@ -15,6 +15,10 @@ EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board
 Environment=MANGA_BOARD_EXECUTION_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
 Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=/var/lib/manga-business-report/business-snapshot.json
+# Keep the latency-sensitive event lane bounded on the official public RPC.
+# Historical catalog completeness uses separate durable cursors.
+Environment=MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200
+Environment=MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500
 UMask=0027
 ExecStart=/usr/bin/env npm run board
 Restart=on-failure
