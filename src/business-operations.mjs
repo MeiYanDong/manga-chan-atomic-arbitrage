@@ -283,20 +283,32 @@ export function buildBusinessSnapshot({
 export function formatFeishuDailyReport(snapshot, periodKey) {
   const period = snapshot.economics.lastSevenDays.find((item) => item.periodKey === periodKey)
   if (!period) throw new Error('requested report period is outside the retained daily series')
-  const signedNet = Number(period.verifiedExecutionNetUsdg) >= 0 ? '+' : ''
-  const strategyNet = snapshot.economics.activeStrategy?.verifiedExecutionNetUsdg || '0'
+  const display = (value, digits = 2) => {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return '待核验'
+    return new Intl.NumberFormat('zh-CN', {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(numeric)
+  }
+  const signed = (value, digits = 2) => {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return '待核验'
+    return `${numeric > 0 ? '+' : ''}${display(numeric, digits)}`
+  }
+  const active = snapshot.economics.activeStrategy
   const systemLabel = snapshot.strategy.status === 'RUNNING' ? '运行中' : '需要检查'
   const marketLabel = ['RUNNING', 'SCANNING', 'HEALTHY'].includes(snapshot.market.status) ? '扫描正常' : '扫描降级'
   return [
-    `【MANGA 经营日报｜${periodKey}（北京时间）】`,
-    `已核验交易净利润：${signedNet}${period.verifiedExecutionNetUsdg} USDG`,
-    `成交：${period.confirmedExecutions} 笔（USDG ${period.confirmedByBase.USDG} / WETH ${period.confirmedByBase.WETH}）`,
-    `失败 Gas：${period.failedGasEth} ETH（${period.failedTransactions} 笔）`,
-    `活跃双资产策略累计：${strategyNet} USDG（${snapshot.economics.activeStrategy?.confirmedExecutions || 0} 笔）`,
-    `当前可复投：${snapshot.capital.spendableUsdg || '待核验'} USDG + ${snapshot.capital.spendableWeth || '待核验'} WETH`,
-    `机会：扫描 ${snapshot.market.candidateTokens ?? '待核验'} 个标的，当前达到执行门槛 ${snapshot.market.exactReady ?? 0} 条`,
-    `系统：${systemLabel}｜${marketLabel}`,
-    '口径：仅统计 canonical receipt、余额效果与已标记交易 Gas；部署成本和未核验资金流单列，不虚构经营净利润。',
+    `【MANGA 套利经营日报｜${periodKey}】`,
+    `昨日结果：已确认净收益 ${signed(period.verifiedExecutionNetUsdg)} USDG`,
+    `成交：${period.confirmedExecutions} 笔（USDG 本金 ${period.confirmedByBase.USDG} 笔，WETH 本金 ${period.confirmedByBase.WETH} 笔）`,
+    `失败成本：${display(period.failedGasEth, 6)} ETH（${period.failedTransactions} 笔失败交易）`,
+    `当前策略：${systemLabel}，累计净收益 ${signed(active?.verifiedExecutionNetUsdg || 0)} USDG，共 ${active?.confirmedExecutions || 0} 笔`,
+    `可复投资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,
+    `当前机会：可以执行 ${snapshot.market.exactReady ?? 0} 条；接近门槛 ${snapshot.market.screenedPositive ?? 0} 条`,
+    `数据状态：${marketLabel}`,
+    '说明：收益只计入链上已确认、余额已核对的且已扣成功交易 Gas 的成交；未成交价差不算收益。',
   ].join('\n')
 }
 

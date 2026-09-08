@@ -142,10 +142,11 @@ test('daily Feishu copy reports business outcomes without raw execution identifi
   const snapshot = buildBusinessSnapshot(fixture())
   const report = formatFeishuDailyReport(snapshot, '2026-09-07')
 
-  assert.match(report, /已核验交易净利润：\+1\.7 USDG/)
-  assert.match(report, /成交：1 笔（USDG 1 \/ WETH 0）/)
-  assert.match(report, /当前可复投：11 USDG \+ 0\.0011 WETH/)
-  assert.match(report, /扫描 863 个标的/)
+  assert.match(report, /昨日结果：已确认净收益 \+1\.70 USDG/)
+  assert.match(report, /成交：1 笔（USDG 本金 1 笔，WETH 本金 0 笔）/)
+  assert.match(report, /可复投资金：11\.00 USDG；0\.0011 WETH/)
+  assert.match(report, /当前机会：可以执行 0 条；接近门槛 1 条/)
+  assert.doesNotMatch(report, /扫描 863 个标的|canonical receipt/)
   assert.doesNotMatch(report, /0x[0-9a-f]{64}|authorization|webhook/i)
 })
 

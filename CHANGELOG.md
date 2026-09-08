@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Rebuilt the private dashboard as a Chinese-first four-page operations console. It now separates current-strategy
+  results from account history, groups opportunities by actionability, presents transactions as a readable ledger and
+  hides exact values, addresses and provenance evidence behind deliberate disclosures.
+- Simplified the Feishu daily report around verified net profit, executions, failed Gas, reinvestable capital and
+  actionable opportunity counts.
+
 - Add a private business-first dashboard with Beijing-day receipt economics, authorized USDG/WETH reinvestment,
   seven-day results, source separation and Blockscout-linked transactions. Publish it through a validated sanitized
   snapshot that expires after 15 minutes and retains the board's no-signer, no-mutation boundary.
