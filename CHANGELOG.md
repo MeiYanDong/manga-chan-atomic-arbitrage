@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bound the protected periodic coverage tranche to one V4 pair, one amount and one V3 route per direction after the
+  first v0.8.0 production cycle required 165 Quoter calls for a single candidate. Keep sampled negatives explicitly
+  non-exhaustive and leave receipt-gated execution unchanged.
 - Join PAIR, LONG and Doppler target facts to the retained PoolManager catalog in a bounded multi-source strategy graph.
   Admit arbitrary chain-attested hooks only to signer-free shadow quoting, retain the current executor's exact PoolKey
   boundary for live candidates, and cap source pools per target without displacing existing PAIR rows.

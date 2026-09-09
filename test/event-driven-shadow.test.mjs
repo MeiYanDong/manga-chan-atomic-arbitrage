@@ -67,20 +67,39 @@ test('event waiting cannot cross the mandatory reconciliation deadline', () => {
 })
 
 test('busy events cannot preempt the protected periodic coverage tranche', () => {
-  assert.deepEqual(quoteCyclePolicy({ eventWake: false, cycleMaxCandidates: 4, protectedPeriodicCandidates: 1 }), {
+  const limits = {
+    cycleMaxCandidates: 4,
+    protectedPeriodicCandidates: 1,
+    eventV4PairLimit: 1,
+    eventAmountLimit: 2,
+    eventV3RouteLimit: 1,
+    periodicV4PairLimit: 1,
+    periodicAmountLimit: 1,
+    periodicV3RouteLimit: 1,
+  }
+  assert.deepEqual(quoteCyclePolicy({ ...limits, eventWake: false }), {
     mode: 'PROTECTED_PERIODIC_RECONCILIATION',
     preemptible: false,
     maxCandidates: 1,
+    probe: {
+      mode: 'BOUNDED_COVERAGE_SAMPLE',
+      v4PairLimit: 1,
+      amountLimit: 1,
+      v3RouteLimit: 1,
+    },
   })
-  assert.deepEqual(quoteCyclePolicy({ eventWake: true, cycleMaxCandidates: 4, protectedPeriodicCandidates: 1 }), {
+  assert.deepEqual(quoteCyclePolicy({ ...limits, eventWake: true }), {
     mode: 'EVENT_HOT_PATH',
     preemptible: false,
     maxCandidates: 4,
+    probe: {
+      mode: 'EVENT_KNOWN_ROUTE',
+      v4PairLimit: 1,
+      amountLimit: 2,
+      v3RouteLimit: 1,
+    },
   })
-  assert.throws(
-    () => quoteCyclePolicy({ eventWake: false, cycleMaxCandidates: 4, protectedPeriodicCandidates: 0 }),
-    /positive/,
-  )
+  assert.throws(() => quoteCyclePolicy({ ...limits, eventWake: false, protectedPeriodicCandidates: 0 }), /positive/)
 })
 
 test('only a newer event revision preempts an eligible periodic quote', () => {

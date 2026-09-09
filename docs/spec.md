@@ -206,10 +206,12 @@ arbitrary-hook pools may be shadow-quoted, but the schema-v3 generic plan reject
 plus a successful requested-size V4 quote at the exact observation block is required before a supported pool is marked
 executor-compatible.
 
-The periodic reconciliation cursor owns one protected, non-preemptible coverage candidate per cycle. Between those
-sweeps, PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call counts and event-to-quote
-latency are published as runtime metrics. The event poller continues independently, but a continuously active stream
-cannot abort every periodic candidate and leave broad coverage permanently unfinished.
+The periodic reconciliation cursor owns one protected, non-preemptible coverage candidate per cycle. That coverage
+step is deliberately a sample: one deterministic or previously useful V4 pair, one size and one bounded V3 route per
+direction. Between samples, PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call
+counts and event-to-quote latency are published as runtime metrics. The event poller continues independently, but a
+continuously active stream cannot abort every periodic candidate and leave broad coverage permanently unfinished. A
+sampled negative is not presented as exhaustive route coverage.
 
 Equivalent V3 anchor requests are deduplicated within the same fixed block. Across blocks and restarts, the board may
 reuse at most three structurally validated route topologies for a direction; it never reuses an amount output. Every

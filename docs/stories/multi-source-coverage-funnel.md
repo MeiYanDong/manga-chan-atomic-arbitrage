@@ -15,7 +15,8 @@ profit or with complete market coverage.
 - An arbitrary chain-attested hook may be quoted by the read-only board but cannot become executor-compatible.
 - A current-executor-shaped pool with unknown API depth needs a successful requested-size fixed-block quote before it
   can become executor-compatible for that observation.
-- One periodic candidate completes without event preemption; event polling and bounded event wakes continue.
+- One periodic candidate completes without event preemption using at most one sampled V4 pair, one amount and one
+  bounded V3 route per direction; event polling and bounded event wakes continue.
 - The overview separately displays discovered pools, multi-pool targets, admitted candidates, fresh results,
   proxy-positive screens and exact-preflight-ready routes.
 - The primary Chinese copy says coverage is limited whenever fresh results cover only part of the admitted graph.

@@ -36,5 +36,8 @@ npm test
 npm run ui:build
 ```
 
-The focused graph, scheduler, catalog, dashboard and isolation tests passed. The full post-change gate and production
-promotion evidence must be appended only after those operations actually complete.
+The focused graph, scheduler, catalog, dashboard and isolation tests passed. The full v0.8.0 gate also passed locally,
+on GitHub Linux and on the production artifact. Its first signer-disabled production cycle then showed that a complete
+single-candidate topology still required 165 Quoter calls. v0.8.1 therefore bounds the protected coverage sample to one
+V4 pair, one amount and one V3 route per direction; its final production measurements belong in a separate promotion
+record. This canary produced no signature or broadcast.

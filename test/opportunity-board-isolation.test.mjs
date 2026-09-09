@@ -43,6 +43,13 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /v4QuoteCache\.getOrCreate\(blockNumber/)
   assert.match(source, /v4QuoterCacheHits/)
   assert.match(source, /protectedPeriodicCandidates: this\.config\.protectedPeriodicCandidates/)
+  assert.match(source, /periodicV4PairLimit: this\.config\.periodicV4PairLimit/)
+  assert.match(source, /periodicAmountLimit: this\.config\.periodicAmountLimit/)
+  assert.match(source, /periodicV3RouteLimit: this\.config\.periodicV3RouteLimit/)
+  assert.match(source, /probe: eventWake === null \? null : policy\.probe/)
+  assert.match(source, /probe: parentContext\?\.candidateProbe \|\| null/)
+  assert.match(source, /coverageProbe \? boundedV3RouteLimit : this\.config\.v3BootstrapMaxRoutes/)
+  assert.match(source, /optimizationMode = eventFastPath[\s\S]*BOUNDED_COVERAGE_SAMPLE/)
   assert.match(source, /this\.client\.simulateContract\(/)
   assert.match(source, /if \(this\.eventQueue\.size > 0\)/)
   assert.doesNotMatch(source, /pollBeforeDrainingWakeQueue/)
@@ -112,7 +119,7 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   )
   assert.match(
     unit,
-    /^ExecStart=\/usr\/bin\/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 MANGA_BOARD_EVENT_WAKE_MAX_CANDIDATES=1 MANGA_BOARD_EVENT_WAKE_MAX_AGE_MS=20000 MANGA_BOARD_EVENT_V4_PAIR_LIMIT=1 MANGA_BOARD_EVENT_AMOUNT_LIMIT=2 MANGA_BOARD_EVENT_V3_SHORTLIST_SIZE=1 MANGA_BOARD_EVENT_RPC_LOGICAL_ATTEMPTS=2 MANGA_BOARD_EVENT_RPC_RETRY_DELAY_MS=200 MANGA_BOARD_RPC_BATCH_SIZE=1 MANGA_BOARD_RPC_RETRY_DELAY_MS=1000 MANGA_BOARD_MULTICALL_MAX_CALLS=4 MANGA_BOARD_CYCLE_MAX_CANDIDATES=4 MANGA_BOARD_PROTECTED_PERIODIC_CANDIDATES=1 MANGA_BOARD_MAX_POOLS_PER_TARGET=8 MANGA_BOARD_V3_BOOTSTRAP_MAX_ROUTES=8 MANGA_BOARD_V3_SHORTLIST_REFRESH_MS=300000 MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE=2 MANGA_BOARD_V4_SHORTLIST_SIZE=3 npm run board$/m,
+    /^ExecStart=\/usr\/bin\/env MANGA_BOARD_EVENT_MAX_BLOCK_RANGE=200 MANGA_BOARD_EVENT_MAX_LAG_BLOCKS=500 MANGA_BOARD_EVENT_WAKE_MAX_CANDIDATES=1 MANGA_BOARD_EVENT_WAKE_MAX_AGE_MS=20000 MANGA_BOARD_EVENT_V4_PAIR_LIMIT=1 MANGA_BOARD_EVENT_AMOUNT_LIMIT=2 MANGA_BOARD_EVENT_V3_SHORTLIST_SIZE=1 MANGA_BOARD_EVENT_RPC_LOGICAL_ATTEMPTS=2 MANGA_BOARD_EVENT_RPC_RETRY_DELAY_MS=200 MANGA_BOARD_RPC_BATCH_SIZE=1 MANGA_BOARD_RPC_RETRY_DELAY_MS=1000 MANGA_BOARD_MULTICALL_MAX_CALLS=4 MANGA_BOARD_CYCLE_MAX_CANDIDATES=4 MANGA_BOARD_PROTECTED_PERIODIC_CANDIDATES=1 MANGA_BOARD_PERIODIC_V4_PAIR_LIMIT=1 MANGA_BOARD_PERIODIC_AMOUNT_LIMIT=1 MANGA_BOARD_PERIODIC_V3_ROUTE_LIMIT=1 MANGA_BOARD_MAX_POOLS_PER_TARGET=8 MANGA_BOARD_V3_BOOTSTRAP_MAX_ROUTES=8 MANGA_BOARD_V3_SHORTLIST_REFRESH_MS=300000 MANGA_BOARD_V3_SHORTLIST_REFRESHES_PER_CYCLE=2 MANGA_BOARD_V4_SHORTLIST_SIZE=3 npm run board$/m,
   )
   assert.doesNotMatch(unit, /LoadCredential|manga-private-key|MANGA_PRIVATE_KEY/)
 
