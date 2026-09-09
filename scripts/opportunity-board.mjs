@@ -281,6 +281,9 @@ function loadConfig() {
     batchSize: integer(process.env.MANGA_BOARD_BATCH_SIZE, 4),
     cycleMaxCandidates: integer(process.env.MANGA_BOARD_CYCLE_MAX_CANDIDATES, 4),
     protectedPeriodicCandidates: integer(process.env.MANGA_BOARD_PROTECTED_PERIODIC_CANDIDATES, 1),
+    periodicV4PairLimit: integer(process.env.MANGA_BOARD_PERIODIC_V4_PAIR_LIMIT, 1),
+    periodicAmountLimit: integer(process.env.MANGA_BOARD_PERIODIC_AMOUNT_LIMIT, 1),
+    periodicV3RouteLimit: integer(process.env.MANGA_BOARD_PERIODIC_V3_ROUTE_LIMIT, 1),
     maxPoolsPerTarget: integer(process.env.MANGA_BOARD_MAX_POOLS_PER_TARGET, 8),
     priorityRefreshSize: integer(process.env.MANGA_BOARD_PRIORITY_REFRESH_SIZE, 2),
     topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 4),
@@ -682,6 +685,9 @@ class OpportunityBoard {
       eventFastPathAmounts: 0,
       eventFastPathPairs: 0,
       eventFastPathMisses: 0,
+      periodicProbeCandidates: 0,
+      periodicProbeAmounts: 0,
+      periodicProbePairs: 0,
       staleEventCandidateDrops: 0,
       periodicPreemptions: 0,
       lastPeriodicPreemptedAt: null,
@@ -852,6 +858,9 @@ class OpportunityBoard {
           eventRpcRetryDelayMs: this.config.eventRpcRetryDelayMs,
           cycleMaxCandidates: this.config.cycleMaxCandidates,
           protectedPeriodicCandidates: this.config.protectedPeriodicCandidates,
+          periodicV4PairLimit: this.config.periodicV4PairLimit,
+          periodicAmountLimit: this.config.periodicAmountLimit,
+          periodicV3RouteLimit: this.config.periodicV3RouteLimit,
           maxPoolsPerTarget: this.config.maxPoolsPerTarget,
           eventMaxBlockRange: this.config.eventMaxBlockRange.toString(),
           eventMaxLagBlocks: this.config.eventMaxLagBlocks.toString(),
@@ -1995,12 +2004,14 @@ class OpportunityBoard {
   async discoverV3Shortlist(tokenIn, tokenOut, amountIn, blockNumber, bridgeToken) {
     const directionKey = v3DirectionKey(tokenIn, tokenOut, bridgeToken)
     const persistent = this.v3PersistentShortlists.get(directionKey)
-    const eventHotPath = this.rpcCallContext.getStore()?.eventHotPath === true
-    const refreshPersistent = (!persistent || persistent.stale) && this.v3ShortlistRefreshBudget > 0
+    const callContext = this.rpcCallContext.getStore()
+    const eventHotPath = callContext?.eventHotPath === true
+    const coverageProbe = callContext?.probe?.mode === 'BOUNDED_COVERAGE_SAMPLE'
+    const boundedV3RouteLimit = callContext?.probe?.v3RouteLimit || this.config.eventV3ShortlistSize
+    const refreshPersistent = !coverageProbe && (!persistent || persistent.stale) && this.v3ShortlistRefreshBudget > 0
     if (persistent && !refreshPersistent) {
-      const routes = eventHotPath
-        ? selectEventV3Routes(persistent.routes, this.config.eventV3ShortlistSize)
-        : persistent.routes
+      const routes =
+        eventHotPath || coverageProbe ? selectEventV3Routes(persistent.routes, boundedV3RouteLimit) : persistent.routes
       if (eventHotPath) this.quoteRpcMetrics.eventV3RoutesQuoted += routes.length
       const successful = await this.quoteV3Routes(routes, amountIn, blockNumber)
       if (successful.length > 0) {
@@ -2066,7 +2077,7 @@ class OpportunityBoard {
 
     const attemptedRoutes = refreshPersistent
       ? candidates
-      : selectV3BootstrapRoutes(candidates, this.config.v3BootstrapMaxRoutes)
+      : selectV3BootstrapRoutes(candidates, coverageProbe ? boundedV3RouteLimit : this.config.v3BootstrapMaxRoutes)
     if (!refreshPersistent) {
       this.quoteRpcMetrics.v3BoundedBootstraps += 1
       this.quoteRpcMetrics.v3BoundedBootstrapRoutes += attemptedRoutes.length
@@ -2080,12 +2091,14 @@ class OpportunityBoard {
           : 'no quotable route in bounded V3 bootstrap set',
       )
     }
-    const routes = successful.slice(0, this.config.v3ShortlistSize).map((result) => ({
-      tokens: result.tokens,
-      fees: result.fees,
-      poolAddresses: result.poolAddresses,
-      path: result.path,
-    }))
+    const routes = successful
+      .slice(0, coverageProbe ? boundedV3RouteLimit : this.config.v3ShortlistSize)
+      .map((result) => ({
+        tokens: result.tokens,
+        fees: result.fees,
+        poolAddresses: result.poolAddresses,
+        path: result.path,
+      }))
     if (refreshPersistent) this.v3PersistentShortlists.set(directionKey, routes)
     else this.v3PersistentShortlists.seed(directionKey, routes)
     return { amountIn, best: successful[0], routes }
@@ -2420,46 +2433,52 @@ class OpportunityBoard {
     const previousLane =
       previousObservation?.baseOpportunities?.[base.symbol] || (base.symbol === 'USDG' ? previousObservation : null)
     const eventFastPath = Boolean(options.eventTrigger)
-    const eventPairs = eventFastPath
+    const cycleProbe = this.rpcCallContext.getStore()?.probe || null
+    const coverageProbe = !eventFastPath && cycleProbe?.mode === 'BOUNDED_COVERAGE_SAMPLE'
+    const boundedProbe = eventFastPath || coverageProbe
+    const probePairs = boundedProbe
       ? selectEventV4RoutePairs(
           candidate.pools,
           previousLane,
           options.eventTrigger?.poolKeys || [],
-          this.config.eventV4PairLimit,
+          cycleProbe?.v4PairLimit || this.config.eventV4PairLimit,
         )
       : []
     let previousAmount = null
-    if (eventFastPath && previousLane?.amountInBase) {
+    if (boundedProbe && previousLane?.amountInBase) {
       try {
         previousAmount = parseUnits(String(previousLane.amountInBase), base.decimals)
       } catch {
         previousAmount = null
       }
     }
-    const probeAmounts = eventFastPath
+    const probeAmounts = boundedProbe
       ? selectEventProbeAmounts(
           configuredProbes,
           previousAmount,
           amountGrid[amountGrid.length - 1],
-          this.config.eventAmountLimit,
+          cycleProbe?.amountLimit || this.config.eventAmountLimit,
         )
       : [...new Set(configuredProbes.map((amount) => amount.toString()))].map((amount) => BigInt(amount))
     if (eventFastPath) {
       this.eventMetrics.eventFastPathAmounts += probeAmounts.length
-      this.eventMetrics.eventFastPathPairs += eventPairs.length
-      if (eventPairs.length === 0) this.eventMetrics.eventFastPathMisses += 1
+      this.eventMetrics.eventFastPathPairs += probePairs.length
+      if (probePairs.length === 0) this.eventMetrics.eventFastPathMisses += 1
+    } else if (coverageProbe) {
+      this.eventMetrics.periodicProbeAmounts += probeAmounts.length
+      this.eventMetrics.periodicProbePairs += probePairs.length
     }
     const evaluate = (amounts) =>
       mapLimit(this.config.amountQuoteConcurrency, amounts, (amount) => {
         this.throwIfPeriodicPreempted()
-        return eventFastPath
-          ? this.quoteCandidateV4Pairs(candidate, fixed, amount, base, eventPairs, { rebuildOnFailure: false })
+        return boundedProbe
+          ? this.quoteCandidateV4Pairs(candidate, fixed, amount, base, probePairs, { rebuildOnFailure: false })
           : this.quoteCandidateBaseAmount(candidate, fixed, amount, base)
       })
     const evaluated = await evaluate(probeAmounts)
     this.throwIfPeriodicPreempted()
     const expandGrid =
-      !eventFastPath &&
+      !boundedProbe &&
       shouldExpandAmountGrid({
         probeQuotes: evaluated,
         previousStatus: previousLane?.status || null,
@@ -2548,11 +2567,13 @@ class OpportunityBoard {
     const failures = evaluated.flatMap((quote) => quote.failures || []).slice(0, 12)
     const optimizationMode = eventFastPath
       ? 'EVENT_KNOWN_ROUTE_PROBE'
-      : expandGrid
-        ? refinements.length > 0
-          ? 'ADAPTIVE_GRID_REFINED'
-          : 'ADAPTIVE_GRID'
-        : 'PROBE_ONLY'
+      : coverageProbe
+        ? 'BOUNDED_COVERAGE_SAMPLE'
+        : expandGrid
+          ? refinements.length > 0
+            ? 'ADAPTIVE_GRID_REFINED'
+            : 'ADAPTIVE_GRID'
+          : 'PROBE_ONLY'
     const fullGridAt = expandGrid ? new Date().toISOString() : previousLane?.fullGridAt || null
     const shared = {
       baseAsset: base.symbol,
@@ -2623,6 +2644,9 @@ class OpportunityBoard {
   /** @param {Record<string, any>} candidate @param {Record<string, any>} fixed @param {{eventTrigger?: Record<string, any> | null}} [options] */
   async quoteCandidate(candidate, fixed, options = {}) {
     if (options.eventTrigger) this.eventMetrics.eventFastPathCandidates += 1
+    else if (this.rpcCallContext.getStore()?.probe?.mode === 'BOUNDED_COVERAGE_SAMPLE') {
+      this.eventMetrics.periodicProbeCandidates += 1
+    }
     const usdgLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.USDG, options)
     this.throwIfPeriodicPreempted()
     let wethLane = null
@@ -2773,11 +2797,21 @@ class OpportunityBoard {
       eventWake: eventWake !== null,
       cycleMaxCandidates: this.config.cycleMaxCandidates,
       protectedPeriodicCandidates: this.config.protectedPeriodicCandidates,
+      eventV4PairLimit: this.config.eventV4PairLimit,
+      eventAmountLimit: this.config.eventAmountLimit,
+      eventV3RouteLimit: this.config.eventV3ShortlistSize,
+      periodicV4PairLimit: this.config.periodicV4PairLimit,
+      periodicAmountLimit: this.config.periodicAmountLimit,
+      periodicV3RouteLimit: this.config.periodicV3RouteLimit,
     })
     const callContext = {
       cyclePolicy: policy.mode,
       preemptible: policy.preemptible,
       maxCandidates: policy.maxCandidates,
+      // Coverage limits start only after the fixed-block native Gas mark is
+      // established. Event limits remain active for the whole hot cycle.
+      probe: eventWake === null ? null : policy.probe,
+      candidateProbe: policy.probe,
       eventHotPath: eventWake !== null,
       acceptedEventsAtStart: this.eventQueue.acceptedEvents,
       preempted: false,
@@ -2835,7 +2869,11 @@ class OpportunityBoard {
       await mapLimit(this.config.quoteConcurrency, selected, async (candidate) => {
         try {
           const trigger = triggerByCandidate.get(candidate.id)
-          const observation = await this.quoteCandidate(candidate, fixed, { eventTrigger: trigger || null })
+          const parentContext = this.rpcCallContext.getStore()
+          const observation = await this.rpcCallContext.run(
+            { ...parentContext, probe: parentContext?.candidateProbe || null },
+            () => this.quoteCandidate(candidate, fixed, { eventTrigger: trigger || null }),
+          )
           if (trigger) {
             observation.quoteTrigger = {
               mode: 'EVENT_DRIVEN_HTTP_LOG_WAKE',

@@ -89,13 +89,33 @@ export function capEventWaitForReconciliation(waitMs, nowMs, reconciliationAtMs)
  * event stream from starving broad-market coverage while keeping the event
  * path independently bounded and latency-sensitive.
  *
- * @param {{eventWake: boolean, cycleMaxCandidates: number, protectedPeriodicCandidates: number}} input
+ * @param {{
+ *   eventWake: boolean,
+ *   cycleMaxCandidates: number,
+ *   protectedPeriodicCandidates: number,
+ *   eventV4PairLimit: number,
+ *   eventAmountLimit: number,
+ *   eventV3RouteLimit: number,
+ *   periodicV4PairLimit: number,
+ *   periodicAmountLimit: number,
+ *   periodicV3RouteLimit: number,
+ * }} input
  */
 export function quoteCyclePolicy(input) {
-  if (![input.cycleMaxCandidates, input.protectedPeriodicCandidates].every(Number.isSafeInteger)) {
+  const limits = [
+    input.cycleMaxCandidates,
+    input.protectedPeriodicCandidates,
+    input.eventV4PairLimit,
+    input.eventAmountLimit,
+    input.eventV3RouteLimit,
+    input.periodicV4PairLimit,
+    input.periodicAmountLimit,
+    input.periodicV3RouteLimit,
+  ]
+  if (!limits.every(Number.isSafeInteger)) {
     throw new Error('quote cycle limits must be safe integers')
   }
-  if (input.cycleMaxCandidates < 1 || input.protectedPeriodicCandidates < 1) {
+  if (limits.some((limit) => limit < 1)) {
     throw new Error('quote cycle limits must be positive')
   }
   if (input.eventWake) {
@@ -103,12 +123,24 @@ export function quoteCyclePolicy(input) {
       mode: 'EVENT_HOT_PATH',
       preemptible: false,
       maxCandidates: input.cycleMaxCandidates,
+      probe: {
+        mode: 'EVENT_KNOWN_ROUTE',
+        v4PairLimit: input.eventV4PairLimit,
+        amountLimit: input.eventAmountLimit,
+        v3RouteLimit: input.eventV3RouteLimit,
+      },
     }
   }
   return {
     mode: 'PROTECTED_PERIODIC_RECONCILIATION',
     preemptible: false,
     maxCandidates: Math.min(input.cycleMaxCandidates, input.protectedPeriodicCandidates),
+    probe: {
+      mode: 'BOUNDED_COVERAGE_SAMPLE',
+      v4PairLimit: input.periodicV4PairLimit,
+      amountLimit: input.periodicAmountLimit,
+      v3RouteLimit: input.periodicV3RouteLimit,
+    },
   }
 }
 

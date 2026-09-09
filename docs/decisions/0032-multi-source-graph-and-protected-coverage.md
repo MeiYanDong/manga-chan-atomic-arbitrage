@@ -38,8 +38,10 @@ making progress. A running process therefore did not prove useful broad-market c
 
 - The current production census yields roughly 4,200 structurally quotable targets instead of the PAIR-only subset;
   the exact count remains runtime evidence and may change with the chain.
-- A protected periodic cycle may delay an event wake by one bounded candidate. It cannot be interrupted into permanent
-  starvation, and the event listener continues recording newer revisions while it runs.
+- A protected periodic cycle may delay an event wake by one bounded candidate. Production showed that a full topology
+  for even one candidate could still require 165 Quoter calls, so the protected step samples one pair, one size and one
+  bounded V3 route per direction. It cannot be interrupted into permanent starvation, and a sampled negative is not
+  promoted into a claim of exhaustive route coverage.
 - Most non-PAIR hook shapes remain observation-only. A universal executor would be a separate contract, audit and
   authorization decision; this ADR does not authorize it.
 - A large source catalog is still not proof of an economic edge. Only a fresh proxy-positive quote can request exact
