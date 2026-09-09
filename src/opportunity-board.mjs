@@ -422,7 +422,7 @@ export function buildBoardSnapshot(input) {
         'select within each base, then compare USDG and WETH by conservative same-block normalized screened net USDG',
       blockPolicy: 'all anchor and V4 quotes plus the native mark share one fixed block per observation',
       discoveryPolicy:
-        'PAIR API is merged with bounded PoolManager Initialize-log backfill; coverage before the configured start block remains unknown',
+        'PAIR, LONG and Doppler target facts are joined to a bounded PoolManager V4 graph; each source keeps independent attribution and coverage before the configured start block remains unknown',
       gasPolicy: 'sum of quoter gas estimates plus fixed orchestration overhead; screening proxy only',
       positiveMeaning: 'screened positive quote, not executable simulation, transaction, receipt, or guaranteed profit',
       staleAfterMs: input.staleMs,

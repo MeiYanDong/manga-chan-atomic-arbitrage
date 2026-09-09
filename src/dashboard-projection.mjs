@@ -539,6 +539,51 @@ export function summarizeDashboardOpportunity(item) {
   }
 }
 
+/**
+ * Describe how much of the admitted strategy graph is represented by a fresh
+ * quote. Service liveness and market coverage are deliberately independent:
+ * a running daemon with a tiny fresh sample is not labelled full coverage.
+ *
+ * @param {Record<string, any> | null} snapshot
+ * @param {Record<string, any> | null} sourceCatalog
+ */
+export function coverageQuality(snapshot, sourceCatalog) {
+  const candidateTokens = Number(snapshot?.coverage?.candidateTokens || 0)
+  const freshQuotedTokens = Number(snapshot?.coverage?.freshQuotedTokens || 0)
+  const graph = sourceCatalog?.summary?.strategyGraph || null
+  const shadow = snapshot?.health?.eventDrivenShadow || null
+  const generatedAtMs = Date.parse(snapshot?.generatedAt || '')
+  const lastPeriodicAt = shadow?.lastPeriodicCycleAt || null
+  const lastPeriodicAtMs = Date.parse(lastPeriodicAt || '')
+  const staleAfterMs = Number(snapshot?.methodology?.staleAfterMs || 180_000)
+  const periodicAgeMs =
+    Number.isFinite(generatedAtMs) && Number.isFinite(lastPeriodicAtMs)
+      ? Math.max(0, generatedAtMs - lastPeriodicAtMs)
+      : null
+  const freshCoveragePct = candidateTokens === 0 ? 0 : Number(((freshQuotedTokens / candidateTokens) * 100).toFixed(2))
+  const reasons = []
+  if (!graph) reasons.push('STRATEGY_GRAPH_NOT_REPORTED')
+  if (!lastPeriodicAt) reasons.push('NO_COMPLETED_PERIODIC_RECONCILIATION')
+  else if (periodicAgeMs > Math.max(staleAfterMs, 180_000)) reasons.push('PERIODIC_RECONCILIATION_STALE')
+  if (candidateTokens > freshQuotedTokens) reasons.push('FRESH_QUOTES_COVER_PART_OF_GRAPH')
+  if (String(snapshot?.health?.status || '').startsWith('DEGRADED')) reasons.push('MARKET_READER_DEGRADED')
+  const degraded = reasons.some((reason) =>
+    ['PERIODIC_RECONCILIATION_STALE', 'MARKET_READER_DEGRADED'].includes(reason),
+  )
+  const status = degraded ? 'DEGRADED' : reasons.length > 0 ? 'LIMITED' : 'CURRENT'
+  return {
+    status,
+    candidateTokens,
+    freshQuotedTokens,
+    unquotedOrStaleTokens: Math.max(0, candidateTokens - freshQuotedTokens),
+    freshCoveragePct,
+    lastPeriodicAt,
+    periodicAgeMs,
+    eventToQuoteMs: shadow?.lastEventToQuoteMs ?? null,
+    reasons,
+  }
+}
+
 export function buildDashboardModel({
   snapshot,
   sourceCatalog,
@@ -571,6 +616,8 @@ export function buildDashboardModel({
   const confirmed = executions.filter((item) => item.state === 'CONFIRMED')
   const realized = executions.filter((item) => item.economicsState === 'REALIZED_NET_VERIFIED')
   const realizedNetUsdg = realized.reduce((sum, item) => sum + Number(item.realizedNetUsdg || 0), 0)
+  const coverage = coverageQuality(snapshot, sourceCatalog)
+  const strategyGraph = sourceCatalog?.summary?.strategyGraph || null
   return {
     schemaVersion: 4,
     generatedAt: snapshot?.generatedAt || null,
@@ -583,6 +630,17 @@ export function buildDashboardModel({
       confirmed: confirmed.length,
       realizedNetUsdg: realizedNetUsdg.toFixed(6),
       coverage: snapshot?.coverage || null,
+      coverageQuality: coverage,
+      funnel: {
+        discoveredPools: Number(sourceCatalog?.summary?.genericPools || 0),
+        multiPoolTargets: Number(strategyGraph?.multiPoolTargets || 0),
+        admittedCandidates: Number(snapshot?.coverage?.candidateTokens || strategyGraph?.admittedCandidates || 0),
+        freshQuotes: Number(snapshot?.coverage?.freshQuotedTokens || fresh.length),
+        proxyPositive: screenedPositive.length,
+        exactReady: exactReady.length,
+        confirmedReceipts: confirmed.length,
+        executorShapeCandidates: Number(strategyGraph?.executorShapeMultiPoolTargets || 0),
+      },
       rpc: snapshot?.health?.eventDrivenShadow?.rpcTransport || null,
       signer: snapshot?.health?.signerLoaded === false ? 'NOT_LOADED' : 'UNKNOWN',
       serviceStatus: snapshot?.health?.status || 'STARTING',

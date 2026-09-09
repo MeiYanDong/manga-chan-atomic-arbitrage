@@ -11,6 +11,7 @@ import {
   coalesceLatestSwapPerPool,
   nextHotPollDelay,
   planHotLogRange,
+  quoteCyclePolicy,
   recoverStaleHotCursor,
   reconcileHotCursorAnchor,
   retryReadOnly,
@@ -63,6 +64,23 @@ test('event waiting cannot cross the mandatory reconciliation deadline', () => {
   assert.equal(capEventWaitForReconciliation(4_000, 100_000, 105_000), 4_000)
   assert.equal(capEventWaitForReconciliation(60_000, 105_000, 105_000), 0)
   assert.throws(() => capEventWaitForReconciliation(-1, 100_000, 105_000), /non-negative/)
+})
+
+test('busy events cannot preempt the protected periodic coverage tranche', () => {
+  assert.deepEqual(quoteCyclePolicy({ eventWake: false, cycleMaxCandidates: 4, protectedPeriodicCandidates: 1 }), {
+    mode: 'PROTECTED_PERIODIC_RECONCILIATION',
+    preemptible: false,
+    maxCandidates: 1,
+  })
+  assert.deepEqual(quoteCyclePolicy({ eventWake: true, cycleMaxCandidates: 4, protectedPeriodicCandidates: 1 }), {
+    mode: 'EVENT_HOT_PATH',
+    preemptible: false,
+    maxCandidates: 4,
+  })
+  assert.throws(
+    () => quoteCyclePolicy({ eventWake: false, cycleMaxCandidates: 4, protectedPeriodicCandidates: 0 }),
+    /positive/,
+  )
 })
 
 test('only a newer event revision preempts an eligible periodic quote', () => {

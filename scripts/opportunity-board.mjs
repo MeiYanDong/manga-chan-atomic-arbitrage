@@ -26,6 +26,7 @@ import {
   coalesceLatestSwapPerPool,
   nextHotPollDelay,
   planHotLogRange,
+  quoteCyclePolicy,
   recoverStaleHotCursor,
   reconcileHotCursorAnchor,
   retryReadOnly,
@@ -68,7 +69,6 @@ import {
   decodePoolManagerLog,
   decodeV3SwapLog,
   inferPairLaunchPools,
-  mergeApiAndChainCatalog,
   mergeChainPools,
 } from '../src/pair-catalog.mjs'
 import {
@@ -129,6 +129,7 @@ import {
   sourceTargetAddresses,
 } from '../src/source-adapters.mjs'
 import { SOURCE_CONTRACT_REGISTRY, SOURCE_REGISTRY_VERSION, stablePayloadHash } from '../src/source-provenance.mjs'
+import { buildSourceStrategyCatalog } from '../src/source-strategy-catalog.mjs'
 
 const CHAIN_ID = ROBINHOOD_CHAIN_ID
 const PAIR_TOKENS_API = 'https://pair.fund/api/tokens'
@@ -279,6 +280,8 @@ function loadConfig() {
     staleMs: integer(process.env.MANGA_BOARD_STALE_MS, 180_000, 30_000),
     batchSize: integer(process.env.MANGA_BOARD_BATCH_SIZE, 4),
     cycleMaxCandidates: integer(process.env.MANGA_BOARD_CYCLE_MAX_CANDIDATES, 4),
+    protectedPeriodicCandidates: integer(process.env.MANGA_BOARD_PROTECTED_PERIODIC_CANDIDATES, 1),
+    maxPoolsPerTarget: integer(process.env.MANGA_BOARD_MAX_POOLS_PER_TARGET, 8),
     priorityRefreshSize: integer(process.env.MANGA_BOARD_PRIORITY_REFRESH_SIZE, 2),
     topRefreshSize: integer(process.env.MANGA_BOARD_TOP_REFRESH_SIZE, 4),
     quoteConcurrency: integer(process.env.MANGA_BOARD_QUOTE_CONCURRENCY, 2),
@@ -665,7 +668,7 @@ class OpportunityBoard {
     this.poolMirror = readJson(this.poolMirrorPath) || {}
     this.eventMetrics = {
       mode: 'PUBLIC_HTTP_BOUNDED_LOG_POLLING',
-      scheduler: 'INDEPENDENT_HOT_POLL_LOOP',
+      scheduler: 'INDEPENDENT_HOT_POLL_PLUS_PROTECTED_RECONCILIATION',
       startedAt: this.startedAt,
       polls: 0,
       rpcLogCalls: 0,
@@ -766,6 +769,8 @@ class OpportunityBoard {
     this.rpcTransportMode = config.rpcBatchSize > 1 ? 'BATCH' : 'INDIVIDUAL'
     this.rpcBatchFallbackAt = null
     this.rpcBatchFallbackReason = null
+    this.strategyGraph = null
+    this.rebuildCatalogFromSources()
     this.latestSourceCatalog = this.sourceCatalogProjection(
       this.sourceCatalogSafeHead,
       persistedSourceCatalog.generatedAt || this.startedAt,
@@ -846,6 +851,8 @@ class OpportunityBoard {
           eventRpcLogicalAttempts: this.config.eventRpcLogicalAttempts,
           eventRpcRetryDelayMs: this.config.eventRpcRetryDelayMs,
           cycleMaxCandidates: this.config.cycleMaxCandidates,
+          protectedPeriodicCandidates: this.config.protectedPeriodicCandidates,
+          maxPoolsPerTarget: this.config.maxPoolsPerTarget,
           eventMaxBlockRange: this.config.eventMaxBlockRange.toString(),
           eventMaxLagBlocks: this.config.eventMaxLagBlocks.toString(),
           quoteConcurrency: this.config.quoteConcurrency,
@@ -891,6 +898,7 @@ class OpportunityBoard {
         genericPools: this.genericPools.length,
         projectionBytes: this.latestSourceCatalogBytes ?? null,
         poolRetention: this.sourcePoolRetention,
+        strategyGraph: this.strategyGraph,
         scopeWarning: 'each adapter reports its own bounded coverage; no cross-adapter completeness promotion',
       },
       chainCatalog: {
@@ -937,6 +945,7 @@ class OpportunityBoard {
         persistedDopplerLaunchDetails: 0,
         genericPools: this.genericPools.length,
         poolRetention: this.sourcePoolRetention,
+        strategyGraph: this.strategyGraph,
       },
       adapters: this.adapterStates,
       runtimeProjection: { ...SOURCE_CATALOG_RUNTIME_PROJECTION },
@@ -1163,8 +1172,17 @@ class OpportunityBoard {
   }
 
   rebuildCatalogFromSources() {
-    const mergedCatalog = mergeApiAndChainCatalog([...this.rawTokens.values()], this.chainPools, this.quoteAssets)
-    this.catalog = mergedCatalog
+    const graph = buildSourceStrategyCatalog({
+      apiTokens: [...this.rawTokens.values()],
+      chainPools: this.chainPools,
+      quoteAssets: this.quoteAssets,
+      pairListings: this.pairListings,
+      longLaunches: this.longLaunches,
+      dopplerTargetIndex: this.dopplerTargetIndex,
+      genericPools: this.genericPools,
+      maxPoolsPerTarget: this.config.maxPoolsPerTarget,
+    })
+    this.catalog = graph.tokens
       .map((token) =>
         normalizePairCandidate(token, {
           minDepthUsd: this.config.minDepthUsd,
@@ -1173,6 +1191,13 @@ class OpportunityBoard {
         }),
       )
       .filter(Boolean)
+    this.strategyGraph = {
+      ...graph.summary,
+      admittedCandidates: this.catalog.length,
+      admittedCandidatePools: this.catalog.reduce((sum, candidate) => sum + candidate.pools.length, 0),
+      executorCompatibleCandidates: this.catalog.filter((candidate) => candidate.liveCompatiblePoolCount >= 2).length,
+      executionBoundary: 'CURRENT_EXECUTOR_POOLKEY_ONLY',
+    }
     this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
   }
 
@@ -2152,9 +2177,10 @@ class OpportunityBoard {
       pool.poolIdEvidence === PoolEvidence.POOL_KEY_MATCHED &&
       pool.hookAddress === OFFICIAL_PAIR_HOOK &&
       pool.launchEnabled === true &&
-      pool.depthStatus === 'ADEQUATE'
+      (pool.depthStatus === 'ADEQUATE' || pool.chainSourceAttested === true)
     ) {
       pool.executionAdmission = PoolAdmission.EXECUTOR_COMPATIBLE
+      pool.amountDepthEvidence = 'SUCCESSFUL_QUOTE_FOR_REQUESTED_INPUT_AT_FIXED_BLOCK'
     }
     return { amountOut: result[0], gasEstimate: result[1] }
   }
@@ -2636,8 +2662,8 @@ class OpportunityBoard {
     }
   }
 
-  /** @param {string[]} [wakeCandidateIds] */
-  selectCandidates(wakeCandidateIds = []) {
+  /** @param {string[]} [wakeCandidateIds] @param {number | null} [periodicMaxCandidates] */
+  selectCandidates(wakeCandidateIds = [], periodicMaxCandidates = null) {
     const byId = new Map(this.catalog.map((candidate) => [candidate.id, candidate]))
 
     if (wakeCandidateIds.length > 0) {
@@ -2663,7 +2689,7 @@ class OpportunityBoard {
       topRefreshSize: this.config.topRefreshSize,
       batchSize: this.config.batchSize,
       cursor: this.cursor,
-      maxCandidates: this.config.cycleMaxCandidates,
+      maxCandidates: periodicMaxCandidates ?? this.config.cycleMaxCandidates,
     })
     this.cursor = result.nextCursor
     return result.selected
@@ -2743,8 +2769,15 @@ class OpportunityBoard {
   /** @param {{forceCatalog?: boolean, eventWake?: Record<string, any> | null}} [options] */
   async cycle(options = {}) {
     const eventWake = options.eventWake ?? null
+    const policy = quoteCyclePolicy({
+      eventWake: eventWake !== null,
+      cycleMaxCandidates: this.config.cycleMaxCandidates,
+      protectedPeriodicCandidates: this.config.protectedPeriodicCandidates,
+    })
     const callContext = {
-      preemptible: eventWake === null && this.observations.size > 0,
+      cyclePolicy: policy.mode,
+      preemptible: policy.preemptible,
+      maxCandidates: policy.maxCandidates,
       eventHotPath: eventWake !== null,
       acceptedEventsAtStart: this.eventQueue.acceptedEvents,
       preempted: false,
@@ -2792,7 +2825,11 @@ class OpportunityBoard {
         }
         this.persistState()
       }
-      const selected = this.selectCandidates(eventWake?.candidateIds || [])
+      const cyclePolicy = this.rpcCallContext.getStore()
+      const selected = this.selectCandidates(
+        eventWake?.candidateIds || [],
+        eventWake ? null : cyclePolicy?.maxCandidates || this.config.protectedPeriodicCandidates,
+      )
       selectedCount = selected.length
       const triggerByCandidate = new Map((eventWake?.triggers || []).map((trigger) => [trigger.candidateId, trigger]))
       await mapLimit(this.config.quoteConcurrency, selected, async (candidate) => {

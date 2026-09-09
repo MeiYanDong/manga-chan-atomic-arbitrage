@@ -105,4 +105,17 @@ test('opportunity stages explain what is still missing without exposing machine 
     ),
     /3 条最新报价.*没有达到/,
   )
+  assert.match(
+    noTradeReason(
+      { strategy: { status: 'RUNNING' }, market: { status: 'HEALTHY' } },
+      {
+        freshCandidates: 0,
+        screenedPositive: 0,
+        exactReady: 0,
+        coverageQuality: { status: 'LIMITED', freshQuotedTokens: 2, candidateTokens: 100 },
+      },
+    ),
+    /只覆盖 2\/100.*不能据此断言/,
+  )
+  assert.equal(humanStatus('LIMITED'), '覆盖有限')
 })

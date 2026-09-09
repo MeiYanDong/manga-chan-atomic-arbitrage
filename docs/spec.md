@@ -199,16 +199,17 @@ cost. Old observations become `STALE` instead of remaining actionable. Metadata 
 reverts are `UNQUOTABLE`, never silently converted to zero profit.
 
 The API catalog is refreshed in full with stable newest-first pagination and supplemented by a frequent newest-token
-page. It is merged with durable, bounded PoolManager `Initialize`-log backfill. The chain artifact reports its configured
-start, scanned-through block, safe head, singletons and ambiguous launches; it never claims blocks before the configured
-start. Structurally valid null-depth or disabled-quote pools may be shadow-quoted, but the schema-v3 generic plan rejects
-them. PoolKey identity plus a successful V4 quote at the exact observation block is required before a supported pool is
-marked executor-compatible.
+page. PAIR, LONG and Doppler target facts are joined to durable, bounded PoolManager `Initialize`-log backfill. The
+chain artifact reports its configured start, scanned-through block, safe head, singletons and ambiguous launches; it
+never claims blocks before the configured start. Structurally valid null-depth, disabled-quote or chain-attested
+arbitrary-hook pools may be shadow-quoted, but the schema-v3 generic plan rejects unsupported PoolKeys. PoolKey identity
+plus a successful requested-size V4 quote at the exact observation block is required before a supported pool is marked
+executor-compatible.
 
-Priority candidates and current positive rows are covered by the periodic reconciliation cursor. Between those sweeps,
-PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call counts and event-to-quote latency
-are published as runtime metrics. Priority, current-positive and coverage work share one four-candidate total cycle
-cap, with at least one slot reserved for coverage whenever the catalog is non-empty.
+The periodic reconciliation cursor owns one protected, non-preemptible coverage candidate per cycle. Between those
+sweeps, PoolManager and known V3 `Swap` events wake only the affected candidates. Quoter-call counts and event-to-quote
+latency are published as runtime metrics. The event poller continues independently, but a continuously active stream
+cannot abort every periodic candidate and leave broad coverage permanently unfinished.
 
 Equivalent V3 anchor requests are deduplicated within the same fixed block. Across blocks and restarts, the board may
 reuse at most three structurally validated route topologies for a direction; it never reuses an amount output. Every

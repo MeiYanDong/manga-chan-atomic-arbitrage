@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   buildDashboardModel,
+  coverageQuality,
   dashboardApiNeedsOpportunityDetails,
   dashboardApiNeedsOpportunityProjection,
   filterDashboardOpportunities,
@@ -215,6 +216,48 @@ test('overview never merges proxy screens, exact-ready, receipts and realized ne
   assert.equal(model.overview.exactReady, 0)
   assert.equal(model.overview.confirmed, 2)
   assert.equal(model.overview.realizedNetUsdg, '0.500000')
+})
+
+test('coverage funnel keeps discovered pools, fresh quotes and receipts as separate stages', () => {
+  const fixture = runtimeFixture()
+  fixture.snapshot.coverage = { candidateTokens: 10, freshQuotedTokens: 2, counts: {} }
+  fixture.snapshot.health.eventDrivenShadow = {
+    lastPeriodicCycleAt: '2026-09-07T00:00:30.000Z',
+    lastEventToQuoteMs: 12_000,
+  }
+  fixture.sourceCatalog.summary.genericPools = 100
+  fixture.sourceCatalog.summary.strategyGraph = {
+    multiPoolTargets: 30,
+    admittedCandidates: 10,
+    executorShapeMultiPoolTargets: 3,
+  }
+  const model = buildDashboardModel({
+    ...fixture,
+    executions: [{ state: 'CONFIRMED', economicsState: 'REALIZED_NET_VERIFIED', realizedNetUsdg: '0.1' }],
+  })
+  assert.deepEqual(model.overview.funnel, {
+    discoveredPools: 100,
+    multiPoolTargets: 30,
+    admittedCandidates: 10,
+    freshQuotes: 2,
+    proxyPositive: 0,
+    exactReady: 0,
+    confirmedReceipts: 1,
+    executorShapeCandidates: 3,
+  })
+  assert.equal(model.overview.coverageQuality.status, 'LIMITED')
+  assert.equal(model.overview.coverageQuality.freshCoveragePct, 20)
+  assert.deepEqual(model.overview.coverageQuality.reasons, ['FRESH_QUOTES_COVER_PART_OF_GRAPH'])
+})
+
+test('a running daemon without a completed periodic scan is reported as limited coverage', () => {
+  const fixture = runtimeFixture()
+  fixture.snapshot.coverage = { candidateTokens: 10, freshQuotedTokens: 0, counts: {} }
+  fixture.sourceCatalog.summary.strategyGraph = { multiPoolTargets: 10, admittedCandidates: 10 }
+  assert.deepEqual(coverageQuality(fixture.snapshot, fixture.sourceCatalog).reasons, [
+    'NO_COMPLETED_PERIODIC_RECONCILIATION',
+    'FRESH_QUOTES_COVER_PART_OF_GRAPH',
+  ])
 })
 
 test('dashboard selects a WETH-only positive lane without exposing raw nested quote fields', () => {

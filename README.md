@@ -32,10 +32,11 @@ Both lanes are screened at one fixed block and exact-simulated at one current bl
 conservative USDG comparison value only to choose a winner; the transaction and retained profit remain in WETH.
 
 This repository also contains a separate read-only opportunity board. It combines independent PAIR-listing,
-LongLauncher, Doppler, PoolManager and Robinhood-asset adapters, quotes the best observed
+LongLauncher, Doppler, PoolManager and Robinhood-asset adapters into a bounded multi-source strategy graph, then quotes the best observed
 `USDG -> quote A -> token -> quote B -> USDG` loop at one fixed block, subtracts a gas proxy and records continuous
-economic opportunity episodes. Pool events wake affected candidates between slower coverage sweeps. The board has no
-wallet, signer or broadcast path.
+economic opportunity episodes. Pool events wake affected candidates between protected one-candidate coverage sweeps.
+Arbitrary hooks can be observed, but only the current executor's exact PoolKey shape can cross into live preflight. The
+board has no wallet, signer or broadcast path.
 
 The same loopback service hosts a private business dashboard. Its primary view reports Beijing-day receipt-verified
 execution net, failed Gas, authorized USDG/WETH reinvestment, seven-day history, source separation and recent
