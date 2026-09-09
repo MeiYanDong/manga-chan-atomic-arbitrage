@@ -23,6 +23,7 @@ import {
   ShadowWakeSource,
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
+  catalogMaintenancePolicy,
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
   initializeIngestNeedsCatalogRefresh,
@@ -691,6 +692,8 @@ class OpportunityBoard {
       periodicProbeAmounts: 0,
       periodicProbePairs: 0,
       staleEventCandidateDrops: 0,
+      deferredInitializeCatalogRefreshes: 0,
+      lastDeferredInitializeCatalogRefreshAt: null,
       periodicPreemptions: 0,
       lastPeriodicPreemptedAt: null,
       lastPeriodicPreemptQuoterCalls: 0,
@@ -1718,19 +1721,11 @@ class OpportunityBoard {
     }
     const initializeEvents = events.filter((event) => event.type === 'V4_INITIALIZE')
     const initializeResult = this.ingestInitializeEvents(initializeEvents)
-    if (initializeResult.discoveredPools > 0) {
-      this.catalogRefreshRequested = true
-      this.writeChainCatalog(planned.safeHead, {
-        at: new Date().toISOString(),
-        source: 'HOT_FORWARD_LOG',
-        logsSeen: initializeEvents.length,
-        discoveredPools: initializeResult.discoveredPools,
-      })
-    }
-    if (initializeResult.discoveredGenericPools > 0) {
-      this.refreshDopplerVisibility()
-      this.writeSourceCatalog(planned.safeHead)
-    }
+    // The independent hot cursor durably ingests the relevant Initialize
+    // evidence and advances its own state, but large catalog projections stay
+    // on the protected periodic lane. Source and chain backfill cursors do not
+    // advance here, so a crash before that periodic checkpoint re-observes the
+    // same facts idempotently instead of losing them.
 
     let relevantLogs = 0
     let candidateWakes = 0
@@ -1739,6 +1734,10 @@ class OpportunityBoard {
     // pool must not force a full PAIR/source rebuild on the next quote cycle.
     // Relevant PAIR or retained source pools still request that rebuild.
     let catalogRefresh = initializeIngestNeedsCatalogRefresh(initializeResult)
+    if (catalogRefresh) {
+      this.eventMetrics.deferredInitializeCatalogRefreshes += 1
+      this.eventMetrics.lastDeferredInitializeCatalogRefreshAt = new Date(observedAtMs).toISOString()
+    }
     for (const event of events) {
       const routed = routeShadowEvent(event, this.dependencyIndex)
       if (event.type !== ShadowWakeSource.V4_INITIALIZE) catalogRefresh ||= routed.catalogRefresh
@@ -2838,15 +2837,17 @@ class OpportunityBoard {
     const quoterCallsBefore = this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls
     let selectedCount = 0
     try {
-      const fullCatalogDue =
-        forceCatalog ||
-        !this.lastFullCatalogAt ||
-        Date.now() - Date.parse(this.lastFullCatalogAt) >= this.config.catalogIntervalMs
-      const metadataDue =
-        fullCatalogDue ||
-        this.catalogRefreshRequested ||
-        !this.lastCatalogAt ||
-        Date.now() - Date.parse(this.lastCatalogAt) >= this.config.catalogIntervalMs
+      // Event wakes must never perform network catalog fetches, full graph
+      // rebuilds or large projection writes before their fixed-block quote.
+      // The next protected periodic lane consumes every deferred refresh.
+      const { fullCatalogDue, metadataDue } = catalogMaintenancePolicy({
+        eventWake: eventWake !== null,
+        forceCatalog,
+        catalogRefreshRequested: this.catalogRefreshRequested,
+        lastFullCatalogAt: this.lastFullCatalogAt,
+        lastCatalogAt: this.lastCatalogAt,
+        catalogIntervalMs: this.config.catalogIntervalMs,
+      })
       if (metadataDue) {
         await this.refreshCatalog({ full: fullCatalogDue })
         this.catalogRefreshRequested = false

@@ -7,6 +7,7 @@ import {
   ShadowWakeSource,
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
+  catalogMaintenancePolicy,
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
   initializeIngestNeedsCatalogRefresh,
@@ -74,6 +75,36 @@ test('only source-relevant Initialize ingestion requests a strategy catalog rebu
   assert.throws(
     () => initializeIngestNeedsCatalogRefresh({ discoveredPools: -1, discoveredGenericPools: 0 }),
     /non-negative/,
+  )
+})
+
+test('event quotes defer every catalog refresh to the next periodic lane', () => {
+  const due = {
+    forceCatalog: true,
+    catalogRefreshRequested: true,
+    lastFullCatalogAt: null,
+    lastCatalogAt: null,
+    catalogIntervalMs: 60_000,
+    nowMs: 120_000,
+  }
+  assert.deepEqual(catalogMaintenancePolicy({ ...due, eventWake: true }), {
+    fullCatalogDue: false,
+    metadataDue: false,
+  })
+  assert.deepEqual(catalogMaintenancePolicy({ ...due, eventWake: false }), {
+    fullCatalogDue: true,
+    metadataDue: true,
+  })
+  assert.deepEqual(
+    catalogMaintenancePolicy({
+      ...due,
+      eventWake: false,
+      forceCatalog: false,
+      catalogRefreshRequested: true,
+      lastFullCatalogAt: new Date(90_000).toISOString(),
+      lastCatalogAt: new Date(90_000).toISOString(),
+    }),
+    { fullCatalogDue: false, metadataDue: true },
   )
 })
 
