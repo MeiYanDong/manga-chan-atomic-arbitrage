@@ -1,6 +1,6 @@
 # ADR 0033: defer Initialize catalog maintenance off the event quote path
 
-- Status: Accepted; local validation complete, production validation pending
+- Status: Accepted; ordinary event hot path production-verified on v0.8.4, live relevant-Initialize observation pending
 - Date: 2026-09-09
 
 ## Context
