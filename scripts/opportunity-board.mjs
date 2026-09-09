@@ -20,10 +20,12 @@ import {
   AsyncConcurrencyGate,
   CandidateWakeQueue,
   FixedBlockPromiseCache,
+  ShadowWakeSource,
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
+  initializeIngestNeedsCatalogRefresh,
   nextHotPollDelay,
   planHotLogRange,
   quoteCyclePolicy,
@@ -1732,10 +1734,14 @@ class OpportunityBoard {
 
     let relevantLogs = 0
     let candidateWakes = 0
-    let catalogRefresh = initializeEvents.length > 0
+    // Initialize logs are common across the entire PoolManager. Ingestion has
+    // already classified them against the source registry, so an unrelated
+    // pool must not force a full PAIR/source rebuild on the next quote cycle.
+    // Relevant PAIR or retained source pools still request that rebuild.
+    let catalogRefresh = initializeIngestNeedsCatalogRefresh(initializeResult)
     for (const event of events) {
       const routed = routeShadowEvent(event, this.dependencyIndex)
-      catalogRefresh ||= routed.catalogRefresh
+      if (event.type !== ShadowWakeSource.V4_INITIALIZE) catalogRefresh ||= routed.catalogRefresh
       if (routed.candidateIds.length === 0) continue
       const offered = this.eventQueue.offer(event, routed.candidateIds, observedAtMs)
       if (!offered.accepted) continue
@@ -2757,7 +2763,10 @@ class OpportunityBoard {
     }
     reconciled.snapshot.eventLedger.epochStartedAt = this.eventLedgerEpoch
     reconciled.snapshot.health.persistence = this.persistenceState
-    writeJsonAtomic(this.snapshotPath, reconciled.snapshot)
+    // The admitted graph can contain thousands of candidates. Stream the
+    // durable compatibility snapshot so publication never allocates a second
+    // snapshot-sized pretty-JSON string inside the board cgroup.
+    writeStableJsonAtomic(this.snapshotPath, reconciled.snapshot)
     writeExecutionBoardSnapshot(this.executionSnapshotPath, reconciled.snapshot)
     appendEvents(this.eventsPath, reconciled.events)
     try {

@@ -9,6 +9,7 @@ import {
   buildShadowDependencyIndex,
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
+  initializeIngestNeedsCatalogRefresh,
   nextHotPollDelay,
   planHotLogRange,
   quoteCyclePolicy,
@@ -64,6 +65,16 @@ test('event waiting cannot cross the mandatory reconciliation deadline', () => {
   assert.equal(capEventWaitForReconciliation(4_000, 100_000, 105_000), 4_000)
   assert.equal(capEventWaitForReconciliation(60_000, 105_000, 105_000), 0)
   assert.throws(() => capEventWaitForReconciliation(-1, 100_000, 105_000), /non-negative/)
+})
+
+test('only source-relevant Initialize ingestion requests a strategy catalog rebuild', () => {
+  assert.equal(initializeIngestNeedsCatalogRefresh({ discoveredPools: 0, discoveredGenericPools: 0 }), false)
+  assert.equal(initializeIngestNeedsCatalogRefresh({ discoveredPools: 1, discoveredGenericPools: 0 }), true)
+  assert.equal(initializeIngestNeedsCatalogRefresh({ discoveredPools: 0, discoveredGenericPools: 1 }), true)
+  assert.throws(
+    () => initializeIngestNeedsCatalogRefresh({ discoveredPools: -1, discoveredGenericPools: 0 }),
+    /non-negative/,
+  )
 })
 
 test('busy events cannot preempt the protected periodic coverage tranche', () => {

@@ -85,6 +85,22 @@ export function capEventWaitForReconciliation(waitMs, nowMs, reconciliationAtMs)
 }
 
 /**
+ * PoolManager Initialize logs are global. Only an Initialize that added a
+ * PAIR-attributed pool or a retained source-target pool can change the
+ * strategy graph; all other Initialize facts stay in cursor evidence without
+ * forcing a full metadata/catalog refresh.
+ *
+ * @param {{discoveredPools?: number, discoveredGenericPools?: number}} result
+ */
+export function initializeIngestNeedsCatalogRefresh(result) {
+  const counts = [result?.discoveredPools ?? 0, result?.discoveredGenericPools ?? 0]
+  if (!counts.every((count) => Number.isSafeInteger(count) && count >= 0)) {
+    throw new Error('initialize discovery counts must be non-negative safe integers')
+  }
+  return counts.some((count) => count > 0)
+}
+
+/**
  * Reserve a small, non-preemptible periodic tranche. This prevents a busy pool
  * event stream from starving broad-market coverage while keeping the event
  * path independently bounded and latency-sensitive.
