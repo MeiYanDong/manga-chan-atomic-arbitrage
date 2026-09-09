@@ -96,9 +96,12 @@ price discrepancy.
 
 During an ordinary-event observation window, the source-catalog mtime stayed exactly `1788955146` while event cycles
 completed at `19:59:50` and `20:00:22`. Later samples completed in 29,776-38,426 ms with 9-13 logical Quoter calls. This
-proves that ordinary event quotes no longer rewrite the approximately 42 MB source projection. No retained-source
-Initialize occurred during the soak, so the new deferred-Initialize counter remained zero; its increment and recovery
-semantics are covered by deterministic tests but are not mislabeled as live evidence.
+proves that ordinary event quotes no longer rewrite the approximately 42 MB source projection.
+
+A retained-source Initialize was then observed at `20:09:22 CST`. The explicit deferred-maintenance counter advanced
+from zero to one, the process continued without a restart, and the next protected periodic cycle consumed catalog work
+before completing at `20:10:17`. This closes the live branch that deterministic tests had already covered: relevant
+Initialize evidence is retained immediately, while graph/projection maintenance remains owned by the periodic lane.
 
 The board and signer both remained active with zero restarts. Board peak memory was 470,286,336 bytes and signer peak
 memory was 296,734,720 bytes. Both cgroups reported `max=0`, `oom=0` and `oom_kill=0`. The execution feed remained
@@ -119,6 +122,10 @@ opportunity can still be missed.
 Loopback control reads were fast between quote checkpoints (roughly 0.07-0.43 seconds in one sample), but two reads
 exceeded a 15-second deadline during periodic catalog maintenance. Therefore this promotion proves bounded, fail-closed
 continuous operation; it does not prove exhaustive realtime coverage or a deterministic 45-second reaction time.
+
+Two event cycles reported transient `DEGRADED` snapshots at `20:11:22` and `20:13:17`, then recovered on subsequent
+cycles without a service restart or retained final error. The checkpoint ledger proves the degraded states occurred but
+does not retain a specific transport cause, so this record does not invent one.
 
 Historical economics remain separate. Ten pre-dual generic-v2 receipts produced `9.463562 USDG` marked execution net;
 the current dual authorization has produced `0`. Improving coverage further requires a separate provider/cost decision:
