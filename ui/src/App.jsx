@@ -125,9 +125,18 @@ function EmptyState({ title, body, action = null }) {
 }
 
 function GlobalHeader({ overview, business, refreshedAt, loading, error }) {
-  const healthy =
+  const serviceHealthy =
     business?.strategy?.status === 'RUNNING' && ['HEALTHY', 'SCANNING', 'RUNNING'].includes(business?.market?.status)
-  const label = error ? '数据读取异常' : loading ? '正在同步数据' : healthy ? '自动策略运行中' : '运行状态需检查'
+  const coverageLimited = ['LIMITED', 'DEGRADED'].includes(overview?.coverageQuality?.status)
+  const label = error
+    ? '数据读取异常'
+    : loading
+      ? '正在同步数据'
+      : !serviceHealthy
+        ? '运行状态需检查'
+        : coverageLimited
+          ? '服务运行中 · 覆盖有限'
+          : '自动策略运行中'
   return (
     <header className="global-header">
       <a className="wordmark" href="#/overview" aria-label="返回总览">
@@ -139,7 +148,7 @@ function GlobalHeader({ overview, business, refreshedAt, loading, error }) {
           <small>MANGA</small>
         </span>
       </a>
-      <div className={`live-state ${error || !healthy ? 'live-state-warning' : ''}`}>
+      <div className={`live-state ${error || !serviceHealthy || coverageLimited ? 'live-state-warning' : ''}`}>
         <span className="live-dot" aria-hidden="true" />
         <strong>{label}</strong>
         <small>{loading ? '请稍候' : relativeAge(overview?.generatedAt || refreshedAt)}</small>
@@ -300,6 +309,49 @@ function SummaryCards({ business, overview }) {
   )
 }
 
+function OpportunityFunnel({ overview }) {
+  const funnel = overview?.funnel || {}
+  const coverage = overview?.coverageQuality || {}
+  const stages = [
+    ['发现池子', funnel.discoveredPools, '来自各独立信息源'],
+    ['组成多池目标', funnel.multiPoolTargets, '至少两个可比较池'],
+    ['进入策略候选', funnel.admittedCandidates, '通过结构校验和上限'],
+    ['当前新鲜结果', funnel.freshQuotes, '报价或失败仍在有效期'],
+    ['初筛净收益为正', funnel.proxyPositive, '已扣 Gas 估算'],
+    ['成交前核验通过', funnel.exactReady, '才允许进入签名路径'],
+  ]
+  return (
+    <section className="panel funnel-panel">
+      <div className="panel-heading funnel-heading">
+        <div>
+          <span className="eyebrow">机会漏斗</span>
+          <h2>池子很多，不等于此刻有可成交利润</h2>
+        </div>
+        <StatusBadge status={coverage.status}>{humanStatus(coverage.status)}</StatusBadge>
+      </div>
+      <div className="funnel-flow" aria-label="套利机会筛选漏斗">
+        {stages.map(([label, value, note], index) => (
+          <article key={label} className={index >= 4 ? 'funnel-decision-stage' : ''}>
+            <span>{label}</span>
+            <strong>{value ?? '—'}</strong>
+            <small>{note}</small>
+          </article>
+        ))}
+      </div>
+      <div className="coverage-explanation">
+        <p>
+          当前新鲜报价覆盖 <strong>{coverage.freshQuotedTokens ?? '—'}</strong> /{' '}
+          <strong>{coverage.candidateTokens ?? '—'}</strong> 条候选（{coverage.freshCoveragePct ?? '—'}%）。
+        </p>
+        <p>
+          当前自动执行器可直接支持约 <strong>{funnel.executorShapeCandidates ?? '—'}</strong>{' '}
+          个多池目标；其他池型先只做报价观察，不会直接获得实盘权限。
+        </p>
+      </div>
+    </section>
+  )
+}
+
 function ProfitChart({ days = [] }) {
   const values = days.map((day) => Number(day.verifiedExecutionNetUsdg || 0))
   const maximum = Math.max(0.01, ...values.map(Math.abs))
@@ -439,6 +491,7 @@ function OverviewPage({ data }) {
       <ResultHero business={business} overview={data.overview} />
       {!business && <div className="notice notice-warning">经营快照正在建立，交易权限没有变化。</div>}
       <SummaryCards business={business} overview={data.overview} />
+      <OpportunityFunnel overview={data.overview} />
       <div className="overview-split">
         <ProfitChart days={business?.economics?.lastSevenDays || []} />
         <DeliveryCard delivery={business?.delivery} />
@@ -693,6 +746,10 @@ function SourceCoverage({ summary, sources }) {
       <div className="source-callout">
         <strong>NINECAT 不属于 PAIR 平台</strong>
         <p>它会按 LONG / Doppler 或其他链上证据归类，不会因为同样使用股票或 meme 配对，就被并入 PAIR。</p>
+        <p>
+          这些来源现已共同进入候选图；其中 <strong>{summary?.strategyGraph?.sourceOnlyMultiPoolTargets ?? '—'}</strong>{' '}
+          个多池目标来自 PAIR API 之外。
+        </p>
       </div>
       <div className="source-counts">
         {counts.map(([label, value, note]) => (
@@ -729,6 +786,7 @@ function SystemSummary({ system, overview }) {
   const realtimeLag = Number(shadow?.headLagBlocks)
   const realtimeHealthy =
     Number.isFinite(realtimeLag) && realtimeLag <= Number(shadow?.limits?.eventMaxLagBlocks || 500)
+  const coverage = overview?.coverageQuality
   return (
     <section className="panel system-panel">
       <div className="panel-heading">
@@ -738,6 +796,13 @@ function SystemSummary({ system, overview }) {
         </div>
       </div>
       <div className="plain-status-grid">
+        <article>
+          <span className={`state-light state-${toneForStatus(coverage?.status)}`} />
+          <div>
+            <strong>{humanStatus(coverage?.status)}</strong>
+            <p>全市场候选覆盖</p>
+          </div>
+        </article>
         <article>
           <span className={`state-light state-${toneForStatus(overview?.serviceStatus)}`} />
           <div>
@@ -797,6 +862,16 @@ function SystemSummary({ system, overview }) {
           <div>
             <dt>实时事件位置</dt>
             <dd>{realtimeHealthy ? '靠近最新区块' : '正在恢复到最新区块'}</dd>
+          </div>
+          <div>
+            <dt>最近完成的周期扫描</dt>
+            <dd>{relativeAge(coverage?.lastPeriodicAt)}</dd>
+          </div>
+          <div>
+            <dt>当前新鲜候选覆盖</dt>
+            <dd>
+              {coverage?.freshQuotedTokens ?? '—'} / {coverage?.candidateTokens ?? '—'}
+            </dd>
           </div>
         </dl>
       </details>

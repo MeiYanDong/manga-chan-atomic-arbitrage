@@ -103,8 +103,9 @@ export function hookProvenance(hookAddress) {
 
 /**
  * Normalize one API pool without upgrading API metadata into chain evidence.
- * A null depth remains usable for read-only shadow quoting, but cannot be
- * promoted into the current executor.
+ * A null depth remains usable for read-only shadow quoting. A PoolManager
+ * Initialize fact may admit an otherwise unknown hook to that shadow path,
+ * but only the executor's exact supported PoolKey can later be promoted.
  *
  * @param {string} targetToken
  * @param {Record<string, any>} pair
@@ -140,12 +141,15 @@ export function normalizeApiPool(targetToken, pair, options) {
   const launchEnabled = pair?.quoteToken?.enabled !== false
   const provenance = hookProvenance(hookAddress)
   const chainAttestation = options.chainAttestations?.get(suppliedPoolId) || null
+  const chainSourceAttested = pair?.chainSourceAttested === true
 
   /** @type {string} */
   let admission = PoolAdmission.SHADOW_ONLY_CHAIN_ATTESTATION_UNKNOWN
   if (!poolIdMatches) admission = PoolAdmission.QUARANTINED_POOL_KEY_MISMATCH
-  else if (provenance === 'UNKNOWN_HOOK') admission = PoolAdmission.QUARANTINED_UNKNOWN_HOOK
-  else if (depthStatus === 'BELOW_MINIMUM') admission = PoolAdmission.QUARANTINED_SHALLOW
+  else if (provenance === 'UNKNOWN_HOOK' && !chainSourceAttested) {
+    admission = PoolAdmission.QUARANTINED_UNKNOWN_HOOK
+  } else if (depthStatus === 'BELOW_MINIMUM') admission = PoolAdmission.QUARANTINED_SHALLOW
+  else if (provenance === 'UNKNOWN_HOOK') admission = PoolAdmission.SHADOW_ONLY_UNSUPPORTED_HOOK
   else if (!launchEnabled) admission = PoolAdmission.SHADOW_ONLY_DISABLED_QUOTE
   else if (depthStatus === 'UNKNOWN') admission = PoolAdmission.SHADOW_ONLY_DEPTH_UNKNOWN
   else if (hookAddress !== OFFICIAL_PAIR_HOOK) admission = PoolAdmission.SHADOW_ONLY_UNSUPPORTED_HOOK
@@ -155,7 +159,8 @@ export function normalizeApiPool(targetToken, pair, options) {
     admission = PoolAdmission.EXECUTOR_COMPATIBLE
   }
 
-  const shadowEligible = poolIdMatches && provenance !== 'UNKNOWN_HOOK' && depthStatus !== 'BELOW_MINIMUM'
+  const shadowEligible =
+    poolIdMatches && (provenance !== 'UNKNOWN_HOOK' || chainSourceAttested) && depthStatus !== 'BELOW_MINIMUM'
 
   return {
     poolId: suppliedPoolId,
@@ -174,7 +179,11 @@ export function normalizeApiPool(targetToken, pair, options) {
     depthUsd,
     depthStatus,
     impliedPriceUsd: finiteNumber(pair?.impliedPriceUsd),
-    apiCanonicalClaim: true,
+    apiCanonicalClaim: pair?.apiCanonicalClaim ?? !chainSourceAttested,
+    chainSourceAttested,
+    sourceAdapterId: typeof pair?.sourceAdapterId === 'string' ? pair.sourceAdapterId : null,
+    sourceEvidenceId: typeof pair?.sourceEvidenceId === 'string' ? pair.sourceEvidenceId : null,
+    sourceBlockNumber: pair?.sourceBlockNumber === undefined ? null : String(pair.sourceBlockNumber),
     poolIdEvidence: poolIdMatches ? PoolEvidence.POOL_KEY_MATCHED : PoolEvidence.POOL_KEY_MISMATCH,
     chainAttestation,
     shadowEligible,

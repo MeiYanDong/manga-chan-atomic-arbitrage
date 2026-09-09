@@ -85,6 +85,34 @@ export function capEventWaitForReconciliation(waitMs, nowMs, reconciliationAtMs)
 }
 
 /**
+ * Reserve a small, non-preemptible periodic tranche. This prevents a busy pool
+ * event stream from starving broad-market coverage while keeping the event
+ * path independently bounded and latency-sensitive.
+ *
+ * @param {{eventWake: boolean, cycleMaxCandidates: number, protectedPeriodicCandidates: number}} input
+ */
+export function quoteCyclePolicy(input) {
+  if (![input.cycleMaxCandidates, input.protectedPeriodicCandidates].every(Number.isSafeInteger)) {
+    throw new Error('quote cycle limits must be safe integers')
+  }
+  if (input.cycleMaxCandidates < 1 || input.protectedPeriodicCandidates < 1) {
+    throw new Error('quote cycle limits must be positive')
+  }
+  if (input.eventWake) {
+    return {
+      mode: 'EVENT_HOT_PATH',
+      preemptible: false,
+      maxCandidates: input.cycleMaxCandidates,
+    }
+  }
+  return {
+    mode: 'PROTECTED_PERIODIC_RECONCILIATION',
+    preemptible: false,
+    maxCandidates: Math.min(input.cycleMaxCandidates, input.protectedPeriodicCandidates),
+  }
+}
+
+/**
  * A periodic read may yield only when a newer accepted pool event appeared
  * after that read cycle began. Pending backlog from before the cycle is not a
  * reason to abort mandatory reconciliation work.

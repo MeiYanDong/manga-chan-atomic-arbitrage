@@ -48,7 +48,7 @@ export function toneForStatus(status) {
   if (['CHAIN_ATTESTED', 'CORROBORATED', 'CURRENT', 'HEALTHY', 'CONFIRMED', 'REALIZED_NET_VERIFIED'].includes(status)) {
     return 'verified'
   }
-  if (['FRESH_PROXY_POSITIVE', 'SCREENED_PROXY', 'BACKFILL_PARTIAL', 'PARTIAL', 'STALE'].includes(status)) {
+  if (['FRESH_PROXY_POSITIVE', 'SCREENED_PROXY', 'BACKFILL_PARTIAL', 'PARTIAL', 'STALE', 'LIMITED'].includes(status)) {
     return 'proxy'
   }
   if (['CONFLICTED', 'ERROR', 'DEGRADED', 'REVERTED', 'HALTED'].includes(status)) return 'danger'
@@ -117,6 +117,11 @@ export function noTradeReason(business, overview) {
   if (Number(overview?.screenedPositive || 0) > 0) {
     return `${overview.screenedPositive} 条路线通过了初筛，但还没有通过成交前精确核验。`
   }
+  if (['LIMITED', 'DEGRADED'].includes(overview?.coverageQuality?.status)) {
+    const fresh = Number(overview?.coverageQuality?.freshQuotedTokens || 0)
+    const total = Number(overview?.coverageQuality?.candidateTokens || 0)
+    return `目前没有已证实的可执行机会；但新鲜报价只覆盖 ${fresh}/${total} 条候选，不能据此断言全市场没有机会。`
+  }
   if (Number(overview?.freshCandidates || 0) > 0) {
     return `${overview.freshCandidates} 条最新报价都没有达到扣除 Gas 后的收益门槛。`
   }
@@ -136,6 +141,7 @@ export function humanStatus(status) {
     ARMED: '已授权',
     CONNECTED: '已连接',
     CURRENT: '正常',
+    LIMITED: '覆盖有限',
     PASSED: '已通过',
     NONE: '尚未执行',
     NOT_RUN: '尚未核验',

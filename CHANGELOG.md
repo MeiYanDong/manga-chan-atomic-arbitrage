@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Join PAIR, LONG and Doppler target facts to the retained PoolManager catalog in a bounded multi-source strategy graph.
+  Admit arbitrary chain-attested hooks only to signer-free shadow quoting, retain the current executor's exact PoolKey
+  boundary for live candidates, and cap source pools per target without displacing existing PAIR rows.
+- Replace event-preemptible broad scans with a one-candidate protected periodic tranche while keeping the independent
+  event poller and its fast route/amount bounds. Surface completed-periodic age, fresh coverage and the full
+  pool-to-preflight funnel instead of presenting process liveness as market coverage.
+- Add a Chinese-first opportunity funnel to the private dashboard. It explains how many pools form multi-pool targets,
+  how many enter the strategy graph, how many have fresh results and how many pass each economic gate; unsupported pool
+  types remain observation-only and technical fields stay outside the primary reading path.
+
 - Turn event wakes into a bounded hot path: discard candidate backlog older than 20 seconds, prioritize the freshest
   candidate, quote one touched/previous V4 pool pair and at most two sizes per base, and let a new accepted event
   cooperatively preempt a warm periodic reconciliation before its next RPC read. Treat a provider-wrapped preemption as

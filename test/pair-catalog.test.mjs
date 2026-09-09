@@ -115,6 +115,19 @@ test('disabled, depth-unknown, shallow, new-hook and mismatched pools fail close
   const mismatch = normalizeApiPool(TARGET, apiPair({ poolId: `0x${'1'.repeat(64)}` }), { minDepthUsd: 100 })
   assert.equal(mismatch.executionAdmission, PoolAdmission.QUARANTINED_POOL_KEY_MISMATCH)
   assert.equal(mismatch.shadowEligible, false)
+
+  const chainAttestedUnknownHook = normalizeApiPool(
+    TARGET,
+    apiPair({
+      hookAddress: getAddress('0x7777777777777777777777777777777777777777'),
+      poolId: pairPoolId(canonicalPoolKey(TARGET, QUOTE_A, 10_000, 200, '0x7777777777777777777777777777777777777777')),
+      chainSourceAttested: true,
+    }),
+    { minDepthUsd: 100 },
+  )
+  assert.equal(chainAttestedUnknownHook.shadowEligible, true)
+  assert.equal(chainAttestedUnknownHook.executionAdmission, PoolAdmission.SHADOW_ONLY_UNSUPPORTED_HOOK)
+  assert.equal(chainAttestedUnknownHook.apiCanonicalClaim, false)
 })
 
 test('Initialize log decoding reproduces the canonical PoolKey and multi-pool launch target', () => {
