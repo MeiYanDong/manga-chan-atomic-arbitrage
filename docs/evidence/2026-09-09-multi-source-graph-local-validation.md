@@ -41,3 +41,8 @@ on GitHub Linux and on the production artifact. Its first signer-disabled produc
 single-candidate topology still required 165 Quoter calls. v0.8.1 therefore bounds the protected coverage sample to one
 V4 pair, one amount and one V3 route per direction; its final production measurements belong in a separate promotion
 record. This canary produced no signature or broadcast.
+
+A later production source snapshot contained 44,521 source targets and 62,441 retained pools. The sparse v0.8.2 graph
+kept the same 4,236 multi-pool targets and 12,061 bounded pool orientations while materializing only those 4,236
+source-only strategy rows instead of 44,521 placeholder rows. The pure local build completed in about 3.3 seconds.
+This is allocation and latency evidence only; it is not an economic opportunity claim.

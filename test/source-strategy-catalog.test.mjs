@@ -88,6 +88,19 @@ test('chain-attested arbitrary hooks enter shadow quoting but never current exec
   assert.equal(normalized.executionAdmission, PoolAdmission.SHADOW_ONLY_UNSUPPORTED_HOOK)
 })
 
+test('source-only singleton targets stay in source evidence without allocating strategy rows', () => {
+  const graph = buildSourceStrategyCatalog({
+    longLaunches: [{ asset: TARGET, numeraire: QUOTE_A }],
+    genericPools: [pool(TARGET, QUOTE_A, OFFICIAL_PAIR_HOOK, 10_000, 200, 100)],
+  })
+  assert.equal(graph.summary.sourceTargets, 1)
+  assert.equal(graph.summary.multiPoolTargets, 0)
+  assert.equal(
+    graph.tokens.some((token) => token.address === TARGET),
+    false,
+  )
+})
+
 test('existing PAIR pools are not displaced by the generic-pool bound', () => {
   const existingPools = [
     pool(TARGET, QUOTE_A, OFFICIAL_PAIR_HOOK, 10_000, 200, 100),
