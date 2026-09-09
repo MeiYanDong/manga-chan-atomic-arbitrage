@@ -72,6 +72,8 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.doesNotMatch(source, /GENERIC_EXECUTOR_NOT_DEPLOYED/)
   assert.match(source, /respondJsonFile\(response, this\.sourceCatalogPath\)/)
   assert.match(source, /sourceCatalog: null,[\s\S]*sourceCatalogHash: this\.latestSourceCatalogHash/)
+  assert.match(source, /writeStableJsonAtomic\(this\.snapshotPath, reconciled\.snapshot\)/)
+  assert.match(source, /initializeIngestNeedsCatalogRefresh\(initializeResult\)/)
 })
 
 test('dashboard client is same-origin, read-only and free of signer material', () => {
@@ -106,6 +108,7 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-opportunity-board$/m)
   assert.match(unit, /^MemoryHigh=448M$/m)
   assert.match(unit, /^MemoryMax=512M$/m)
+  assert.match(unit, /^Environment=NODE_OPTIONS=--max-old-space-size=256$/m)
   assert.match(unit, /^RuntimeDirectory=manga-opportunity-board-feed$/m)
   assert.match(unit, /^RuntimeDirectoryMode=0750$/m)
   assert.match(unit, /^RuntimeDirectoryPreserve=restart$/m)
