@@ -74,6 +74,12 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /sourceCatalog: null,[\s\S]*sourceCatalogHash: this\.latestSourceCatalogHash/)
   assert.match(source, /writeStableJsonAtomic\(this\.snapshotPath, reconciled\.snapshot\)/)
   assert.match(source, /initializeIngestNeedsCatalogRefresh\(initializeResult\)/)
+  assert.match(source, /catalogMaintenancePolicy\(\{/)
+  const hotPollStart = source.indexOf('async pollHotEvents()')
+  const hotPollEnd = source.indexOf('async runHotPollLoop()', hotPollStart)
+  assert.ok(hotPollStart >= 0 && hotPollEnd > hotPollStart)
+  const hotPollBody = source.slice(hotPollStart, hotPollEnd)
+  assert.doesNotMatch(hotPollBody, /writeSourceCatalog|writeChainCatalog|refreshCatalog/)
 })
 
 test('dashboard client is same-origin, read-only and free of signer material', () => {

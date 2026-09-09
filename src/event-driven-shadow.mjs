@@ -101,6 +101,39 @@ export function initializeIngestNeedsCatalogRefresh(result) {
 }
 
 /**
+ * Keep catalog network reads, graph rebuilds and large projection writes off
+ * an event-triggered quote. A deferred request is consumed by the next
+ * protected periodic cycle instead of being cleared or silently dropped.
+ *
+ * @param {{
+ *   eventWake: boolean,
+ *   forceCatalog: boolean,
+ *   catalogRefreshRequested: boolean,
+ *   lastFullCatalogAt?: string | null,
+ *   lastCatalogAt?: string | null,
+ *   catalogIntervalMs: number,
+ *   nowMs?: number,
+ * }} input
+ */
+export function catalogMaintenancePolicy(input) {
+  if (!Number.isSafeInteger(input.catalogIntervalMs) || input.catalogIntervalMs <= 0) {
+    throw new Error('catalog interval must be a positive safe integer')
+  }
+  if (input.eventWake) return { fullCatalogDue: false, metadataDue: false }
+  const nowMs = input.nowMs ?? Date.now()
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error('catalog clock must be a non-negative safe integer')
+  const due = (value) => {
+    const observedAtMs = Date.parse(value || '')
+    return !Number.isFinite(observedAtMs) || nowMs - observedAtMs >= input.catalogIntervalMs
+  }
+  const fullCatalogDue = Boolean(input.forceCatalog || due(input.lastFullCatalogAt))
+  return {
+    fullCatalogDue,
+    metadataDue: Boolean(fullCatalogDue || input.catalogRefreshRequested || due(input.lastCatalogAt)),
+  }
+}
+
+/**
  * Reserve a small, non-preemptible periodic tranche. This prevents a busy pool
  * event stream from starving broad-market coverage while keeping the event
  * path independently bounded and latency-sensitive.
