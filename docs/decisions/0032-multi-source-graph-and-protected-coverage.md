@@ -1,6 +1,6 @@
 # ADR 0032: multi-source strategy graph and protected coverage
 
-- Status: Accepted; local validation complete, production validation pending
+- Status: Accepted and production-verified on v0.8.4; public-RPC coverage remains limited
 - Date: 2026-09-09
 
 ## Context
