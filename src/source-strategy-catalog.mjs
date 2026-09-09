@@ -219,7 +219,35 @@ export function buildSourceStrategyCatalog(input = {}) {
       (token) => [token.address.toLowerCase(), token],
     ),
   )
+
+  let graphPools = 0
+  let invalidPools = 0
+  const poolsByTarget = new Map()
+  for (const pool of input.genericPools || []) {
+    if (!validSourcePool(pool)) {
+      invalidPools += 1
+      continue
+    }
+    for (const currency of [pool.currency0, pool.currency1]) {
+      const targetKey = String(currency).toLowerCase()
+      if (!targets.has(targetKey)) continue
+      const quoteKey = String(
+        String(pool.currency0).toLowerCase() === targetKey ? pool.currency1 : pool.currency0,
+      ).toLowerCase()
+      if (quoteKey === ZERO_ADDRESS) continue
+      if (!poolsByTarget.has(targetKey)) poolsByTarget.set(targetKey, [])
+      // Keep a reference to the durable pool fact here. The richer oriented
+      // pair object is allocated later only for targets that can form a route.
+      poolsByTarget.get(targetKey).push(pool)
+      graphPools += 1
+    }
+  }
+
+  // Do not materialize tens of thousands of source-only singleton targets in
+  // the strategy graph. Their provenance stays in the source catalog; only a
+  // target with a plausible multi-pool route needs a candidate object here.
   for (const targetKey of targets) {
+    if (!tokens.has(targetKey) && (poolsByTarget.get(targetKey)?.length || 0) < 2) continue
     const targetAddress = getAddress(targetKey)
     const label = metadata.get(targetKey) || {}
     if (!tokens.has(targetKey)) {
@@ -241,25 +269,6 @@ export function buildSourceStrategyCatalog(input = {}) {
     token.catalogSources = [...new Set([...(token.catalogSources || []), ...targetClaims])]
   }
 
-  let graphPools = 0
-  let invalidPools = 0
-  const poolsByTarget = new Map()
-  for (const pool of input.genericPools || []) {
-    if (!validSourcePool(pool)) {
-      invalidPools += 1
-      continue
-    }
-    for (const currency of [pool.currency0, pool.currency1]) {
-      const targetKey = String(currency).toLowerCase()
-      if (!targets.has(targetKey)) continue
-      const pair = sourcePoolPair(pool, targetKey, metadata)
-      if (!pair) continue
-      if (!poolsByTarget.has(targetKey)) poolsByTarget.set(targetKey, [])
-      poolsByTarget.get(targetKey).push(pair)
-      graphPools += 1
-    }
-  }
-
   let poolsDroppedByBound = 0
   let multiPoolTargets = 0
   let sourceOnlyMultiPoolTargets = 0
@@ -274,7 +283,9 @@ export function buildSourceStrategyCatalog(input = {}) {
       : []
     const originalPoolIds = new Set(originalPairs.map((pair) => String(pair?.poolId || '').toLowerCase()))
     const merged = new Map(originalPairs.map((pair) => [String(pair?.poolId || '').toLowerCase(), { ...pair }]))
-    for (const pair of poolsByTarget.get(targetKey) || []) {
+    for (const sourcePool of poolsByTarget.get(targetKey) || []) {
+      const pair = sourcePoolPair(sourcePool, targetKey, metadata)
+      if (!pair) continue
       const before = merged.get(pair.poolId)
       merged.set(
         pair.poolId,

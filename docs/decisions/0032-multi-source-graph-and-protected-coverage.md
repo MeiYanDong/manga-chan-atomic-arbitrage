@@ -38,6 +38,8 @@ making progress. A running process therefore did not prove useful broad-market c
 
 - The current production census yields roughly 4,200 structurally quotable targets instead of the PAIR-only subset;
   the exact count remains runtime evidence and may change with the chain.
+- Source-only singleton targets remain queryable in the durable source catalog but are not materialized as temporary
+  strategy-token objects. They cannot form a two-pool route and allocating them increased cold-start memory pressure.
 - A protected periodic cycle may delay an event wake by one bounded candidate. Production showed that a full topology
   for even one candidate could still require 165 Quoter calls, so the protected step samples one pair, one size and one
   bounded V3 route per direction. It cannot be interrupted into permanent starvation, and a sampled negative is not

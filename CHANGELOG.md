@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep source-only singleton targets in the durable source catalog without allocating temporary strategy-token rows;
+  only targets with a plausible multi-pool route are materialized in the live strategy graph.
 - Bound the protected periodic coverage tranche to one V4 pair, one amount and one V3 route per direction after the
   first v0.8.0 production cycle required 165 Quoter calls for a single candidate. Keep sampled negatives explicitly
   non-exhaustive and leave receipt-gated execution unchanged.
