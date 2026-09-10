@@ -141,7 +141,7 @@ import {
   mergeSourceFacts,
   isCompactSourceCatalogProjection,
   planSourceTargetPoolRange,
-  retainPoolsForSourceTargets,
+  retainPoolsForSourceTargetIndex,
   restoreAdapterStates,
   sourceTargetAddresses,
 } from '../src/source-adapters.mjs'
@@ -613,16 +613,14 @@ class OpportunityBoard {
     this.dopplerLaunches = []
     this.visibleDopplerLaunchCount = 0
     this.pairListings = Array.isArray(persistedSourceCatalog.pairListings) ? persistedSourceCatalog.pairListings : []
+    this.sourceTargetIndex = sourceTargetAddresses({
+      pairListings: this.pairListings,
+      longLaunches: this.longLaunches,
+      dopplerLaunches: this.dopplerLaunches,
+      dopplerTargetIndex: this.dopplerTargetIndex,
+    })
     const persistedGenericPools = Array.isArray(persistedSourceCatalog.pools) ? persistedSourceCatalog.pools : []
-    this.genericPools = retainPoolsForSourceTargets(
-      persistedGenericPools,
-      sourceTargetAddresses({
-        pairListings: this.pairListings,
-        longLaunches: this.longLaunches,
-        dopplerLaunches: this.dopplerLaunches,
-        dopplerTargetIndex: this.dopplerTargetIndex,
-      }),
-    )
+    this.genericPools = retainPoolsForSourceTargetIndex(persistedGenericPools, this.sourceTargetIndex)
     this.sourcePoolRetention = startupRetention
     this.sourceEvidence = Array.isArray(persistedSourceCatalog.evidence) ? persistedSourceCatalog.evidence : []
     this.sourceAdapterCursors = {
@@ -1374,14 +1372,9 @@ class OpportunityBoard {
         }
       }
     }
-    const sourceTargets = sourceTargetAddresses({
-      pairListings: this.pairListings,
-      longLaunches: this.longLaunches,
-      dopplerLaunches: this.dopplerLaunches,
-      dopplerTargetIndex: this.dopplerTargetIndex,
-    })
+    const sourceTargets = this.refreshSourceTargetIndex()
     const poolsBeforeRetention = this.genericPools.length
-    this.genericPools = retainPoolsForSourceTargets(this.genericPools, sourceTargets)
+    this.genericPools = retainPoolsForSourceTargetIndex(this.genericPools, sourceTargets)
     this.sourcePoolRetention = {
       policy: 'SOURCE_TARGET_CURRENCY_ONLY',
       sourceTargets: sourceTargets.size,
@@ -1395,6 +1388,16 @@ class OpportunityBoard {
     this.writeSourceCatalog()
   }
 
+  refreshSourceTargetIndex() {
+    this.sourceTargetIndex = sourceTargetAddresses({
+      pairListings: this.pairListings,
+      longLaunches: this.longLaunches,
+      dopplerLaunches: this.dopplerLaunches,
+      dopplerTargetIndex: this.dopplerTargetIndex,
+    })
+    return this.sourceTargetIndex
+  }
+
   rebuildCatalogFromSources() {
     const graph = buildSourceStrategyCatalog({
       apiTokens: [...this.rawTokens.values()],
@@ -1404,6 +1407,7 @@ class OpportunityBoard {
       longLaunches: this.longLaunches,
       dopplerTargetIndex: this.dopplerTargetIndex,
       genericPools: this.genericPools,
+      sourceTargetIndex: this.sourceTargetIndex,
       maxPoolsPerTarget: this.config.maxPoolsPerTarget,
     })
     this.catalog = graph.tokens
@@ -1452,22 +1456,24 @@ class OpportunityBoard {
 
   /** @param {Record<string, any>[]} initializeEvents */
   ingestInitializeEvents(initializeEvents) {
+    if (initializeEvents.length === 0) {
+      return {
+        discoveredPools: 0,
+        discoveredGenericPools: 0,
+        retainedGenericPoolObservations: 0,
+        ambiguities: 0,
+      }
+    }
     const allGenericFacts = initializeEvents.map((event) => adaptPoolManagerInitialize(event)).filter(Boolean)
-    const sourceTargets = sourceTargetAddresses({
-      pairListings: this.pairListings,
-      longLaunches: this.longLaunches,
-      dopplerLaunches: this.dopplerLaunches,
-      dopplerTargetIndex: this.dopplerTargetIndex,
-    })
-    const genericFacts = retainPoolsForSourceTargets(allGenericFacts, sourceTargets)
+    const sourceTargets = this.sourceTargetIndex
+    const genericFacts = retainPoolsForSourceTargetIndex(allGenericFacts, sourceTargets)
     if (genericFacts.length > 0) this.store.ingest(genericFacts.map((fact) => fact.evidence))
     const compactGenericFacts = genericFacts.map((fact) => compactSourceFact(fact))
     const genericBeforeCount = this.genericPools.length
     if (compactGenericFacts.length > 0) {
-      this.genericPools = retainPoolsForSourceTargets(
-        mergeSourceFacts(this.genericPools, compactGenericFacts, (item) => item.poolId.toLowerCase()),
-        sourceTargets,
-      )
+      // Existing pools already satisfy the retained-target invariant and the
+      // incoming facts were filtered against the same cached index above.
+      this.genericPools = mergeSourceFacts(this.genericPools, compactGenericFacts, (item) => item.poolId.toLowerCase())
     }
     this.sourcePoolRetention = {
       policy: 'SOURCE_TARGET_CURRENCY_ONLY',
@@ -1479,14 +1485,16 @@ class OpportunityBoard {
     }
     const inferred = inferPairLaunchPools(initializeEvents, new Set(this.quoteAssets.keys()))
     const beforeCount = this.chainPools.length
-    this.chainPools = mergeChainPools(this.chainPools, inferred.pools)
-    const ambiguityMap = new Map(
-      this.chainAmbiguities.map((item) => [`${item.launchTxHash}:${(item.poolIds || []).join(',')}`, item]),
-    )
-    for (const item of inferred.ambiguities) {
-      ambiguityMap.set(`${item.launchTxHash}:${item.poolIds.join(',')}`, item)
+    if (inferred.pools.length > 0) this.chainPools = mergeChainPools(this.chainPools, inferred.pools)
+    if (inferred.ambiguities.length > 0) {
+      const ambiguityMap = new Map(
+        this.chainAmbiguities.map((item) => [`${item.launchTxHash}:${(item.poolIds || []).join(',')}`, item]),
+      )
+      for (const item of inferred.ambiguities) {
+        ambiguityMap.set(`${item.launchTxHash}:${item.poolIds.join(',')}`, item)
+      }
+      this.chainAmbiguities = [...ambiguityMap.values()]
     }
-    this.chainAmbiguities = [...ambiguityMap.values()]
     return {
       discoveredPools: this.chainPools.length - beforeCount,
       discoveredGenericPools: this.genericPools.length - genericBeforeCount,
@@ -1730,7 +1738,10 @@ class OpportunityBoard {
       }
     }
 
-    if (visibilityChanged) this.refreshDopplerVisibility()
+    if (visibilityChanged) {
+      this.refreshSourceTargetIndex()
+      this.refreshDopplerVisibility()
+    }
     this.writeSourceCatalog(safeHead)
     this.persistState()
     return { rpcLogCalls, logsSeen, observations, safeHead: safeHead.toString() }
@@ -1949,6 +1960,7 @@ class OpportunityBoard {
       ...v4Logs.map((log) => decodePoolManagerLog(log)),
       ...v3Logs.map((log) => decodeV3SwapLog(log)),
     ].filter(Boolean)
+    markPhase('decodeMs')
     const events = coalesceLatestSwapPerPool(decodedEvents)
     for (const event of events) {
       if (event.type !== 'V3_SWAP' || !event.poolAddress) continue
@@ -1956,8 +1968,10 @@ class OpportunityBoard {
         event.poolAddress,
       )
     }
+    markPhase('coalesceMs')
     const initializeEvents = events.filter((event) => event.type === 'V4_INITIALIZE')
     const initializeResult = this.ingestInitializeEvents(initializeEvents)
+    markPhase('initializeIngestMs')
     // The independent hot cursor durably ingests the relevant Initialize
     // evidence and advances its own state, but large catalog projections stay
     // on the protected periodic lane. Source and chain backfill cursors do not
@@ -1985,7 +1999,12 @@ class OpportunityBoard {
       candidateWakes += offered.candidateCount
       this.poolMirror = applyPoolMirrorEvent(this.poolMirror, event)
     }
-    markPhase('decodeRouteMs')
+    markPhase('routeQueueMs')
+    pollTiming.decodeRouteMs = Number(
+      (pollTiming.decodeMs + pollTiming.coalesceMs + pollTiming.initializeIngestMs + pollTiming.routeQueueMs).toFixed(
+        2,
+      ),
+    )
     const anchor = await this.retryRpc(() => this.client.getBlock({ blockNumber: toBlock }))
     markPhase('finalAnchorMs')
     this.hotCursor = {

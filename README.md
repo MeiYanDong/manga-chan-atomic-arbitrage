@@ -118,10 +118,12 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   startup reads retry transient RPC failures five times before loading the private credential.
 - Broad discovery, log polling, catalog backfill, shadow-only wakes and periodic coverage use Robinhood's official
   public RPC. Only executor-compatible or executor-shaped event quotes may use the cost-bounded ChainStack HTTP lane,
-  capped at 200 candidates and 4,000 logical calls per UTC day. The first eight natural managed event cycles used 138
-  calls with zero HTTP failure or fallback; request latency was 16.06 ms p50 and 64.41 ms p95, while the latest complete
-  event-to-quote cycle still took 26.855 seconds. Idle dual-v3 reads only the local feed. Only a screened candidate can
-  escalate again to the signing identity for exact simulation, signing, broadcast and receipt convergence.
+  capped at 200 candidates and 4,000 logical calls per UTC day. Release `0.8.8` reduced its first three natural managed
+  cycles to 11 logical calls per event and kept pre-fixed-block work below 0.15 ms, but restart catch-up still exposed
+  multi-second public ingestion and anchor reads. The candidate cap later exhausted and fallback worked as configured;
+  it was not increased because the active authorization still had no receipt-proven profit. Idle dual-v3 reads only
+  the local feed. Only a screened candidate can escalate again to the signing identity for exact simulation, signing,
+  broadcast and receipt convergence.
 - The v0.8.4 event hot path no longer writes the approximately 42 MB source catalog before quoting. Production ordinary
   event samples completed in 29.8-38.4 seconds with 9-13 logical Quoter calls and no event-window catalog mtime change.
   Periodic catalog maintenance can still make loopback reads exceed 15 seconds. The retained hot-cursor metrics also
@@ -180,6 +182,10 @@ See
 [`docs/evidence/2026-09-10-targeted-managed-event-rpc-production-promotion.md`](docs/evidence/2026-09-10-targeted-managed-event-rpc-production-promotion.md)
 for the bounded ChainStack event-quote promotion, same-block canary, rejected first health window, automatic rollback,
 successful board-only retry and current receipt-separated economics.
+See
+[`docs/evidence/2026-09-10-adaptive-event-quote-production-promotion.md`](docs/evidence/2026-09-10-adaptive-event-quote-production-promotion.md)
+for the `0.8.8` board-only promotion, natural managed-call reduction, preserved signer boundary and remaining public
+ingestion bottleneck.
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.

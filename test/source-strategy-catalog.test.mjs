@@ -8,6 +8,7 @@ import {
   pairPoolId,
   PoolAdmission,
 } from '../src/pair-catalog.mjs'
+import { sourceTargetAddresses } from '../src/source-adapters.mjs'
 import { buildSourceStrategyCatalog } from '../src/source-strategy-catalog.mjs'
 
 const TARGET = getAddress('0x1111111111111111111111111111111111111111')
@@ -98,6 +99,24 @@ test('source-only singleton targets stay in source evidence without allocating s
   assert.equal(
     graph.tokens.some((token) => token.address === TARGET),
     false,
+  )
+})
+
+test('a prevalidated source-target index preserves strategy graph output', () => {
+  const input = {
+    longLaunches: [{ asset: TARGET, numeraire: QUOTE_A }],
+    genericPools: [
+      pool(TARGET, QUOTE_A, OTHER_HOOK, 3_000, 60, 100),
+      pool(TARGET, QUOTE_B, OTHER_HOOK, 3_000, 60, 101),
+    ],
+  }
+  const baseline = buildSourceStrategyCatalog(input)
+  const sourceTargetIndex = sourceTargetAddresses({ longLaunches: input.longLaunches })
+  const cached = buildSourceStrategyCatalog({ ...input, sourceTargetIndex })
+  assert.deepEqual(cached, baseline)
+  assert.throws(
+    () => buildSourceStrategyCatalog({ ...input, sourceTargetIndex: new Set([TARGET.toLowerCase()]) }),
+    /sourceTargetIndex must come from sourceTargetAddresses/,
   )
 })
 
