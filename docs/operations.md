@@ -99,9 +99,17 @@ The release installer compiles and verifies the code before atomically moving th
 ## Opportunity board deployment
 
 The opportunity board is not part of the signer lane. Provision `/etc/manga-opportunity-board/live.env` from
-`deploy/opportunity-board.env.example` with mode `0640 root:manga-board`. Its RPC endpoint must be read-only and distinct
-from the watcher's hot HTTP/WSS path. Never copy `MANGA_PRIVATE_KEY_FILE`, a key value or the signing strategy's complete
-environment into this file.
+`deploy/opportunity-board.env.example` with mode `0640 root:manga-board`. Its primary RPC remains the official/public
+read-only provider. An optional `MANGA_BOARD_HOT_RPC_URL` may reuse the strategy's managed HTTP endpoint only as a
+separately copied URL value for high-priority event quotes; never copy the signing strategy's complete environment.
+The managed URL must remain private, distinct from the public reader and enabled explicitly. Never copy
+`MANGA_PRIVATE_KEY_FILE`, a key value, WSS signing configuration or wallet material into this file.
+
+The release fixes the initial paid-read ceilings at 200 event candidates and 4,000 logical JSON-RPC calls per UTC day.
+`/api/event-metrics` reports the durable budget, provider role, public fallback and latency percentiles without exposing
+the endpoint. Do not increase the private environment values alone: the systemd command boundary retains the reviewed
+caps. A higher tier requires a reviewed release plus canonical active-strategy receipt net that covers Gas and provider
+cost; a screen or simulation is not sufficient.
 
 After installing the release:
 

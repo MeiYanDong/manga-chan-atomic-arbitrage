@@ -92,6 +92,14 @@ import {
 import { isMalformedRpcBatchResponse, isTransientRpcError } from '../src/policy.mjs'
 import { readWithBoundedMulticall } from '../src/rpc-multicall.mjs'
 import {
+  DailyHotRpcBudget,
+  HotRpcLaneDecision,
+  jsonRpcCallCount,
+  latencyPercentiles,
+  selectHotRpcLane,
+  validateManagedHotRpcUrl,
+} from '../src/hot-rpc-lane.mjs'
+import {
   V3ShortlistCache,
   seedV3ShortlistsFromObservations,
   selectEventV3Routes,
@@ -270,9 +278,19 @@ function loadConfig() {
   )
   const readModel = process.env.MANGA_BOARD_READ_MODEL || 'sqlite'
   if (!['sqlite', 'legacy'].includes(readModel)) throw new Error('MANGA_BOARD_READ_MODEL must be sqlite or legacy')
+  const rpcUrl = process.env.MANGA_BOARD_RPC_URL || null
+  const hotRpcUrl = process.env.MANGA_BOARD_HOT_RPC_URL || null
+  const hotRpcEnabled = booleanFlag(process.env.MANGA_BOARD_HOT_RPC_ENABLED, false)
+  validateManagedHotRpcUrl({ enabled: hotRpcEnabled, hotRpcUrl, publicRpcUrl: rpcUrl })
   return {
-    rpcUrl: process.env.MANGA_BOARD_RPC_URL || null,
+    rpcUrl,
     providerLabel: process.env.MANGA_BOARD_PROVIDER_LABEL || 'read-only-provider',
+    hotRpcUrl,
+    hotRpcEnabled,
+    hotProviderLabel: process.env.MANGA_BOARD_HOT_PROVIDER_LABEL || 'managed-event-hot',
+    hotRpcDailyEventCandidateCap: integer(process.env.MANGA_BOARD_HOT_RPC_DAILY_EVENT_CANDIDATES, 200),
+    hotRpcDailyLogicalCallCap: integer(process.env.MANGA_BOARD_HOT_RPC_DAILY_LOGICAL_CALLS, 4_000),
+    hotRpcHttpConcurrency: integer(process.env.MANGA_BOARD_HOT_RPC_HTTP_CONCURRENCY, 4),
     runDir,
     executionSnapshotPath,
     businessSnapshotPath,
@@ -527,6 +545,7 @@ class OpportunityBoard {
     this.executionSnapshotPath = config.executionSnapshotPath
     this.eventsPath = path.join(config.runDir, 'events.jsonl')
     this.statePath = path.join(config.runDir, 'state.json')
+    this.hotRpcBudgetPath = path.join(config.runDir, 'hot-rpc-budget.json')
     this.chainCatalogPath = path.join(config.runDir, 'chain-catalog.json')
     this.sourceCatalogPath = path.join(config.runDir, 'source-catalog.json')
     this.poolMirrorPath = path.join(config.runDir, 'pool-mirror.json')
@@ -675,7 +694,10 @@ class OpportunityBoard {
     this.dependencyIndex = buildShadowDependencyIndex([], this.observations)
     this.poolMirror = readJson(this.poolMirrorPath) || {}
     this.eventMetrics = {
-      mode: 'PUBLIC_HTTP_BOUNDED_LOG_POLLING',
+      mode:
+        config.hotRpcEnabled && config.hotRpcUrl
+          ? 'PUBLIC_HTTP_LOG_POLLING_WITH_MANAGED_EVENT_QUOTES'
+          : 'PUBLIC_HTTP_BOUNDED_LOG_POLLING',
       scheduler: 'INDEPENDENT_HOT_POLL_PLUS_PROTECTED_RECONCILIATION',
       startedAt: this.startedAt,
       polls: 0,
@@ -722,6 +744,12 @@ class OpportunityBoard {
       executionFeedCheckpoints: 0,
       lastExecutionFeedCheckpointAt: null,
       lastExecutionFeedCheckpointCandidateCount: 0,
+      managedEventQuoteCycles: 0,
+      publicEventQuoteCycles: 0,
+      hotRpcBudgetFallbackCycles: 0,
+      hotRpcTransientFallbackCycles: 0,
+      lastEventQuoteRpcRole: null,
+      lastEventQuoteRpcFallbackReason: null,
     }
     this.quoteRpcMetrics = {
       rpcHttpPosts: 0,
@@ -760,8 +788,21 @@ class OpportunityBoard {
       multicallCodeHash: null,
       rpcBatchFallbacks: 0,
     }
+    this.hotRpcTransportMetrics = {
+      httpPosts: 0,
+      logicalCalls: 0,
+      httpFailures: 0,
+      publicFallbackPosts: 0,
+      publicFallbackLogicalCalls: 0,
+      lastUsedAt: null,
+      lastFailureAt: null,
+      lastFallbackAt: null,
+      lastFallbackReason: null,
+    }
+    this.hotRpcLatencySamples = []
     this.catalogRefreshRequested = false
     this.rpcHttpGate = new AsyncConcurrencyGate(config.rpcHttpConcurrency)
+    this.hotRpcHttpGate = new AsyncConcurrencyGate(config.hotRpcHttpConcurrency)
     this.eventLedgerEpoch = persistedState.eventLedgerEpoch || null
     this.lastCatalogAt = null
     this.lastFullCatalogAt = null
@@ -782,6 +823,7 @@ class OpportunityBoard {
     this.rpcCallContext = new AsyncLocalStorage()
     this.client = null
     this.unbatchedClient = null
+    this.hotClient = null
     this.multicallVerifiedAtBlock = null
     this.rpcTransportMode = config.rpcBatchSize > 1 ? 'BATCH' : 'INDIVIDUAL'
     this.rpcBatchFallbackAt = null
@@ -795,6 +837,14 @@ class OpportunityBoard {
     const persistedCatalog = writeStableJsonAtomic(this.sourceCatalogPath, this.latestSourceCatalog)
     this.latestSourceCatalogHash = persistedCatalog.hash
     this.latestSourceCatalogBytes = persistedCatalog.bytes
+    this.hotRpcBudget = new DailyHotRpcBudget({
+      dailyEventCandidateCap: config.hotRpcDailyEventCandidateCap,
+      dailyLogicalCallCap: config.hotRpcDailyLogicalCallCap,
+      persisted: readJson(this.hotRpcBudgetPath),
+      onChange: (state) => {
+        if (fs.existsSync(config.runDir)) writeJsonAtomic(this.hotRpcBudgetPath, state)
+      },
+    })
     if (config.rpcUrl) {
       const chain = defineChain({
         id: CHAIN_ID,
@@ -802,18 +852,19 @@ class OpportunityBoard {
         nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
         rpcUrls: { default: { http: [config.rpcUrl] } },
       })
+      const publicFetch = (...args) =>
+        this.rpcHttpGate.run(async () => {
+          this.throwIfPeriodicPreempted()
+          this.quoteRpcMetrics.rpcHttpPosts += 1
+          this.quoteRpcMetrics.rpcHttpPeakConcurrency = Math.max(
+            this.quoteRpcMetrics.rpcHttpPeakConcurrency,
+            this.rpcHttpGate.active,
+          )
+          return fetch(...args)
+        })
       const transportOptions = (useBatch) => ({
         ...(useBatch ? { batch: { batchSize: config.rpcBatchSize, wait: config.rpcBatchWaitMs } } : {}),
-        fetchFn: (...args) =>
-          this.rpcHttpGate.run(async () => {
-            this.throwIfPeriodicPreempted()
-            this.quoteRpcMetrics.rpcHttpPosts += 1
-            this.quoteRpcMetrics.rpcHttpPeakConcurrency = Math.max(
-              this.quoteRpcMetrics.rpcHttpPeakConcurrency,
-              this.rpcHttpGate.active,
-            )
-            return fetch(...args)
-          }),
+        fetchFn: publicFetch,
         timeout: 20_000,
         retryCount: 1,
       })
@@ -824,6 +875,95 @@ class OpportunityBoard {
         })
       this.unbatchedClient = rpcClient(false)
       this.client = config.rpcBatchSize > 1 ? rpcClient(true) : this.unbatchedClient
+      if (config.hotRpcEnabled && config.hotRpcUrl) {
+        this.hotClient = createPublicClient({
+          chain,
+          transport: http(config.hotRpcUrl, {
+            fetchFn: async (_input, init) => {
+              this.throwIfPeriodicPreempted()
+              const logicalCalls = jsonRpcCallCount(init?.body)
+              const debit = this.hotRpcBudget.consumeLogicalCalls(logicalCalls)
+              if (!debit.consumed) {
+                const context = this.rpcCallContext.getStore()
+                if (context?.hotRpcRouting) {
+                  context.hotRpcRouting.active = false
+                  context.hotRpcRouting.fallbackReason = debit.reason
+                }
+                this.hotRpcTransportMetrics.publicFallbackPosts += 1
+                this.hotRpcTransportMetrics.publicFallbackLogicalCalls += logicalCalls
+                this.hotRpcTransportMetrics.lastFallbackAt = new Date().toISOString()
+                this.hotRpcTransportMetrics.lastFallbackReason = debit.reason
+                return publicFetch(config.rpcUrl, init)
+              }
+              const startedAt = performance.now()
+              this.hotRpcTransportMetrics.httpPosts += 1
+              this.hotRpcTransportMetrics.logicalCalls += logicalCalls
+              this.hotRpcTransportMetrics.lastUsedAt = new Date().toISOString()
+              try {
+                const response = await this.hotRpcHttpGate.run(() => fetch(config.hotRpcUrl, init))
+                if (!response.ok) {
+                  this.hotRpcTransportMetrics.httpFailures += 1
+                  this.hotRpcTransportMetrics.lastFailureAt = new Date().toISOString()
+                }
+                return response
+              } catch (error) {
+                this.hotRpcTransportMetrics.httpFailures += 1
+                this.hotRpcTransportMetrics.lastFailureAt = new Date().toISOString()
+                throw error
+              } finally {
+                this.hotRpcLatencySamples.push(performance.now() - startedAt)
+                if (this.hotRpcLatencySamples.length > 512) this.hotRpcLatencySamples.shift()
+              }
+            },
+            timeout: config.requestTimeoutMs,
+            retryCount: 0,
+          }),
+        })
+      }
+    }
+  }
+
+  quoteClient() {
+    return this.rpcCallContext.getStore()?.hotRpcRouting?.active === true && this.hotClient
+      ? this.hotClient
+      : this.client
+  }
+
+  /** @param {string} reason */
+  fallBackFromHotRpc(reason) {
+    const context = this.rpcCallContext.getStore()
+    if (!context?.hotRpcRouting?.active) return false
+    context.hotRpcRouting.active = false
+    context.hotRpcRouting.fallbackReason = reason
+    this.hotRpcTransportMetrics.lastFallbackAt = new Date().toISOString()
+    this.hotRpcTransportMetrics.lastFallbackReason = reason
+    return true
+  }
+
+  eventQuoteRpcRole() {
+    const context = this.rpcCallContext.getStore()
+    if (!context?.eventHotPath) return 'PUBLIC_PERIODIC'
+    if (!context.hotRpcRouting?.selected) return context.hotRpcRouting?.decision || 'PUBLIC_EVENT'
+    return context.hotRpcRouting.fallbackReason ? 'MANAGED_THEN_PUBLIC_FALLBACK' : HotRpcLaneDecision.MANAGED
+  }
+
+  hotRpcState() {
+    return {
+      enabled: this.config.hotRpcEnabled,
+      endpointConfigured: Boolean(this.config.hotRpcUrl),
+      providerLabel: this.config.hotProviderLabel,
+      selectionPolicy: 'EVENT_ONLY_EXECUTOR_COMPATIBLE_OR_EXECUTOR_SHAPE',
+      fallbackProviderLabel: this.config.providerLabel,
+      fallbackPolicy: 'PUBLIC_ON_DAILY_CAP_OR_TRANSIENT_FAILURE',
+      expansionPolicy: 'MANUAL_ONLY_AFTER_CANONICAL_RECEIPT_NET_AND_PROVIDER_COST_REVIEW',
+      budget: this.hotRpcBudget.snapshot(),
+      transport: {
+        ...this.hotRpcTransportMetrics,
+        peakConcurrency: this.hotRpcHttpGate.peak,
+        configuredConcurrency: this.config.hotRpcHttpConcurrency,
+        latency: latencyPercentiles(this.hotRpcLatencySamples),
+        metricCaveat: 'logical calls are JSON-RPC operations, not provider request units or USD cost',
+      },
     }
   }
 
@@ -857,6 +997,7 @@ class OpportunityBoard {
           metricCaveat: 'rpcHttpPosts are transport requests, not provider billing units',
         },
         pendingCandidates: this.eventQueue.size,
+        eventQuoteRpc: this.hotRpcState(),
         nextBlock: this.hotCursor.nextBlock,
         reorgCount: Number(this.hotCursor.reorgCount || 0),
         limits: {
@@ -1890,7 +2031,7 @@ class OpportunityBoard {
       blockNumber,
       (contract) =>
         this.retryRpc(
-          () => this.client.readContract({ ...contract, blockNumber }),
+          () => this.quoteClient().readContract({ ...contract, blockNumber }),
           () => true,
         ),
     )
@@ -1942,7 +2083,10 @@ class OpportunityBoard {
       shouldRetry,
       onRetry: (error) => {
         this.quoteRpcMetrics.rpcLogicalRetries += 1
-        if (policy.eventHotPath) this.quoteRpcMetrics.eventRpcLogicalRetries += 1
+        if (policy.eventHotPath) {
+          this.quoteRpcMetrics.eventRpcLogicalRetries += 1
+          this.fallBackFromHotRpc(HotRpcLaneDecision.PUBLIC_TRANSIENT_FALLBACK)
+        }
         this.activateUnbatchedTransport(error)
       },
     })
@@ -1951,7 +2095,7 @@ class OpportunityBoard {
   /** @param {bigint} blockNumber */
   async ensureReadMulticall(blockNumber) {
     if (this.multicallVerifiedAtBlock !== null) return
-    const code = await this.retryRpc(() => this.client.getCode({ address: MULTICALL3, blockNumber }))
+    const code = await this.retryRpc(() => this.quoteClient().getCode({ address: MULTICALL3, blockNumber }))
     if (!code || code === '0x') throw new Error('canonical Multicall3 code is missing')
     const codeHash = keccak256(code)
     if (codeHash !== MULTICALL3_RUNTIME_CODE_HASH) {
@@ -1971,7 +2115,7 @@ class OpportunityBoard {
       isTransient: quoteTransportIsIncomplete,
       readBatch: (chunk) =>
         this.retryRpc(() =>
-          this.client.multicall({
+          this.quoteClient().multicall({
             contracts: chunk,
             multicallAddress: MULTICALL3,
             allowFailure: true,
@@ -2146,7 +2290,7 @@ class OpportunityBoard {
       blockNumber,
       (contract) =>
         this.retryRpc(async () => {
-          const { result } = await this.client.simulateContract({
+          const { result } = await this.quoteClient().simulateContract({
             account: ZERO_ADDRESS,
             ...contract,
             blockNumber,
@@ -2182,7 +2326,7 @@ class OpportunityBoard {
     const cached = this.v4QuoteCache.getOrCreate(blockNumber, key, () => {
       this.quoteRpcMetrics.v4QuoterCalls += 1
       return this.retryRpc(() =>
-        this.client.simulateContract({
+        this.quoteClient().simulateContract({
           account: ZERO_ADDRESS,
           address: V4_QUOTER,
           abi: V4_QUOTER_ABI,
@@ -2749,13 +2893,13 @@ class OpportunityBoard {
   }
 
   async fixedBlock() {
-    const chainId = await this.retryRpc(() => this.client.getChainId())
+    const chainId = await this.retryRpc(() => this.quoteClient().getChainId())
     if (chainId !== CHAIN_ID) throw new Error(`wrong chain id ${chainId}`)
-    const head = await this.retryRpc(() => this.client.getBlockNumber())
+    const head = await this.retryRpc(() => this.quoteClient().getBlockNumber())
     const blockNumber = head > this.config.blockLag ? head - this.config.blockLag : head
     const [block, gasPrice] = await Promise.all([
-      this.retryRpc(() => this.client.getBlock({ blockNumber })),
-      this.retryRpc(() => this.client.getGasPrice()),
+      this.retryRpc(() => this.quoteClient().getBlock({ blockNumber })),
+      this.retryRpc(() => this.quoteClient().getGasPrice()),
     ])
     await this.ensureReadMulticall(blockNumber)
     const nativeMarkIn = parseEther('0.004')
@@ -2836,6 +2980,19 @@ class OpportunityBoard {
       periodicAmountLimit: this.config.periodicAmountLimit,
       periodicV3RouteLimit: this.config.periodicV3RouteLimit,
     })
+    const hotRpcSelection = selectHotRpcLane({
+      enabled: this.config.hotRpcEnabled,
+      endpointConfigured: Boolean(this.hotClient),
+      candidatePriorities: eventWake?.candidatePriorities || [],
+      minimumPriority: CandidateWakePriority.EXECUTOR_SHAPE,
+    })
+    let hotRpcActive = false
+    let hotRpcDecision = hotRpcSelection.reason
+    if (eventWake && hotRpcSelection.selected) {
+      const admission = this.hotRpcBudget.admitEventCandidates(eventWake.candidateIds?.length || 1)
+      hotRpcActive = admission.admitted
+      hotRpcDecision = admission.reason
+    }
     const callContext = {
       cyclePolicy: policy.mode,
       preemptible: policy.preemptible,
@@ -2845,10 +3002,38 @@ class OpportunityBoard {
       probe: eventWake === null ? null : policy.probe,
       candidateProbe: policy.probe,
       eventHotPath: eventWake !== null,
+      hotRpcRouting: {
+        selected: hotRpcActive,
+        active: hotRpcActive,
+        decision: hotRpcDecision,
+        fallbackReason: null,
+      },
       acceptedEventsAtStart: this.eventQueue.acceptedEvents,
       preempted: false,
     }
-    return this.rpcCallContext.run(callContext, () => this.runCycle(options))
+    return this.rpcCallContext.run(callContext, async () => {
+      const result = await this.runCycle(options)
+      if (eventWake) {
+        const role = this.eventQuoteRpcRole()
+        this.eventMetrics.lastEventQuoteRpcRole = role
+        this.eventMetrics.lastEventQuoteRpcFallbackReason = callContext.hotRpcRouting.fallbackReason
+        if (callContext.hotRpcRouting.selected) this.eventMetrics.managedEventQuoteCycles += 1
+        else this.eventMetrics.publicEventQuoteCycles += 1
+        if (
+          [
+            HotRpcLaneDecision.PUBLIC_EVENT_BUDGET_EXHAUSTED,
+            HotRpcLaneDecision.PUBLIC_LOGICAL_BUDGET_EXHAUSTED,
+          ].includes(callContext.hotRpcRouting.decision) ||
+          callContext.hotRpcRouting.fallbackReason === HotRpcLaneDecision.PUBLIC_LOGICAL_BUDGET_EXHAUSTED
+        ) {
+          this.eventMetrics.hotRpcBudgetFallbackCycles += 1
+        }
+        if (callContext.hotRpcRouting.fallbackReason === HotRpcLaneDecision.PUBLIC_TRANSIENT_FALLBACK) {
+          this.eventMetrics.hotRpcTransientFallbackCycles += 1
+        }
+      }
+      return result
+    })
   }
 
   /** @param {{forceCatalog?: boolean, eventWake?: Record<string, any> | null}} [options] */
@@ -2911,6 +3096,7 @@ class OpportunityBoard {
           if (trigger) {
             observation.quoteTrigger = {
               mode: 'EVENT_DRIVEN_HTTP_LOG_WAKE',
+              rpcRole: this.eventQuoteRpcRole(),
               sources: trigger.sources,
               eventCount: trigger.eventCount,
               minBlock: trigger.minBlock.toString(),

@@ -129,9 +129,15 @@ an already-consumed wake can only request a new canonical fixed-block quote and 
 The quote batch limit is unchanged.
 Events are wake evidence only: the local post-event mirror is never used as executable output. A low-frequency round-robin
 reconciliation remains necessary because the V3 event set contains previously quoted routes rather than every route that
-could become best. Only a new eligible board candidate escalates to the explicitly configured execution RPC for exact
-simulation, Gas, signing, broadcast and receipt convergence. This bounds provider use without making a rate-limited public endpoint
-a live signing dependency.
+could become best. For event quotes only, an explicitly enabled managed HTTP reader may be selected when the wake is
+already ranked `EXECUTOR_COMPATIBLE` or `EXECUTOR_SHAPE`. Discovery, log polling, catalog backfill, shadow-only events
+and protected periodic reconciliation remain on the public RPC. The managed reader is independently bounded by durable
+UTC-day event and logical-call caps; quota exhaustion or a transient provider failure degrades the affected read-only
+event cycle to the public reader. This route does not contain a signer or make a screen executable evidence.
+
+Only a new eligible board candidate escalates again to the signing identity's separately configured execution RPC for
+exact simulation, Gas, signing, broadcast and receipt convergence. This bounds provider use without making a
+rate-limited public endpoint a live signing dependency.
 
 The fixed-route watcher subscribes only to:
 

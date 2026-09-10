@@ -38,6 +38,12 @@ economic opportunity episodes. Pool events wake affected candidates between prot
 Arbitrary hooks can be observed, but only the current executor's exact PoolKey shape can cross into live preflight. The
 board has no wallet, signer or broadcast path.
 
+An optional managed HTTP lane can accelerate only event-triggered quotes for candidates already matching the deployed
+executor's PoolKey shape. Discovery, log polling, catalog backfill, shadow-only events and periodic coverage remain on
+the public RPC. The lane has restart-durable daily event/logical-call caps and public fallback; it does not change the
+separate exact-preflight or signing authority. See
+[ADR 0036](docs/decisions/0036-targeted-managed-event-quote-rpc.md).
+
 The same loopback service hosts a private business dashboard. Its primary view reports Beijing-day receipt-verified
 execution net, failed Gas, authorized USDG/WETH reinvestment, seven-day history, source separation and recent
 Blockscout-linked transactions. A separate one-shot reporter can send the previous completed Beijing day to a Feishu
