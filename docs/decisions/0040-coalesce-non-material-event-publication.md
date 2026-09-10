@@ -1,6 +1,6 @@
 # ADR 0040: coalesce non-material event publications
 
-- Status: Accepted for implementation; production observation pending
+- Status: Production-observed on release `f0bd3f8c124b611277238278d986f17d5933ce27`
 - Date: 2026-09-10
 
 ## Context
@@ -67,3 +67,20 @@ signing and transaction logic are unchanged.
 
 Restart only the signer-free board on release `3db3cc5a7b8096ce10a2516f7fe63b76f51aacc0`. Do not restart or re-arm the
 dual signer, and retain source evidence, cursor state, managed-RPC budget and all economic ledgers.
+
+## Production follow-up
+
+The first stable observation recorded 214 ordinary event deferrals, zero event-triggered full publications and seven
+periodic full publications. Event post-quote bookkeeping was 18.02 ms p50, while the same 35-request/two-second health
+probe improved from `22 success / 13 timeout` on `0.9.0` to `31 success / 4 timeout` on `0.9.1` across periodic work.
+
+The latest full publication still took 6,504.51 ms, of which the SQLite projection consumed 5,613.50 ms. This confirms
+the coalescing boundary and isolates the next bottleneck; it does not prove a long-run SLO. The signer PID, release,
+authorization and usage were unchanged, the feed remained empty, and no transaction or profit occurred. Full artifact,
+cutover, provider and economic evidence is in
+[the production promotion record](../evidence/2026-09-10-coalesced-event-snapshot-production-promotion.md).
+
+Extended observation found one correctness issue outside the economic snapshot policy: after an event error published
+`DEGRADED`, a successful deferred event did not replace that snapshot, so `/healthz` continued reporting the persisted
+error status until the next periodic full publication even though the live APIs had recovered. ADR 0041 separates
+live-cycle health from intentionally lagged persisted projection health without changing this coalescing decision.

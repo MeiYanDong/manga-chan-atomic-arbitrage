@@ -163,6 +163,48 @@ export function nextCycleDelay(input) {
   return Math.max(input.minimumPauseMs, input.scanIntervalMs - input.cycleDurationMs)
 }
 
+/**
+ * Health follows the most recently completed runtime cycle, not the last
+ * persisted full-board projection. Routine event cycles may intentionally
+ * defer that large projection, so its embedded status can lag recovery from a
+ * transient error until the next periodic publication.
+ *
+ * @param {unknown} status
+ */
+export function boardRuntimeStatusIsReady(status) {
+  return status === 'RUNNING' || status === 'SCANNING'
+}
+
+/**
+ * Resolve the complete loopback health gate as one testable business rule.
+ * Persisted snapshot status is deliberately absent: a coalesced event may
+ * leave that status behind after the live cycle has recovered.
+ *
+ * @param {{
+ *   hasSnapshot: boolean,
+ *   runtimeStatus: unknown,
+ *   cycleAgeMs: number,
+ *   maximumAgeMs: number,
+ *   persistenceRequired: boolean,
+ *   persistenceStatus: unknown,
+ *   persistenceParity: unknown,
+ * }} input
+ */
+export function boardHealthIsReady(input) {
+  const persistenceHealthy =
+    !input.persistenceRequired || (input.persistenceStatus === 'HEALTHY' && input.persistenceParity !== false)
+  return Boolean(
+    input.hasSnapshot &&
+    boardRuntimeStatusIsReady(input.runtimeStatus) &&
+    persistenceHealthy &&
+    Number.isFinite(input.cycleAgeMs) &&
+    input.cycleAgeMs >= 0 &&
+    Number.isFinite(input.maximumAgeMs) &&
+    input.maximumAgeMs >= 0 &&
+    input.cycleAgeMs <= input.maximumAgeMs,
+  )
+}
+
 /** @param {unknown} value */
 export function canonicalAddress(value) {
   if (typeof value !== 'string') return null

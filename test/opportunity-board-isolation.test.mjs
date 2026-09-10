@@ -78,7 +78,12 @@ test('opportunity board stays signer-free while isolating the bounded managed ev
   assert.match(source, /pair\.chain-catalog\.v1/)
   assert.match(source, /INDIVIDUAL_FALLBACK/)
   assert.match(source, /activateUnbatchedTransport/)
-  assert.match(source, /persistenceHealthy/)
+  assert.match(source, /boardHealthIsReady\(\{/)
+  assert.match(source, /runtimeStatus: this\.runtimeHealthStatus/)
+  assert.match(
+    source,
+    /DEFER_NON_MATERIAL_EVENT[\s\S]*this\.persistState\(this\.lastCycleAt\)[\s\S]*this\.runtimeHealthStatus = finalStatus/,
+  )
   assert.match(source, /eventWakeMaxCandidates: this\.config\.eventWakeMaxCandidates/)
   assert.match(source, /rpcLogicalAttempts: this\.config\.rpcLogicalAttempts/)
   assert.match(source, /NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED/)
