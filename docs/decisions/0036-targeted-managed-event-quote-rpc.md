@@ -1,6 +1,6 @@
 # ADR 0036: targeted managed RPC for executor-shaped event quotes
 
-- Status: Accepted for implementation; production promotion pending
+- Status: Accepted and production promoted
 - Date: 2026-09-10
 
 ## Context

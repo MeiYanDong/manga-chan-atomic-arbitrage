@@ -92,11 +92,12 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free board and dual watcher are running release `2f3007ddd9293863a56c0665cde30d6705b9f7a7`. At the
-  `2026-09-10 17:29 CST` readback, the bounded graph contained 67,138 retained source pools, 4,355 multi-pool targets
-  and 3,524 admitted candidates. Only two candidates had fresh quotes; one had gross profit but was net-negative after
-  Gas, and none screened net-positive. Both services had zero restarts and zero OOM events. The board remains
-  loopback-only and has no signer or broadcast path.
+- The signer-free board runs release `6f3418340f91d2da62ef5d97ec50a38be2642e09`; the continuously active dual
+  watcher intentionally remains on accepted release `2f3007ddd9293863a56c0665cde30d6705b9f7a7`. The board-only promotion did
+  not restart or re-arm the signer. At the `2026-09-10 18:55 CST` readback, the board had 3,526 admitted candidates,
+  complete configured-start chain/source catalogs, healthy SQLite parity and zero screened-net-positive rows. Both
+  services had zero automatic restarts and zero OOM events. The board remains loopback-only and has no signer or
+  broadcast path.
 - The dual watcher now freezes the exact typed candidate revision that causes escalation. A concurrent board refresh
   can no longer replace that revision or reject it merely because its quote-block-bound candidate hash disappeared
   from the latest projection. Quote age, canonical block identity, current exact simulation, Gas, nonce, principal,
@@ -110,11 +111,12 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - A proxy-positive quote checkpoints the compact execution feed before slower catalog maintenance, preserving the
   30-second signer horizon without weakening the separate `0.05 USDG` screen and `0.1 USDG` exact-net floors. Dual
   startup reads retry transient RPC failures five times before loading the private credential.
-- The signer-free scanner uses Robinhood's official public RPC. Production event wakes are capped at one candidate,
-  one V4 pair, one proven V3 topology and two amounts per base; observed event-cycle latency still varied from 33.4 to
-  52.4 seconds because the public endpoint is rate-limited. Idle dual-v3 reads only the local feed. A screened candidate
-  escalates to the separately configured managed ChainStack RPC for exact simulation, signing, broadcast and receipt
-  reconciliation; the public endpoint is not the normal execution lane.
+- Broad discovery, log polling, catalog backfill, shadow-only wakes and periodic coverage use Robinhood's official
+  public RPC. Only executor-compatible or executor-shaped event quotes may use the cost-bounded ChainStack HTTP lane,
+  capped at 200 candidates and 4,000 logical calls per UTC day. The first eight natural managed event cycles used 138
+  calls with zero HTTP failure or fallback; request latency was 16.06 ms p50 and 64.41 ms p95, while the latest complete
+  event-to-quote cycle still took 26.855 seconds. Idle dual-v3 reads only the local feed. Only a screened candidate can
+  escalate again to the signing identity for exact simulation, signing, broadcast and receipt convergence.
 - The v0.8.4 event hot path no longer writes the approximately 42 MB source catalog before quoting. Production ordinary
   event samples completed in 29.8-38.4 seconds with 9-13 logical Quoter calls and no event-window catalog mtime change.
   Periodic catalog maintenance can still make loopback reads exceed 15 seconds. The retained hot-cursor metrics also
@@ -169,6 +171,10 @@ See
 [`docs/evidence/2026-09-09-multi-source-graph-production-promotion.md`](docs/evidence/2026-09-09-multi-source-graph-production-promotion.md)
 for the v0.8 graph lineage, artifact gates, controlled v0.8.4 cutover, current source-to-execution funnel and remaining
 public-RPC coverage boundary.
+See
+[`docs/evidence/2026-09-10-targeted-managed-event-rpc-production-promotion.md`](docs/evidence/2026-09-10-targeted-managed-event-rpc-production-promotion.md)
+for the bounded ChainStack event-quote promotion, same-block canary, rejected first health window, automatic rollback,
+successful board-only retry and current receipt-separated economics.
 See
 [`docs/evidence/2026-09-07-event-shadow-local-validation.md`](docs/evidence/2026-09-07-event-shadow-local-validation.md)
 for the signer-free public-RPC optimization trials and final local schema-v3 readback.
