@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted for implementation. Production acceptance still requires the normal release gates, an empty execution feed,
-no unresolved mutation, canonical runtime verification and a controlled signer restart.
+Accepted and production-loaded in v0.8.6. The first post-release live positive trigger has not yet occurred, so the
+new handoff branch is deployed and armed but not receipt- or attempt-verified in production.
 
 ## Context
 
