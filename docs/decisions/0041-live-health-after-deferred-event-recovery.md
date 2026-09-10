@@ -1,6 +1,6 @@
 # ADR 0041: live health after deferred event recovery
 
-- Status: Accepted; production verification pending
+- Status: Production-observed; differential recovery window not naturally observed
 - Date: 2026-09-11
 
 ## Context
@@ -41,3 +41,17 @@ undo the latency improvement.
 Restart only the signer-free opportunity board on release
 `f0bd3f8c124b611277238278d986f17d5933ce27`. Do not restart or re-arm the dual signer, change its authorization, expand
 ChainStack caps or modify wallet state.
+
+## Production follow-up
+
+Release `0d7e75a44b2db403596a0aadffcb7f7c0f7a0e57` was promoted through the reviewed GitHub and independent Linux
+archive gates. Its first completed periodic cycle returned `HEALTHY`, with both live and persisted statuses `RUNNING`,
+complete catalogs, healthy SQLite parity and zero screened-positive rows. Only the board restarted; the signer PID,
+release, authorization and current-authorization usage did not change.
+
+Normal successful events exercised the deferred live-status assignment. A 12-minute natural window then observed one
+`EVENT_ERROR` and 571 deferred events. The error coincided with the next periodic lane, whose full `RUNNING`
+publication completed before the following observed successful events. Production therefore did not expose the exact
+window in which live status is recovered while the persisted status remains `DEGRADED`; that differential branch
+remains deterministic-test evidence, not a claimed natural observation. Full evidence is in
+[the production promotion record](../evidence/2026-09-11-live-health-recovery-production-promotion.md).
