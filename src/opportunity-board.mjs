@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { formatUnits, getAddress, parseUnits } from 'viem'
-import { normalizeApiPool, PoolAdmission } from './pair-catalog.mjs'
+import { isExecutorPoolKeyShape, normalizeApiPool, PoolAdmission } from './pair-catalog.mjs'
 import { classifyRpcError, errorText } from './policy.mjs'
 
 export const BoardStatus = Object.freeze({
@@ -13,6 +13,28 @@ export const BoardStatus = Object.freeze({
   SCREENED_POSITIVE: 'SCREENED_NET_POSITIVE',
   STALE: 'STALE',
 })
+
+export const CandidateWakePriority = Object.freeze({
+  SHADOW_ONLY: 0,
+  EXECUTOR_SHAPE: 1,
+  EXECUTOR_COMPATIBLE: 2,
+})
+
+/**
+ * Prefer candidates that the deployed executor can actually consume without
+ * upgrading structural metadata into execution evidence. Periodic
+ * reconciliation still samples every admitted shadow candidate.
+ *
+ * @param {Record<string, any> | null | undefined} candidate
+ */
+export function candidateWakePriority(candidate) {
+  const pools = Array.isArray(candidate?.pools) ? candidate.pools : []
+  if (pools.filter((pool) => pool.executionAdmission === PoolAdmission.EXECUTOR_COMPATIBLE).length >= 2) {
+    return CandidateWakePriority.EXECUTOR_COMPATIBLE
+  }
+  if (pools.filter(isExecutorPoolKeyShape).length >= 2) return CandidateWakePriority.EXECUTOR_SHAPE
+  return CandidateWakePriority.SHADOW_ONLY
+}
 
 const POSITIVE_STATUS = BoardStatus.SCREENED_POSITIVE
 const EVENT_LEDGER_SCHEMA_VERSION = 2
@@ -188,6 +210,7 @@ export function normalizePairCandidate(token, options) {
     volume24hUsd: finiteNumber(token.combinedVolume24hUsd ?? token.volume24hUsd),
     indicativeGapPct,
     strategyEligibility: 'MULTI_POOL_SHADOW_ELIGIBLE',
+    executorShapePoolCount: pools.filter(isExecutorPoolKeyShape).length,
     liveCompatiblePoolCount: pools.filter((pool) => pool.executionAdmission === PoolAdmission.EXECUTOR_COMPATIBLE)
       .length,
     quarantinedPoolCount: catalogPools.filter((pool) => !pool.shadowEligible).length,

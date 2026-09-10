@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prioritize event wakes by live execution evidence, then the deployed executor's exact PoolKey shape, before
+  shadow-only candidates; preserve freshest-first ordering inside each tier and keep broad shadow coverage in the
+  protected periodic lane. Expose selected-tier counters without changing RPC endpoints, signing authority or economic
+  gates.
 - Keep source-only singleton targets in the durable source catalog without allocating temporary strategy-token rows;
   only targets with a plausible multi-pool route are materialized in the live strategy graph.
 - Bound the protected periodic coverage tranche to one V4 pair, one amount and one V3 route per direction after the

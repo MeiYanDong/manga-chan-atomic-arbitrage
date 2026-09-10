@@ -66,6 +66,23 @@ export function catalogAddress(value) {
   }
 }
 
+/**
+ * Match the exact V4 PoolKey shape supported by the currently deployed
+ * executor. This is structural eligibility only: a successful fixed-block
+ * quote is still required before a pool becomes execution-compatible.
+ *
+ * Accept both raw source/API pairs and normalized catalog pools so discovery,
+ * ranking and hot-wake scheduling share one invariant.
+ *
+ * @param {Record<string, any> | null | undefined} pool
+ */
+export function isExecutorPoolKeyShape(pool) {
+  const hookAddress = catalogAddress(pool?.hookAddress ?? pool?.hooks ?? pool?.poolKey?.hooks)
+  const fee = Number(pool?.fee ?? pool?.poolFee ?? pool?.poolKey?.fee)
+  const tickSpacing = Number(pool?.tickSpacing ?? pool?.poolKey?.tickSpacing)
+  return hookAddress === OFFICIAL_PAIR_HOOK && fee === PAIR_FEE && tickSpacing === PAIR_TICK_SPACING
+}
+
 /** @param {unknown} value */
 function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null

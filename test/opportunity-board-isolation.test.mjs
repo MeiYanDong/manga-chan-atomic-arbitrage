@@ -52,6 +52,10 @@ test('opportunity board source has no signer, wallet-client or hot-transport pat
   assert.match(source, /optimizationMode = eventFastPath[\s\S]*BOUNDED_COVERAGE_SAMPLE/)
   assert.match(source, /this\.client\.simulateContract\(/)
   assert.match(source, /if \(this\.eventQueue\.size > 0\)/)
+  assert.match(source, /priorityForCandidate: \(candidateId\) => candidateWakePriority/)
+  assert.match(source, /eventLiveCompatibleCandidatesSelected/)
+  assert.match(source, /eventExecutorShapeCandidatesSelected/)
+  assert.match(source, /eventShadowOnlyCandidatesSelected/)
   assert.doesNotMatch(source, /pollBeforeDrainingWakeQueue/)
   const cycleStart = source.indexOf('async cycle(options = {})')
   const dependencyBuild = source.indexOf(

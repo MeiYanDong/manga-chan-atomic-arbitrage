@@ -430,6 +430,46 @@ test('wake queue drops expired backlog and prioritizes the freshest affected can
   assert.equal(queue.size, 1)
 })
 
+test('wake queue prioritizes executable candidates before fresher shadow-only work', () => {
+  const queue = new CandidateWakeQueue()
+  queue.offer(
+    { type: ShadowWakeSource.V4_SWAP, poolId: POOL_A, blockNumber: 10n, transactionHash: '0xexecutable', logIndex: 1 },
+    ['executable'],
+    100,
+  )
+  queue.offer(
+    { type: ShadowWakeSource.V4_SWAP, poolId: POOL_B, blockNumber: 11n, transactionHash: '0xshadow', logIndex: 2 },
+    ['shadow'],
+    190,
+  )
+
+  const wake = queue.take(1, {
+    nowMs: 200,
+    maxAgeMs: 200,
+    newestFirst: true,
+    priorityForCandidate: (candidateId) => (candidateId === 'executable' ? 2 : 0),
+  })
+  assert.deepEqual(wake.candidateIds, ['executable'])
+  assert.deepEqual(wake.candidatePriorities, [2])
+  assert.equal(wake.triggers[0].wakePriority, 2)
+  assert.equal(queue.size, 1)
+})
+
+test('wake queue preserves freshest-first ordering inside one execution tier', () => {
+  const queue = new CandidateWakeQueue()
+  const event = { type: ShadowWakeSource.V4_SWAP, poolId: POOL_A, blockNumber: 10n, logIndex: 1 }
+  queue.offer({ ...event, transactionHash: '0xolder' }, ['older'], 100)
+  queue.offer({ ...event, transactionHash: '0xnewer' }, ['newer'], 190)
+
+  const wake = queue.take(1, {
+    nowMs: 200,
+    newestFirst: true,
+    priorityForCandidate: () => 1,
+  })
+  assert.deepEqual(wake.candidateIds, ['newer'])
+  assert.deepEqual(wake.candidatePriorities, [1])
+})
+
 test('hot ranges retain only the latest swap revision per pool while preserving initialize facts', () => {
   const initialize = {
     type: ShadowWakeSource.V4_INITIALIZE,

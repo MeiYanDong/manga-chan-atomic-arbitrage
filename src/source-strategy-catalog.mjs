@@ -1,11 +1,5 @@
 import { getAddress } from 'viem'
-import {
-  OFFICIAL_PAIR_HOOK,
-  PAIR_FEE,
-  PAIR_TICK_SPACING,
-  catalogAddress,
-  mergeApiAndChainCatalog,
-} from './pair-catalog.mjs'
+import { catalogAddress, isExecutorPoolKeyShape, mergeApiAndChainCatalog } from './pair-catalog.mjs'
 import { sourceTargetAddresses } from './source-adapters.mjs'
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
@@ -30,15 +24,6 @@ function validSourcePool(pool) {
     Number.isSafeInteger(Number(pool.fee)) &&
     Number(pool.fee) >= 0 &&
     Number.isSafeInteger(Number(pool.tickSpacing))
-  )
-}
-
-/** @param {Record<string, any>} pair */
-function executorShape(pair) {
-  return (
-    catalogAddress(pair?.hookAddress) === OFFICIAL_PAIR_HOOK &&
-    Number(pair?.poolFee) === PAIR_FEE &&
-    Number(pair?.tickSpacing) === PAIR_TICK_SPACING
   )
 }
 
@@ -169,7 +154,7 @@ function poolRank(pair, originalPoolIds, numeraires, metadata) {
   return {
     original: originalPoolIds.has(poolId) ? 1 : 0,
     declaredNumeraire: numeraires.has(quoteAddress) ? 1 : 0,
-    executorShape: executorShape(pair) ? 1 : 0,
+    executorShape: isExecutorPoolKeyShape(pair) ? 1 : 0,
     knownQuote: metadata.has(quoteAddress) ? 1 : 0,
     block: blockNumber(pair?.sourceBlockNumber),
     poolId,
@@ -315,7 +300,7 @@ export function buildSourceStrategyCatalog(input = {}) {
     multiPoolTargets += 1
     candidatePools += token.pairs.length
     if (originalPairs.length === 0) sourceOnlyMultiPoolTargets += 1
-    if (token.pairs.filter(executorShape).length >= 2) executorShapeMultiPoolTargets += 1
+    if (token.pairs.filter(isExecutorPoolKeyShape).length >= 2) executorShapeMultiPoolTargets += 1
   }
 
   return {
