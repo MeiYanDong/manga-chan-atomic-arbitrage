@@ -44,6 +44,11 @@ the public RPC. The lane has restart-durable daily event/logical-call caps and p
 separate exact-preflight or signing authority. See
 [ADR 0036](docs/decisions/0036-targeted-managed-event-quote-rpc.md).
 
+Event cycles now keep full projection work off the pre-quote path, stage their second amount behind gross/incomplete
+evidence, and screen USDG/WETH lanes concurrently at one fixed block. Phase and RPC operation-class telemetry measures
+the result without retaining endpoint URLs or calldata. See
+[ADR 0037](docs/decisions/0037-adaptive-event-quote-critical-path.md).
+
 The same loopback service hosts a private business dashboard. Its primary view reports Beijing-day receipt-verified
 execution net, failed Gas, authorized USDG/WETH reinvestment, seven-day history, source separation and recent
 Blockscout-linked transactions. A separate one-shot reporter can send the previous completed Beijing day to a Feishu

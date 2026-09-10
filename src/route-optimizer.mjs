@@ -202,6 +202,52 @@ export function selectEventProbeAmounts(configuredProbes, previousAmount, maximu
 }
 
 /**
+ * A no-edge event starts with the smallest executable probe. A previously
+ * actionable lane keeps its last winner in the first stage as well. Remaining
+ * amounts are deferred until the first stage proves a gross edge or returns
+ * incomplete evidence.
+ *
+ * @param {bigint[]} configuredProbes
+ * @param {bigint | null} previousAmount
+ * @param {bigint} maximumAmount
+ * @param {number} limit
+ * @param {boolean} previousActionable
+ */
+export function planEventProbeAmounts(
+  configuredProbes,
+  previousAmount,
+  maximumAmount,
+  limit = 2,
+  previousActionable = false,
+) {
+  const amounts = selectEventProbeAmounts(
+    configuredProbes,
+    previousActionable ? previousAmount : null,
+    maximumAmount,
+    limit,
+  )
+  if (previousActionable) return { initial: amounts, deferred: [] }
+  return { initial: amounts.slice(0, 1), deferred: amounts.slice(1) }
+}
+
+/**
+ * Expand a deferred event probe only when the first amount shows a gross edge
+ * that may become net-positive at a larger size, or when the first amount did
+ * not produce complete numeric evidence. A complete non-positive gross quote
+ * stops the size fan-out.
+ *
+ * @param {Record<string, any>[]} quotes
+ */
+export function eventProbeNeedsExpansion(quotes) {
+  if (!Array.isArray(quotes) || quotes.length === 0) return true
+  return quotes.some((quote) => {
+    if (!quote || quote.error !== undefined) return true
+    const gross = quote.normalizedGrossProfitUsdg ?? quote.grossProfitUsdg
+    return typeof gross !== 'bigint' || gross > 0n
+  })
+}
+
+/**
  * Add at most two midpoint quotes around the best coarse-grid amount. This is
  * deterministic and bounded; it improves sizing without turning every board
  * cycle into an unbounded search.

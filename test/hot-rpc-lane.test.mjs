@@ -4,6 +4,7 @@ import {
   DailyHotRpcBudget,
   HotRpcLaneDecision,
   jsonRpcCallCount,
+  jsonRpcOperationLabels,
   latencyPercentiles,
   selectHotRpcLane,
   utcDayKey,
@@ -125,6 +126,25 @@ test('logical call accounting understands individual and batched JSON-RPC bodies
   )
   assert.equal(jsonRpcCallCount('not-json'), 1)
   assert.equal(jsonRpcCallCount(undefined), 1)
+})
+
+test('managed RPC telemetry classifies operations without retaining request payloads', () => {
+  const labels = jsonRpcOperationLabels(
+    JSON.stringify([
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'eth_call',
+        params: [{ to: '0x00000000000000000000000000000000000000AA', data: '0xsecret' }, 'latest'],
+      },
+      { jsonrpc: '2.0', id: 2, method: 'eth_blockNumber', params: [] },
+      { jsonrpc: '2.0', id: 3, method: 'eth_call', params: [{ to: '0x00000000000000000000000000000000000000bb' }] },
+    ]),
+    { '0x00000000000000000000000000000000000000aa': 'V4_QUOTER' },
+  )
+  assert.deepEqual(labels, ['eth_call:V4_QUOTER', 'eth_blockNumber', 'eth_call:OTHER'])
+  assert.equal(JSON.stringify(labels).includes('0xsecret'), false)
+  assert.deepEqual(jsonRpcOperationLabels('not-json'), ['UNKNOWN'])
 })
 
 test('managed-RPC latency telemetry reports bounded percentile evidence', () => {

@@ -18,6 +18,7 @@ import {
   reconcileHotCursorAnchor,
   retryReadOnly,
   rotatingSlice,
+  runRequiredWithOptional,
   routeShadowEvent,
   selectPeriodicShadowCandidates,
   selectRpcRetryPolicy,
@@ -51,6 +52,48 @@ test('async concurrency gate bounds simultaneous provider requests', async () =>
   assert.deepEqual(await Promise.all(operations), [0, 1, 2, 3, 4])
   assert.equal(peak, 2)
   assert.equal(gate.peak, 2)
+})
+
+test('required and optional quote lanes start together without weakening the required result', async () => {
+  const started = []
+  let releaseRequired
+  let releaseOptional
+  const resultPromise = runRequiredWithOptional(
+    async () => {
+      started.push('required')
+      await new Promise((resolve) => {
+        releaseRequired = resolve
+      })
+      return 'USDG'
+    },
+    async () => {
+      started.push('optional')
+      await new Promise((resolve) => {
+        releaseOptional = resolve
+      })
+      throw new Error('WETH unavailable')
+    },
+  )
+
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.deepEqual(started, ['required', 'optional'])
+  releaseRequired()
+  releaseOptional()
+  const result = await resultPromise
+  assert.equal(result.required, 'USDG')
+  assert.equal(result.optional, null)
+  assert.match(result.optionalError.message, /WETH unavailable/)
+
+  await assert.rejects(
+    runRequiredWithOptional(
+      async () => {
+        throw new Error('USDG unavailable')
+      },
+      async () => 'WETH',
+    ),
+    /USDG unavailable/,
+  )
 })
 
 test('rotating priority slice covers the list without selecting every priority each cycle', () => {

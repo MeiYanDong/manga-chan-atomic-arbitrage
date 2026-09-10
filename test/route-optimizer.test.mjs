@@ -7,6 +7,8 @@ import {
   parseUsdgAmountGrid,
   refinementAmounts,
   selectEventProbeAmounts,
+  planEventProbeAmounts,
+  eventProbeNeedsExpansion,
   selectEventV4RoutePairs,
   selectV4RoutePairs,
   shouldExpandAmountGrid,
@@ -93,6 +95,22 @@ test('event amount probes retain the prior winner plus the smallest affordable p
   assert.deepEqual(selectEventProbeAmounts([10n, 5n], 150n, 100n, 2), [5n, 10n])
   assert.deepEqual(selectEventProbeAmounts([5n, 10n], 5n, 100n, 2), [5n, 10n])
   assert.throws(() => selectEventProbeAmounts([5n], null, 0n, 2), /maximum amount/)
+})
+
+test('event probes defer the second size until a no-edge lane shows a gross signal', () => {
+  assert.deepEqual(planEventProbeAmounts([5n, 10n], 10n, 100n, 2, false), {
+    initial: [5n],
+    deferred: [10n],
+  })
+  assert.deepEqual(planEventProbeAmounts([5n, 10n], 10n, 100n, 2, true), {
+    initial: [10n, 5n],
+    deferred: [],
+  })
+  assert.equal(eventProbeNeedsExpansion([{ grossProfitUsdg: 0n }]), false)
+  assert.equal(eventProbeNeedsExpansion([{ grossProfitUsdg: -1n }]), false)
+  assert.equal(eventProbeNeedsExpansion([{ grossProfitUsdg: 1n }]), true)
+  assert.equal(eventProbeNeedsExpansion([{ error: 'UNQUOTABLE' }]), true)
+  assert.equal(eventProbeNeedsExpansion([]), true)
 })
 
 test('adaptive expansion reacts to edge, previous actionability, priority and periodic coverage', () => {
