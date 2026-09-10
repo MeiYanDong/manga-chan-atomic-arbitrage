@@ -124,6 +124,47 @@ export function initializeIngestNeedsCatalogRefresh(result) {
 }
 
 /**
+ * Capture the source cursors that were durably represented by the last source
+ * projection. Adapter scans may then advance their in-memory cursors while
+ * unrelated hot-poll state continues to persist this checkpoint. A restart
+ * before the next projection commit therefore re-observes facts instead of
+ * skipping an unprojected range.
+ *
+ * @param {{
+ *   chainCatalogNextBlock: bigint,
+ *   sourceAdapterCursors: Record<string, bigint>,
+ *   existingCheckpoint?: {chainCatalogNextBlock: bigint, sourceAdapterCursors: Record<string, bigint>} | null,
+ * }} input
+ */
+export function beginSourceProjectionCheckpoint(input) {
+  if (input.existingCheckpoint) return input.existingCheckpoint
+  return {
+    chainCatalogNextBlock: input.chainCatalogNextBlock,
+    sourceAdapterCursors: { ...input.sourceAdapterCursors },
+  }
+}
+
+/**
+ * Select the only source cursor state that may be written to the general
+ * runtime checkpoint. While a source projection is deferred, that remains the
+ * pre-scan checkpoint; otherwise the current in-memory cursors are durable.
+ *
+ * @param {{
+ *   chainCatalogNextBlock: bigint,
+ *   sourceAdapterCursors: Record<string, bigint>,
+ *   checkpoint?: {chainCatalogNextBlock: bigint, sourceAdapterCursors: Record<string, bigint>} | null,
+ * }} input
+ */
+export function durableSourceProjectionState(input) {
+  return (
+    input.checkpoint || {
+      chainCatalogNextBlock: input.chainCatalogNextBlock,
+      sourceAdapterCursors: input.sourceAdapterCursors,
+    }
+  )
+}
+
+/**
  * Keep catalog network reads, graph rebuilds and large projection writes off
  * an event-triggered quote. A deferred request is consumed by the next
  * protected periodic cycle instead of being cleared or silently dropped.

@@ -23,9 +23,11 @@ import {
   ShadowWakeSource,
   applyPoolMirrorEvent,
   buildShadowDependencyIndex,
+  beginSourceProjectionCheckpoint,
   catalogMaintenancePolicy,
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
+  durableSourceProjectionState,
   initializeIngestNeedsCatalogRefresh,
   nextHotPollDelay,
   planHotLogRange,
@@ -755,6 +757,10 @@ class OpportunityBoard {
       eventAdaptiveProbeExpansions: 0,
       eventDeferredAmountQuotesAvoided: 0,
       eventParallelBaseCycles: 0,
+      sourceCatalogWrites: 0,
+      lastSourceCatalogWriteMs: null,
+      coalescedPeriodicSourceProjectionCycles: 0,
+      lastPeriodicMaintenanceMs: null,
       lastPollTiming: null,
       lastRelevantPollTiming: null,
       eventCycleLatency: {
@@ -816,6 +822,7 @@ class OpportunityBoard {
     this.hotRpcOperationCounts = new Map()
     this.eventCycleLatencySamples = new Map()
     this.catalogRefreshRequested = false
+    this.deferredSourceProjection = null
     this.rpcHttpGate = new AsyncConcurrencyGate(config.rpcHttpConcurrency)
     this.hotRpcHttpGate = new AsyncConcurrencyGate(config.hotRpcHttpConcurrency)
     this.eventLedgerEpoch = persistedState.eventLedgerEpoch || null
@@ -1138,17 +1145,51 @@ class OpportunityBoard {
   }
 
   persistState(updatedAt = new Date().toISOString()) {
+    const durableSourceState = durableSourceProjectionState({
+      chainCatalogNextBlock: this.chainCatalogNextBlock,
+      sourceAdapterCursors: this.sourceAdapterCursors,
+      checkpoint: this.deferredSourceProjection,
+    })
     writeJsonAtomic(this.statePath, {
       cursor: this.cursor,
       cycleNumber: this.cycleNumber,
-      chainCatalogNextBlock: this.chainCatalogNextBlock.toString(),
+      chainCatalogNextBlock: durableSourceState.chainCatalogNextBlock.toString(),
       hotCursor: this.hotCursor,
       eventLedgerEpoch: this.eventLedgerEpoch,
       sourceAdapterCursors: Object.fromEntries(
-        Object.entries(this.sourceAdapterCursors).map(([adapterId, cursor]) => [adapterId, cursor.toString()]),
+        Object.entries(durableSourceState.sourceAdapterCursors).map(([adapterId, cursor]) => [
+          adapterId,
+          cursor.toString(),
+        ]),
       ),
       updatedAt,
     })
+  }
+
+  beginSourceProjectionDeferral() {
+    this.deferredSourceProjection = beginSourceProjectionCheckpoint({
+      chainCatalogNextBlock: this.chainCatalogNextBlock,
+      sourceAdapterCursors: this.sourceAdapterCursors,
+      existingCheckpoint: this.deferredSourceProjection,
+    })
+  }
+
+  /** @param {bigint} safeHead */
+  commitDeferredSourceProjection(safeHead) {
+    if (!this.deferredSourceProjection) throw new Error('source projection commit requires a durable cursor checkpoint')
+    const catalog = this.writeSourceCatalog(safeHead)
+    const checkpoint = this.deferredSourceProjection
+    this.deferredSourceProjection = null
+    try {
+      this.persistState()
+    } catch (error) {
+      // The new projection may already exist, but its cursors are not durable
+      // until state.json succeeds. Restore the old checkpoint so later hot
+      // polls cannot accidentally commit an unacknowledged source range.
+      this.deferredSourceProjection = checkpoint
+      throw error
+    }
+    return catalog
   }
 
   sourceCatalogProjection(safeHead = this.sourceCatalogSafeHead, generatedAt = new Date().toISOString()) {
@@ -1190,16 +1231,21 @@ class OpportunityBoard {
   }
 
   writeSourceCatalog(safeHead = this.sourceCatalogSafeHead) {
+    const startedAt = performance.now()
     this.sourceCatalogSafeHead = safeHead === null ? null : String(safeHead)
     const catalog = this.sourceCatalogProjection(this.sourceCatalogSafeHead)
     const persisted = writeStableJsonAtomic(this.sourceCatalogPath, catalog)
     this.latestSourceCatalog = catalog
     this.latestSourceCatalogHash = persisted.hash
     this.latestSourceCatalogBytes = persisted.bytes
+    if (this.eventMetrics) {
+      this.eventMetrics.sourceCatalogWrites += 1
+      this.eventMetrics.lastSourceCatalogWriteMs = Number((performance.now() - startedAt).toFixed(2))
+    }
     return catalog
   }
 
-  async refreshCatalog({ full }) {
+  async refreshCatalog({ full, deferProjection = false }) {
     const pairAttemptAt = new Date().toISOString()
     this.adapterStates['pair.catalog.v1'] = markAdapterAttempt(this.adapterStates['pair.catalog.v1'], pairAttemptAt)
     let pairSupplementError = null
@@ -1385,7 +1431,7 @@ class OpportunityBoard {
     this.refreshDopplerVisibility()
     this.rebuildCatalogFromSources()
     this.lastCatalogAt = new Date().toISOString()
-    this.writeSourceCatalog()
+    if (!deferProjection) this.writeSourceCatalog()
   }
 
   refreshSourceTargetIndex() {
@@ -1551,8 +1597,8 @@ class OpportunityBoard {
     })
   }
 
-  /** @param {bigint} safeHead */
-  async advanceChainCatalog(safeHead) {
+  /** @param {bigint} safeHead @param {{deferProjection?: boolean}} [options] */
+  async advanceChainCatalog(safeHead, { deferProjection = false } = {}) {
     const adapterId = 'pair.chain-catalog.v1'
     const attemptAt = new Date().toISOString()
     this.adapterStates[adapterId] = markAdapterAttempt(this.adapterStates[adapterId], attemptAt)
@@ -1609,13 +1655,14 @@ class OpportunityBoard {
       attemptAt,
     )
     if (discoveredGenericPools > 0) this.refreshDopplerVisibility()
-    this.writeSourceCatalog(safeHead)
+    if (!deferProjection) this.writeSourceCatalog(safeHead)
     if (discoveredPools > 0) this.rebuildCatalogFromSources()
-    this.persistState(lastBatch.at)
+    if (!deferProjection) this.persistState(lastBatch.at)
     return lastBatch
   }
 
-  async advanceLaunchSourceCatalog(safeHead) {
+  /** @param {bigint} safeHead @param {{deferProjection?: boolean}} [options] */
+  async advanceLaunchSourceCatalog(safeHead, { deferProjection = false } = {}) {
     const definitions = [
       {
         adapterId: 'long.launcher.v1',
@@ -1742,13 +1789,15 @@ class OpportunityBoard {
       this.refreshSourceTargetIndex()
       this.refreshDopplerVisibility()
     }
-    this.writeSourceCatalog(safeHead)
-    this.persistState()
+    if (!deferProjection) {
+      this.writeSourceCatalog(safeHead)
+      this.persistState()
+    }
     return { rpcLogCalls, logsSeen, observations, safeHead: safeHead.toString() }
   }
 
-  /** @param {bigint} safeHead */
-  async advanceSourcePoolCatalog(safeHead) {
+  /** @param {bigint} safeHead @param {{deferProjection?: boolean}} [options] */
+  async advanceSourcePoolCatalog(safeHead, { deferProjection = false } = {}) {
     const adapterId = 'uniswap-v4.pool-manager.v1'
     let rpcLogCalls = 0
     let logsSeen = 0
@@ -1816,9 +1865,9 @@ class OpportunityBoard {
       safeHead: safeHead.toString(),
     }
     this.refreshDopplerVisibility()
-    this.writeSourceCatalog(safeHead)
+    if (!deferProjection) this.writeSourceCatalog(safeHead)
     if (discoveredPools > 0) this.rebuildCatalogFromSources()
-    this.persistState()
+    if (!deferProjection) this.persistState()
     return result
   }
 
@@ -3211,7 +3260,8 @@ class OpportunityBoard {
     const { forceCatalog = false, eventWake = null } = options
     if (this.inCycle) return null
     const cycleStartedAtMs = Date.now()
-    let eventPhaseStartedAt = performance.now()
+    const cycleStartedAt = performance.now()
+    let eventPhaseStartedAt = cycleStartedAt
     const eventTiming = eventWake
       ? {
           detectedToCycleStartMs: eventWake.observedAtMs ? Math.max(0, cycleStartedAtMs - eventWake.observedAtMs) : 0,
@@ -3229,6 +3279,11 @@ class OpportunityBoard {
     const quoterCallsBefore = this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls
     let selectedCount = 0
     try {
+      // A periodic cycle owns source projection maintenance. Keep its current
+      // durable cursors frozen until every adapter has contributed to one
+      // combined atomic projection. Event cycles never create a checkpoint,
+      // but respect an unfinished one left by an interrupted periodic cycle.
+      if (!eventWake) this.beginSourceProjectionDeferral()
       // Event wakes must never perform network catalog fetches, full graph
       // rebuilds or large projection writes before their fixed-block quote.
       // The next protected periodic lane consumes every deferred refresh.
@@ -3241,7 +3296,7 @@ class OpportunityBoard {
         catalogIntervalMs: this.config.catalogIntervalMs,
       })
       if (metadataDue) {
-        await this.refreshCatalog({ full: fullCatalogDue })
+        await this.refreshCatalog({ full: fullCatalogDue, deferProjection: true })
         this.catalogRefreshRequested = false
       }
       // Periodic work may change catalog metadata before quoting, so it
@@ -3340,19 +3395,19 @@ class OpportunityBoard {
       }
       if (!eventWake) {
         try {
-          await this.advanceLaunchSourceCatalog(fixed.blockNumber)
+          await this.advanceLaunchSourceCatalog(fixed.blockNumber, { deferProjection: true })
         } catch {
-          this.writeSourceCatalog(fixed.blockNumber)
+          // Adapter state already records its own bounded error evidence.
         }
         this.throwIfPeriodicPreempted()
         try {
-          await this.advanceSourcePoolCatalog(fixed.blockNumber)
+          await this.advanceSourcePoolCatalog(fixed.blockNumber, { deferProjection: true })
         } catch {
-          this.writeSourceCatalog(fixed.blockNumber)
+          // Adapter state already records its own bounded error evidence.
         }
         this.throwIfPeriodicPreempted()
         try {
-          await this.advanceChainCatalog(fixed.blockNumber)
+          await this.advanceChainCatalog(fixed.blockNumber, { deferProjection: true })
           this.chainCatalogLastError = null
         } catch (error) {
           this.chainCatalogLastError = publicError(error)
@@ -3360,9 +3415,14 @@ class OpportunityBoard {
             this.adapterStates['pair.chain-catalog.v1'],
             error,
           )
-          this.writeSourceCatalog(fixed.blockNumber)
         }
         this.throwIfPeriodicPreempted()
+        // All source adapters have advanced against the same fixed block. One
+        // atomic projection now commits their combined state and cursors;
+        // errors stay explicit in their independent adapter states.
+        this.commitDeferredSourceProjection(fixed.blockNumber)
+        this.eventMetrics.coalescedPeriodicSourceProjectionCycles += 1
+        this.eventMetrics.lastPeriodicMaintenanceMs = Number((performance.now() - cycleStartedAt).toFixed(2))
       }
       this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
       markEventPhase('postQuoteBookkeepingMs')

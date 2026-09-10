@@ -6,10 +6,12 @@ import {
   FixedBlockPromiseCache,
   ShadowWakeSource,
   applyPoolMirrorEvent,
+  beginSourceProjectionCheckpoint,
   buildShadowDependencyIndex,
   catalogMaintenancePolicy,
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
+  durableSourceProjectionState,
   initializeIngestNeedsCatalogRefresh,
   nextHotPollDelay,
   planHotLogRange,
@@ -119,6 +121,42 @@ test('only source-relevant Initialize ingestion requests a strategy catalog rebu
     () => initializeIngestNeedsCatalogRefresh({ discoveredPools: -1, discoveredGenericPools: 0 }),
     /non-negative/,
   )
+})
+
+test('deferred source projection keeps pre-scan cursors durable until the projection commits', () => {
+  const sourceAdapterCursors = { long: 101n, doppler: 202n }
+  const checkpoint = beginSourceProjectionCheckpoint({
+    chainCatalogNextBlock: 303n,
+    sourceAdapterCursors,
+  })
+
+  sourceAdapterCursors.long = 401n
+  sourceAdapterCursors.doppler = 502n
+  const deferred = durableSourceProjectionState({
+    chainCatalogNextBlock: 603n,
+    sourceAdapterCursors,
+    checkpoint,
+  })
+  assert.deepEqual(deferred, {
+    chainCatalogNextBlock: 303n,
+    sourceAdapterCursors: { long: 101n, doppler: 202n },
+  })
+  assert.equal(
+    beginSourceProjectionCheckpoint({
+      chainCatalogNextBlock: 703n,
+      sourceAdapterCursors,
+      existingCheckpoint: checkpoint,
+    }),
+    checkpoint,
+  )
+
+  const committed = durableSourceProjectionState({
+    chainCatalogNextBlock: 603n,
+    sourceAdapterCursors,
+    checkpoint: null,
+  })
+  assert.equal(committed.chainCatalogNextBlock, 603n)
+  assert.deepEqual(committed.sourceAdapterCursors, { long: 401n, doppler: 502n })
 })
 
 test('event quotes defer every catalog refresh to the next periodic lane', () => {
