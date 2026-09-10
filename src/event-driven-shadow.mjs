@@ -4,6 +4,14 @@ export const ShadowWakeSource = Object.freeze({
   V3_SWAP: 'V3_SWAP',
 })
 
+export const EventCyclePublication = Object.freeze({
+  PERIODIC_FINAL: 'PERIODIC_FINAL',
+  REUSE_POSITIVE_CHECKPOINT: 'REUSE_POSITIVE_CHECKPOINT',
+  EVENT_EXECUTION_FEED_CLEAR: 'EVENT_EXECUTION_FEED_CLEAR',
+  EVENT_EPISODE_RECONCILIATION: 'EVENT_EPISODE_RECONCILIATION',
+  DEFER_NON_MATERIAL_EVENT: 'DEFER_NON_MATERIAL_EVENT',
+})
+
 export class FixedBlockPromiseCache {
   constructor() {
     this.blockNumber = null
@@ -162,6 +170,37 @@ export function durableSourceProjectionState(input) {
       sourceAdapterCursors: input.sourceAdapterCursors,
     }
   )
+}
+
+/**
+ * Full-board persistence is proportional to the complete admitted universe,
+ * while an event wake updates at most a bounded candidate set. Keep immediate
+ * durability for executable-positive evidence and for clearing a candidate
+ * that was present in the signer feed; ordinary negative refreshes may be
+ * coalesced into the next mandatory periodic projection.
+ *
+ * @param {{
+ *   eventWake: boolean,
+ *   positiveCheckpointPublished: boolean,
+ *   selectedWasInExecutionFeed: boolean,
+ *   selectedHadOpenEconomicEpisode: boolean,
+ * }} input
+ */
+export function eventCyclePublicationPolicy(input) {
+  const flags = [
+    input.eventWake,
+    input.positiveCheckpointPublished,
+    input.selectedWasInExecutionFeed,
+    input.selectedHadOpenEconomicEpisode,
+  ]
+  if (!flags.every((value) => typeof value === 'boolean')) {
+    throw new Error('event publication inputs must be boolean')
+  }
+  if (!input.eventWake) return EventCyclePublication.PERIODIC_FINAL
+  if (input.positiveCheckpointPublished) return EventCyclePublication.REUSE_POSITIVE_CHECKPOINT
+  if (input.selectedWasInExecutionFeed) return EventCyclePublication.EVENT_EXECUTION_FEED_CLEAR
+  if (input.selectedHadOpenEconomicEpisode) return EventCyclePublication.EVENT_EPISODE_RECONCILIATION
+  return EventCyclePublication.DEFER_NON_MATERIAL_EVENT
 }
 
 /**

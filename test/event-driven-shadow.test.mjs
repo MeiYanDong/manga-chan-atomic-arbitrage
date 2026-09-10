@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   AsyncConcurrencyGate,
   CandidateWakeQueue,
+  EventCyclePublication,
   FixedBlockPromiseCache,
   ShadowWakeSource,
   applyPoolMirrorEvent,
@@ -12,6 +13,7 @@ import {
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
   durableSourceProjectionState,
+  eventCyclePublicationPolicy,
   initializeIngestNeedsCatalogRefresh,
   nextHotPollDelay,
   planHotLogRange,
@@ -157,6 +159,64 @@ test('deferred source projection keeps pre-scan cursors durable until the projec
   })
   assert.equal(committed.chainCatalogNextBlock, 603n)
   assert.deepEqual(committed.sourceAdapterCursors, { long: 401n, doppler: 502n })
+})
+
+test('event publication coalesces only non-material refreshes', () => {
+  assert.equal(
+    eventCyclePublicationPolicy({
+      eventWake: false,
+      positiveCheckpointPublished: false,
+      selectedWasInExecutionFeed: false,
+      selectedHadOpenEconomicEpisode: false,
+    }),
+    EventCyclePublication.PERIODIC_FINAL,
+  )
+  assert.equal(
+    eventCyclePublicationPolicy({
+      eventWake: true,
+      positiveCheckpointPublished: true,
+      selectedWasInExecutionFeed: false,
+      selectedHadOpenEconomicEpisode: false,
+    }),
+    EventCyclePublication.REUSE_POSITIVE_CHECKPOINT,
+  )
+  assert.equal(
+    eventCyclePublicationPolicy({
+      eventWake: true,
+      positiveCheckpointPublished: false,
+      selectedWasInExecutionFeed: true,
+      selectedHadOpenEconomicEpisode: false,
+    }),
+    EventCyclePublication.EVENT_EXECUTION_FEED_CLEAR,
+  )
+  assert.equal(
+    eventCyclePublicationPolicy({
+      eventWake: true,
+      positiveCheckpointPublished: false,
+      selectedWasInExecutionFeed: false,
+      selectedHadOpenEconomicEpisode: true,
+    }),
+    EventCyclePublication.EVENT_EPISODE_RECONCILIATION,
+  )
+  assert.equal(
+    eventCyclePublicationPolicy({
+      eventWake: true,
+      positiveCheckpointPublished: false,
+      selectedWasInExecutionFeed: false,
+      selectedHadOpenEconomicEpisode: false,
+    }),
+    EventCyclePublication.DEFER_NON_MATERIAL_EVENT,
+  )
+  assert.throws(
+    () =>
+      eventCyclePublicationPolicy({
+        eventWake: /** @type {any} */ ('yes'),
+        positiveCheckpointPublished: false,
+        selectedWasInExecutionFeed: false,
+        selectedHadOpenEconomicEpisode: false,
+      }),
+    /must be boolean/,
+  )
 })
 
 test('event quotes defer every catalog refresh to the next periodic lane', () => {

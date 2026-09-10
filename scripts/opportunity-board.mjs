@@ -19,6 +19,7 @@ import {
 import {
   AsyncConcurrencyGate,
   CandidateWakeQueue,
+  EventCyclePublication,
   FixedBlockPromiseCache,
   ShadowWakeSource,
   applyPoolMirrorEvent,
@@ -28,6 +29,7 @@ import {
   capEventWaitForReconciliation,
   coalesceLatestSwapPerPool,
   durableSourceProjectionState,
+  eventCyclePublicationPolicy,
   initializeIngestNeedsCatalogRefresh,
   nextHotPollDelay,
   planHotLogRange,
@@ -45,12 +47,14 @@ import {
 import {
   BoardStatus,
   CandidateWakePriority,
+  EpisodeState,
   appendEvents,
   buildBoardSnapshot,
   candidateWakePriority,
   catalogIsComplete,
   chooseBestBaseOpportunity,
   compactExecutionBoardSnapshot,
+  isExecutionFeedCandidate,
   nextCycleDelay,
   normalizePairCandidate,
   normalizePersistedBoardSnapshot,
@@ -585,6 +589,10 @@ class OpportunityBoard {
       this.store.readCurrentSnapshot() || readJson(this.snapshotPath),
     )
     this.snapshot = this.previousSnapshot
+    const persistedExecutionFeed = readJson(this.executionSnapshotPath)
+    this.executionFeedCandidateIds = new Set(
+      (persistedExecutionFeed?.items || []).filter((item) => isExecutionFeedCandidate(item)).map((item) => item.id),
+    )
     this.observations = new Map(
       (this.previousSnapshot?.items || [])
         .filter((item) => item.quotedAt)
@@ -761,6 +769,15 @@ class OpportunityBoard {
       lastSourceCatalogWriteMs: null,
       coalescedPeriodicSourceProjectionCycles: 0,
       lastPeriodicMaintenanceMs: null,
+      fullSnapshotPublications: 0,
+      eventFullSnapshotPublications: 0,
+      eventDeferredFullSnapshotPublications: 0,
+      eventPositiveCheckpointReuses: 0,
+      eventExecutionFeedClearPublications: 0,
+      eventEpisodeReconciliationPublications: 0,
+      periodicScanningPublicationsDeferred: 0,
+      lastDeferredEventPublicationAt: null,
+      lastFullPublicationTiming: null,
       lastPollTiming: null,
       lastRelevantPollTiming: null,
       eventCycleLatency: {
@@ -3126,7 +3143,30 @@ class OpportunityBoard {
     return { blockNumber, block, gasPrice, nativeMarkIn, nativeMark }
   }
 
-  publish(status) {
+  /** @param {Record<string, any>} snapshot */
+  publishExecutionFeed(snapshot) {
+    const projection = writeExecutionBoardSnapshot(this.executionSnapshotPath, snapshot)
+    this.executionFeedCandidateIds = new Set((projection?.items || []).map((item) => item.id))
+    return projection
+  }
+
+  /** @param {string} status @param {{reason?: string}} [options] */
+  publish(status, options = {}) {
+    const reason = options.reason || 'CYCLE_FINAL'
+    const startedAt = performance.now()
+    let phaseStartedAt = startedAt
+    const timing = { reason, startedAt: new Date().toISOString() }
+    const markPhase = (name) => {
+      const now = performance.now()
+      timing[name] = Number((now - phaseStartedAt).toFixed(2))
+      phaseStartedAt = now
+    }
+    this.eventMetrics.fullSnapshotPublications += 1
+    if (reason.startsWith('EVENT_')) this.eventMetrics.eventFullSnapshotPublications += 1
+    if (reason === 'EVENT_EXECUTION_FEED_CLEAR') this.eventMetrics.eventExecutionFeedClearPublications += 1
+    if (reason === 'EVENT_EPISODE_RECONCILIATION') {
+      this.eventMetrics.eventEpisodeReconciliationPublications += 1
+    }
     const generatedAt = new Date().toISOString()
     const snapshot = buildBoardSnapshot({
       generatedAt,
@@ -3136,6 +3176,7 @@ class OpportunityBoard {
       sourceState: this.sourceState(),
       serviceState: this.serviceState(status),
     })
+    markPhase('buildSnapshotMs')
     const reconciled = reconcileOpportunityEpisodes(this.previousSnapshot, snapshot)
     if (!this.eventLedgerEpoch) {
       this.eventLedgerEpoch = generatedAt
@@ -3149,12 +3190,16 @@ class OpportunityBoard {
     }
     reconciled.snapshot.eventLedger.epochStartedAt = this.eventLedgerEpoch
     reconciled.snapshot.health.persistence = this.persistenceState
+    markPhase('reconcileEpisodesMs')
     // The admitted graph can contain thousands of candidates. Stream the
     // durable compatibility snapshot so publication never allocates a second
     // snapshot-sized pretty-JSON string inside the board cgroup.
     writeStableJsonAtomic(this.snapshotPath, reconciled.snapshot)
-    writeExecutionBoardSnapshot(this.executionSnapshotPath, reconciled.snapshot)
+    markPhase('compatibilitySnapshotMs')
+    this.publishExecutionFeed(reconciled.snapshot)
+    markPhase('executionFeedMs')
     appendEvents(this.eventsPath, reconciled.events)
+    markPhase('eventLedgerMs')
     try {
       const committed = this.store.persistProjection({
         snapshot: reconciled.snapshot,
@@ -3179,10 +3224,30 @@ class OpportunityBoard {
         parity: false,
       }
     }
+    markPhase('sqliteProjectionMs')
     this.persistState(generatedAt)
+    markPhase('runtimeStateMs')
     this.previousSnapshot = reconciled.snapshot
     this.snapshot = reconciled.snapshot
+    timing.totalMs = Number((performance.now() - startedAt).toFixed(2))
+    this.eventMetrics.lastFullPublicationTiming = timing
     return reconciled
+  }
+
+  /** @param {string} status @param {string} generatedAt */
+  deferredEventCycleResult(status, generatedAt) {
+    return {
+      snapshot: {
+        health: { status },
+        generatedAt,
+        coverage: this.snapshot?.coverage || {
+          candidateTokens: this.catalog.length,
+          freshQuotedTokens: 0,
+          counts: { [BoardStatus.SCREENED_POSITIVE]: 0 },
+        },
+      },
+      events: [],
+    }
   }
 
   /** @param {{forceCatalog?: boolean, eventWake?: Record<string, any> | null}} [options] */
@@ -3278,6 +3343,9 @@ class OpportunityBoard {
     this.v3ShortlistRefreshBudget = eventWake ? 0 : this.config.v3ShortlistRefreshesPerCycle
     const quoterCallsBefore = this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls
     let selectedCount = 0
+    let selectedWasInExecutionFeed = false
+    let selectedHadOpenEconomicEpisode = false
+    let positiveCheckpoint = null
     try {
       // A periodic cycle owns source projection maintenance. Keep its current
       // durable cursors frozen until every adapter has contributed to one
@@ -3299,14 +3367,14 @@ class OpportunityBoard {
         await this.refreshCatalog({ full: fullCatalogDue, deferProjection: true })
         this.catalogRefreshRequested = false
       }
-      // Periodic work may change catalog metadata before quoting, so it
-      // refreshes routing and publishes SCANNING. Event work cannot change the
-      // catalog here and already starts from the dependency index committed by
-      // the previous cycle. Do not serialize a multi-thousand-row projection
-      // ahead of the latency-sensitive fixed-block quote.
+      // Periodic work may change catalog metadata before quoting, so refresh
+      // routing now. Its non-economic SCANNING status does not justify writing
+      // the complete board before the same cycle's final durable projection.
+      // Event work cannot change the catalog here and starts from the index
+      // committed by the previous completed cycle.
       if (!eventWake) {
         this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
-        this.publish('SCANNING')
+        this.eventMetrics.periodicScanningPublicationsDeferred += 1
       }
       markEventPhase('preFixedBlockMs')
       const fixed = await this.fixedBlock()
@@ -3328,6 +3396,11 @@ class OpportunityBoard {
         eventWake ? null : cyclePolicy?.maxCandidates || this.config.protectedPeriodicCandidates,
       )
       selectedCount = selected.length
+      selectedWasInExecutionFeed = selected.some((candidate) => this.executionFeedCandidateIds.has(candidate.id))
+      const snapshotItemsById = new Map((this.snapshot?.items || []).map((item) => [item.id, item]))
+      selectedHadOpenEconomicEpisode = selected.some(
+        (candidate) => snapshotItemsById.get(candidate.id)?.economicEpisode?.state === EpisodeState.OPEN,
+      )
       const triggerByCandidate = new Map((eventWake?.triggers || []).map((trigger) => [trigger.candidateId, trigger]))
       markEventPhase('candidateSelectionMs')
       await mapLimit(this.config.quoteConcurrency, selected, async (candidate) => {
@@ -3390,8 +3463,12 @@ class OpportunityBoard {
         this.eventMetrics.lastExecutionFeedCheckpointCandidateCount = executionCheckpointCandidateCount
         // Keep this checkpoint before all catalog maintenance. A valid screen
         // must reach the signer feed while its fixed-block quote is still
-        // inside the watcher's execution-freshness horizon.
-        this.publish('SCANNING')
+        // inside the watcher's execution-freshness horizon. Event cycles have
+        // no remaining catalog work, so this is also their only full publish.
+        positiveCheckpoint = this.publish(
+          eventWake ? (this.catalogComplete ? 'RUNNING' : 'DEGRADED_PARTIAL_CATALOG') : 'SCANNING',
+          { reason: eventWake ? 'EVENT_POSITIVE_CHECKPOINT' : 'PERIODIC_POSITIVE_CHECKPOINT' },
+        )
       }
       if (!eventWake) {
         try {
@@ -3444,7 +3521,31 @@ class OpportunityBoard {
       this.cycleNumber += 1
       this.consecutiveErrors = 0
       this.lastError = null
-      return this.publish(this.catalogComplete ? 'RUNNING' : 'DEGRADED_PARTIAL_CATALOG')
+      const finalStatus = this.catalogComplete ? 'RUNNING' : 'DEGRADED_PARTIAL_CATALOG'
+      const publication = eventCyclePublicationPolicy({
+        eventWake: eventWake !== null,
+        positiveCheckpointPublished: positiveCheckpoint !== null,
+        selectedWasInExecutionFeed,
+        selectedHadOpenEconomicEpisode,
+      })
+      if (publication === EventCyclePublication.REUSE_POSITIVE_CHECKPOINT) {
+        this.eventMetrics.eventPositiveCheckpointReuses += 1
+        this.persistState(this.lastCycleAt)
+        return positiveCheckpoint
+      }
+      if (publication === EventCyclePublication.DEFER_NON_MATERIAL_EVENT) {
+        this.eventMetrics.eventDeferredFullSnapshotPublications += 1
+        this.eventMetrics.lastDeferredEventPublicationAt = this.lastCycleAt
+        this.persistState(this.lastCycleAt)
+        return this.deferredEventCycleResult(finalStatus, this.lastCycleAt)
+      }
+      if (publication === EventCyclePublication.EVENT_EXECUTION_FEED_CLEAR) {
+        return this.publish(finalStatus, { reason: 'EVENT_EXECUTION_FEED_CLEAR' })
+      }
+      if (publication === EventCyclePublication.EVENT_EPISODE_RECONCILIATION) {
+        return this.publish(finalStatus, { reason: 'EVENT_EPISODE_RECONCILIATION' })
+      }
+      return this.publish(finalStatus, { reason: 'PERIODIC_FINAL' })
     } catch (error) {
       this.lastCycleAt = new Date().toISOString()
       this.cycleNumber += 1
@@ -3459,11 +3560,11 @@ class OpportunityBoard {
         this.eventMetrics.lastCycleQuoterCalls = cycleQuoterCalls
         this.eventMetrics.reconciliationQuoterCalls += cycleQuoterCalls
         this.lastError = null
-        return this.publish('SCANNING')
+        return this.publish('SCANNING', { reason: 'PERIODIC_PREEMPTED' })
       }
       this.consecutiveErrors += 1
       this.lastError = publicError(error)
-      return this.publish('DEGRADED')
+      return this.publish('DEGRADED', { reason: eventWake ? 'EVENT_ERROR' : 'PERIODIC_ERROR' })
     } finally {
       this.inCycle = false
     }
@@ -3674,7 +3775,7 @@ class OpportunityBoard {
   async watch() {
     if (!this.client) throw new Error('MANGA_BOARD_RPC_URL is required for watch mode')
     fs.mkdirSync(this.config.runDir, { recursive: true, mode: 0o700 })
-    if (this.snapshot) writeExecutionBoardSnapshot(this.executionSnapshotPath, this.snapshot)
+    if (this.snapshot) this.publishExecutionFeed(this.snapshot)
     await this.startHttp()
     console.log(
       JSON.stringify({

@@ -1,6 +1,6 @@
 # ADR 0039: coalesce periodic source projection commits
 
-- Status: Accepted for implementation; production observation pending
+- Status: Production-observed on release `3db3cc5a7b8096ce10a2516f7fe63b76f51aacc0`
 - Date: 2026-09-10
 
 ## Context
@@ -51,3 +51,17 @@ quote limits, profit floors, capital limits, authorization, signing and transact
 
 Restart only the signer-free board on release `55df95ed9d152bd66bfe273cbee578caccb456b8`. Do not restart or re-arm the
 dual signer, and retain source evidence, cursors, quote-budget state and all economic ledgers.
+
+## Production follow-up
+
+The first completed cycle reported exactly one source-catalog write in 1,123.37 ms. The second reported one additional
+write in 898.11 ms, and a later third cycle reported one additional write in 983.21 ms. Both configured-start catalogs,
+SQLite parity and service health remained complete/healthy; the board and signer retained zero restarts and the signer
+PID/release did not change. These observations confirm one-write activation but are not a long-run latency guarantee.
+
+Full periodic maintenance still took 59.33 seconds during startup and 31.90–33.56 seconds in the next two samples. A
+35-request loopback probe returned 22 responses and timed out at two seconds 13 times. The remaining full snapshot was
+23,753,213 bytes and its SQLite read model had reached 515,616,768 bytes. This shows the next bottleneck is full-board
+publication, not source-catalog write amplification; it led to
+[ADR 0040](0040-coalesce-non-material-event-publication.md). Full evidence is in
+[the production promotion record](../evidence/2026-09-10-coalesced-periodic-source-projection-production-promotion.md).
