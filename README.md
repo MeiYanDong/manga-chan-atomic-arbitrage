@@ -110,12 +110,12 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free board runs release `f0bd3f8c124b611277238278d986f17d5933ce27`; the continuously active dual
+- The signer-free board runs release `0d7e75a44b2db403596a0aadffcb7f7c0f7a0e57`; the continuously active dual
   watcher intentionally remains on accepted release `2f3007ddd9293863a56c0665cde30d6705b9f7a7`. The board-only promotion did
-  not restart or re-arm the signer. At the `2026-09-10 23:38 CST` readback, the board had 3,563 admitted candidates,
-  complete configured-start chain/source catalogs, healthy SQLite parity and zero screened-net-positive rows. Both
-  services had zero automatic restarts and zero OOM events. The board remains loopback-only and has no signer or
-  broadcast path.
+  not restart or re-arm the signer. At the `2026-09-11 00:33 CST` readback, the board had 3,569 admitted candidates,
+  separate live/persisted `RUNNING` statuses, complete configured-start chain/source catalogs, healthy SQLite parity
+  and zero screened-net-positive rows. Both services had zero automatic restarts. The board remains loopback-only and
+  has no signer or broadcast path.
 - The dual watcher now freezes the exact typed candidate revision that causes escalation. A concurrent board refresh
   can no longer replace that revision or reject it merely because its quote-block-bound candidate hash disappeared
   from the latest projection. Quote age, canonical block identity, current exact simulation, Gas, nonce, principal,
