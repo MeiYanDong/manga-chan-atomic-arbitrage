@@ -55,6 +55,13 @@ cursors until the projection and runtime checkpoint commit in order. A crash may
 silently skip an unprojected range. See [ADR 0038](docs/decisions/0038-cache-validated-source-target-index.md) and
 [ADR 0039](docs/decisions/0039-coalesce-periodic-source-projection.md).
 
+Routine event cycles no longer rewrite the complete dashboard and SQLite projection for a one-candidate negative
+refresh. They remain in memory until the next mandatory periodic snapshot; new positive evidence and removal of a
+previously signer-visible positive or reconciliation of an open economic episode still publish immediately. This gives
+execution-relevant and economic evidence priority while bounding non-economic dashboard lag to one reconciliation
+interval. See
+[ADR 0040](docs/decisions/0040-coalesce-non-material-event-publication.md).
+
 The same loopback service hosts a private business dashboard. Its primary view reports Beijing-day receipt-verified
 execution net, failed Gas, authorized USDG/WETH reinvestment, seven-day history, source separation and recent
 Blockscout-linked transactions. A separate one-shot reporter can send the previous completed Beijing day to a Feishu
@@ -103,9 +110,9 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free board runs release `55df95ed9d152bd66bfe273cbee578caccb456b8`; the continuously active dual
+- The signer-free board runs release `3db3cc5a7b8096ce10a2516f7fe63b76f51aacc0`; the continuously active dual
   watcher intentionally remains on accepted release `2f3007ddd9293863a56c0665cde30d6705b9f7a7`. The board-only promotion did
-  not restart or re-arm the signer. At the `2026-09-10 22:29 CST` readback, the board had 3,556 admitted candidates,
+  not restart or re-arm the signer. At the `2026-09-10 22:54 CST` readback, the board had 3,559 admitted candidates,
   complete configured-start chain/source catalogs, healthy SQLite parity and zero screened-net-positive rows. Both
   services had zero automatic restarts and zero OOM events. The board remains loopback-only and has no signer or
   broadcast path.

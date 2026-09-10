@@ -14,6 +14,7 @@ import {
   chooseBestBaseOpportunity,
   catalogIsComplete,
   compactExecutionBoardSnapshot,
+  isExecutionFeedCandidate,
   materialEvents,
   nextCycleDelay,
   normalizePairCandidate,
@@ -69,6 +70,9 @@ test('execution snapshot retains a WETH-only positive lane while legacy USDG rem
   }
   const compact = compactExecutionBoardSnapshot({ schemaVersion: 5, items: [wethOnly] })
   assert.deepEqual(compact.items, [wethOnly])
+  assert.equal(isExecutionFeedCandidate(wethOnly), true)
+  assert.equal(isExecutionFeedCandidate({ ...wethOnly, baseOpportunities: {} }), false)
+  assert.equal(isExecutionFeedCandidate(null), false)
 })
 
 test('post-quote checkpoint counts each newly quoted candidate once across USDG and WETH lanes', () => {

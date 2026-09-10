@@ -88,14 +88,19 @@ export function compactExecutionBoardSnapshot(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) return snapshot
   return {
     ...snapshot,
-    items: snapshot.items.filter(
-      (item) =>
-        (item.status === BoardStatus.SCREENED_POSITIVE && item.fresh === true) ||
-        Object.values(item.baseOpportunities || {}).some(
-          (lane) => lane?.status === BoardStatus.SCREENED_POSITIVE && lane?.fresh === true,
-        ),
-    ),
+    items: snapshot.items.filter((item) => isExecutionFeedCandidate(item)),
   }
+}
+
+/** @param {Record<string, any> | null | undefined} item */
+export function isExecutionFeedCandidate(item) {
+  return Boolean(
+    item &&
+    ((item.status === BoardStatus.SCREENED_POSITIVE && item.fresh === true) ||
+      Object.values(item.baseOpportunities || {}).some(
+        (lane) => lane?.status === BoardStatus.SCREENED_POSITIVE && lane?.fresh === true,
+      )),
+  )
 }
 
 /**

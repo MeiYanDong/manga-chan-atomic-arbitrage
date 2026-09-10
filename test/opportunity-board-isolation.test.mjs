@@ -70,8 +70,9 @@ test('opportunity board stays signer-free while isolating the bounded managed ev
   assert.ok(cycleStart >= 0 && dependencyBuild > cycleStart && dependencyBuild < fixedBlock)
   assert.match(
     source.slice(cycleStart, fixedBlock),
-    /if \(!eventWake\) \{[\s\S]*buildShadowDependencyIndex[\s\S]*this\.publish\('SCANNING'\)/,
+    /if \(!eventWake\) \{[\s\S]*buildShadowDependencyIndex[\s\S]*periodicScanningPublicationsDeferred/,
   )
+  assert.doesNotMatch(source.slice(dependencyBuild, fixedBlock), /this\.publish\(/)
   assert.match(source, /advanceChainCatalog/)
   assert.match(source, /advanceSourcePoolCatalog/)
   assert.match(source, /pair\.chain-catalog\.v1/)
@@ -100,6 +101,21 @@ test('opportunity board stays signer-free while isolating the bounded managed ev
   assert.match(source, /source projection commit requires a durable cursor checkpoint/)
   assert.match(source, /this\.commitDeferredSourceProjection\(fixed\.blockNumber\)/)
   assert.match(source, /coalescedPeriodicSourceProjectionCycles/)
+  assert.match(source, /eventCyclePublicationPolicy\(\{/)
+  assert.match(source, /EventCyclePublication\.DEFER_NON_MATERIAL_EVENT/)
+  assert.match(source, /EventCyclePublication\.EVENT_EXECUTION_FEED_CLEAR/)
+  assert.match(source, /EventCyclePublication\.EVENT_EPISODE_RECONCILIATION/)
+  assert.match(source, /eventDeferredFullSnapshotPublications/)
+  assert.match(source, /persistedExecutionFeed = readJson\(this\.executionSnapshotPath\)/)
+  assert.match(source, /if \(this\.snapshot\) this\.publishExecutionFeed\(this\.snapshot\)/)
+  const publishStart = source.indexOf('publish(status')
+  const publishEnd = source.indexOf('async cycle(options = {})', publishStart)
+  const executionFeedWrite = source.indexOf('this.publishExecutionFeed(reconciled.snapshot)', publishStart)
+  const compatibilityWrite = source.indexOf('writeStableJsonAtomic(this.snapshotPath', publishStart)
+  assert.ok(publishStart >= 0 && publishEnd > publishStart)
+  assert.ok(
+    compatibilityWrite > publishStart && executionFeedWrite > compatibilityWrite && executionFeedWrite < publishEnd,
+  )
   const hotPollStart = source.indexOf('async pollHotEvents()')
   const hotPollEnd = source.indexOf('async runHotPollLoop()', hotPollStart)
   assert.ok(hotPollStart >= 0 && hotPollEnd > hotPollStart)

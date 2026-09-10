@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Coalesce routine event-cycle board publications into the next mandatory periodic snapshot. New positive screens and
+  removal of a previously signer-visible positive or reconciliation of an open economic episode still publish
+  immediately; non-material negative refreshes persist only their small runtime cursor until the next periodic
+  projection. Remove the redundant periodic pre-quote
+  `SCANNING` snapshot and expose full-publication phase timing and deferral counters.
 - Coalesce the four possible large source-catalog writes in one protected periodic cycle into one atomic projection.
   Freeze the last projected source cursors until that file and the general runtime checkpoint commit in order, so a
   crash can cause safe re-observation but cannot skip an unprojected block range. Expose projection count, duration and
