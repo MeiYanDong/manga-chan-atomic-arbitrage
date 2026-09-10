@@ -55,6 +55,29 @@ export class AsyncConcurrencyGate {
   }
 }
 
+/**
+ * Run one required read lane beside one best-effort lane. The caller receives
+ * the optional failure as data, while a required-lane failure remains
+ * terminal. Promise scheduling guarantees both independent reads are started
+ * without leaving an unobserved rejection behind.
+ *
+ * @param {() => Promise<any>} requiredOperation
+ * @param {() => Promise<any>} optionalOperation
+ */
+export async function runRequiredWithOptional(requiredOperation, optionalOperation) {
+  if (typeof requiredOperation !== 'function' || typeof optionalOperation !== 'function') {
+    throw new Error('required and optional operations must be functions')
+  }
+  const [required, optional] = await Promise.allSettled([
+    Promise.resolve().then(requiredOperation),
+    Promise.resolve().then(optionalOperation),
+  ])
+  if (required.status === 'rejected') throw required.reason
+  return optional.status === 'fulfilled'
+    ? { required: required.value, optional: optional.value, optionalError: null }
+    : { required: required.value, optional: null, optionalError: optional.reason }
+}
+
 /** @param {string[]} values @param {number} offset @param {number} limit */
 export function rotatingSlice(values, offset, limit) {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0) {

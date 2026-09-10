@@ -68,6 +68,10 @@ test('opportunity board stays signer-free while isolating the bounded managed ev
   )
   const fixedBlock = source.indexOf('const fixed = await this.fixedBlock()', cycleStart)
   assert.ok(cycleStart >= 0 && dependencyBuild > cycleStart && dependencyBuild < fixedBlock)
+  assert.match(
+    source.slice(cycleStart, fixedBlock),
+    /if \(!eventWake\) \{[\s\S]*buildShadowDependencyIndex[\s\S]*this\.publish\('SCANNING'\)/,
+  )
   assert.match(source, /advanceChainCatalog/)
   assert.match(source, /advanceSourcePoolCatalog/)
   assert.match(source, /pair\.chain-catalog\.v1/)

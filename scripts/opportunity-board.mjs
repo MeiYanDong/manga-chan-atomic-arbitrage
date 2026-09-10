@@ -34,6 +34,7 @@ import {
   reconcileHotCursorAnchor,
   retryReadOnly,
   rotatingSlice,
+  runRequiredWithOptional,
   routeShadowEvent,
   selectRpcRetryPolicy,
   selectPeriodicShadowCandidates,
@@ -81,8 +82,10 @@ import {
   DEFAULT_PROBE_AMOUNTS_USDG,
   chooseBestAmountQuote,
   equivalentWethAmountGrid,
+  eventProbeNeedsExpansion,
   formatAmountGrid,
   parseUsdgAmountGrid,
+  planEventProbeAmounts,
   refinementAmounts,
   selectEventProbeAmounts,
   selectEventV4RoutePairs,
@@ -95,6 +98,7 @@ import {
   DailyHotRpcBudget,
   HotRpcLaneDecision,
   jsonRpcCallCount,
+  jsonRpcOperationLabels,
   latencyPercentiles,
   selectHotRpcLane,
   validateManagedHotRpcUrl,
@@ -750,6 +754,16 @@ class OpportunityBoard {
       hotRpcTransientFallbackCycles: 0,
       lastEventQuoteRpcRole: null,
       lastEventQuoteRpcFallbackReason: null,
+      eventAdaptiveProbeExpansions: 0,
+      eventDeferredAmountQuotesAvoided: 0,
+      eventParallelBaseCycles: 0,
+      lastPollTiming: null,
+      lastRelevantPollTiming: null,
+      eventCycleLatency: {
+        semantics: 'PUBLIC_LOG_POLL_START_TO_FIXED_BLOCK_QUOTE_COMPLETION',
+        latest: null,
+        phases: {},
+      },
     }
     this.quoteRpcMetrics = {
       rpcHttpPosts: 0,
@@ -800,6 +814,9 @@ class OpportunityBoard {
       lastFallbackReason: null,
     }
     this.hotRpcLatencySamples = []
+    this.hotRpcOperationLatencySamples = new Map()
+    this.hotRpcOperationCounts = new Map()
+    this.eventCycleLatencySamples = new Map()
     this.catalogRefreshRequested = false
     this.rpcHttpGate = new AsyncConcurrencyGate(config.rpcHttpConcurrency)
     this.hotRpcHttpGate = new AsyncConcurrencyGate(config.hotRpcHttpConcurrency)
@@ -882,6 +899,11 @@ class OpportunityBoard {
             fetchFn: async (_input, init) => {
               this.throwIfPeriodicPreempted()
               const logicalCalls = jsonRpcCallCount(init?.body)
+              const operationLabels = jsonRpcOperationLabels(init?.body, {
+                [V3_QUOTER]: 'V3_QUOTER',
+                [V4_QUOTER]: 'V4_QUOTER',
+                [MULTICALL3]: 'MULTICALL3',
+              })
               const debit = this.hotRpcBudget.consumeLogicalCalls(logicalCalls)
               if (!debit.consumed) {
                 const context = this.rpcCallContext.getStore()
@@ -911,8 +933,10 @@ class OpportunityBoard {
                 this.hotRpcTransportMetrics.lastFailureAt = new Date().toISOString()
                 throw error
               } finally {
-                this.hotRpcLatencySamples.push(performance.now() - startedAt)
+                const elapsedMs = performance.now() - startedAt
+                this.hotRpcLatencySamples.push(elapsedMs)
                 if (this.hotRpcLatencySamples.length > 512) this.hotRpcLatencySamples.shift()
+                this.recordHotRpcOperationLatency(operationLabels, elapsedMs)
               }
             },
             timeout: config.requestTimeoutMs,
@@ -947,6 +971,37 @@ class OpportunityBoard {
     return context.hotRpcRouting.fallbackReason ? 'MANAGED_THEN_PUBLIC_FALLBACK' : HotRpcLaneDecision.MANAGED
   }
 
+  /** @param {string[]} labels @param {number} elapsedMs */
+  recordHotRpcOperationLatency(labels, elapsedMs) {
+    for (const label of labels) {
+      this.hotRpcOperationCounts.set(label, (this.hotRpcOperationCounts.get(label) || 0) + 1)
+      const samples = this.hotRpcOperationLatencySamples.get(label) || []
+      samples.push(elapsedMs)
+      if (samples.length > 128) samples.shift()
+      this.hotRpcOperationLatencySamples.set(label, samples)
+    }
+  }
+
+  /** @param {Record<string, number>} timing */
+  recordEventCycleLatency(timing) {
+    for (const [phase, elapsedMs] of Object.entries(timing)) {
+      if (!Number.isFinite(elapsedMs) || elapsedMs < 0) continue
+      const samples = this.eventCycleLatencySamples.get(phase) || []
+      samples.push(elapsedMs)
+      if (samples.length > 128) samples.shift()
+      this.eventCycleLatencySamples.set(phase, samples)
+    }
+    this.eventMetrics.eventCycleLatency = {
+      semantics: 'PUBLIC_LOG_POLL_START_TO_FIXED_BLOCK_QUOTE_COMPLETION',
+      latest: timing,
+      phases: Object.fromEntries(
+        [...this.eventCycleLatencySamples.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([phase, samples]) => [phase, latencyPercentiles(samples)]),
+      ),
+    }
+  }
+
   hotRpcState() {
     return {
       enabled: this.config.hotRpcEnabled,
@@ -962,6 +1017,14 @@ class OpportunityBoard {
         peakConcurrency: this.hotRpcHttpGate.peak,
         configuredConcurrency: this.config.hotRpcHttpConcurrency,
         latency: latencyPercentiles(this.hotRpcLatencySamples),
+        operations: Object.fromEntries(
+          [...this.hotRpcOperationLatencySamples.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([label, samples]) => [
+              label,
+              { logicalCalls: this.hotRpcOperationCounts.get(label) || 0, latency: latencyPercentiles(samples) },
+            ]),
+        ),
         metricCaveat: 'logical calls are JSON-RPC operations, not provider request units or USD cost',
       },
     }
@@ -1754,7 +1817,26 @@ class OpportunityBoard {
 
   async pollHotEvents() {
     const observedAtMs = Date.now()
+    const pollStartedAt = performance.now()
+    let phaseStartedAt = pollStartedAt
+    const pollTiming = { observedAt: new Date(observedAtMs).toISOString() }
+    const markPhase = (name) => {
+      const now = performance.now()
+      pollTiming[name] = Number((now - phaseStartedAt).toFixed(2))
+      phaseStartedAt = now
+    }
+    const completePollTiming = (outcome, details = {}) => {
+      const completed = {
+        ...pollTiming,
+        ...details,
+        outcome,
+        totalMs: Number((performance.now() - pollStartedAt).toFixed(2)),
+      }
+      this.eventMetrics.lastPollTiming = completed
+      if (Number(details.relevantLogs || 0) > 0) this.eventMetrics.lastRelevantPollTiming = completed
+    }
     const head = await this.retryRpc(() => this.client.getBlockNumber())
+    markPhase('headReadMs')
     this.eventMetrics.lastError = null
     this.eventMetrics.consecutiveErrors = 0
     let nextBlock = this.hotCursor.nextBlock === null ? null : BigInt(this.hotCursor.nextBlock)
@@ -1787,6 +1869,8 @@ class OpportunityBoard {
         nextBlock: planned.initializedNextBlock.toString(),
       }
       this.persistState()
+      markPhase('persistMs')
+      completePollTiming('CURSOR_INITIALIZED')
       return {
         candidateIds: [],
         catalogRefresh: false,
@@ -1796,6 +1880,8 @@ class OpportunityBoard {
     }
     if (!planned.range) {
       this.persistState()
+      markPhase('persistMs')
+      completePollTiming('NO_CONFIRMED_RANGE')
       return {
         candidateIds: [],
         catalogRefresh: false,
@@ -1822,7 +1908,9 @@ class OpportunityBoard {
         })
       }
     }
+    markPhase('reorgCheckMs')
     if (!planned.range) {
+      completePollTiming('REORG_REPLAN_EMPTY')
       return {
         candidateIds: [],
         catalogRefresh: false,
@@ -1839,6 +1927,7 @@ class OpportunityBoard {
       topics: [[V4_SWAP_TOPIC, V4_INITIALIZE_TOPIC]],
     })
     this.eventMetrics.rpcLogCalls += 1
+    markPhase('v4LogsMs')
 
     const v3Logs = []
     const addresses = this.v3WatchAddresses()
@@ -1854,6 +1943,7 @@ class OpportunityBoard {
       )
       this.eventMetrics.rpcLogCalls += 1
     }
+    markPhase('v3LogsMs')
 
     const decodedEvents = [
       ...v4Logs.map((log) => decodePoolManagerLog(log)),
@@ -1895,7 +1985,9 @@ class OpportunityBoard {
       candidateWakes += offered.candidateCount
       this.poolMirror = applyPoolMirrorEvent(this.poolMirror, event)
     }
+    markPhase('decodeRouteMs')
     const anchor = await this.retryRpc(() => this.client.getBlock({ blockNumber: toBlock }))
+    markPhase('finalAnchorMs')
     this.hotCursor = {
       ...this.hotCursor,
       nextBlock: (toBlock + 1n).toString(),
@@ -1914,6 +2006,16 @@ class OpportunityBoard {
     this.eventMetrics.consecutiveErrors = 0
     if (relevantLogs > 0) writeJsonAtomic(this.poolMirrorPath, this.poolMirror)
     this.persistState()
+    markPhase('persistMs')
+    completePollTiming(relevantLogs > 0 ? 'RELEVANT_EVENTS_QUEUED' : 'RANGE_SCANNED', {
+      fromBlock: fromBlock.toString(),
+      toBlock: toBlock.toString(),
+      v3WatchAddresses: addresses.length,
+      v3LogCalls: Math.ceil(addresses.length / 100),
+      decodedEvents: decodedEvents.length,
+      relevantLogs,
+      candidateWakes,
+    })
     return {
       candidateIds: [],
       catalogRefresh,
@@ -2041,7 +2143,7 @@ class OpportunityBoard {
         `V3 factory evidence incomplete (${rejected.length}/${V3_FEES.length} reads failed)`,
         rejected[0].error,
       )
-      this.cycleRpcFailure ||= failure
+      this.recordCycleRpcFailure(failure)
       throw failure
     }
     const available = reads
@@ -2061,6 +2163,12 @@ class OpportunityBoard {
       context.preempted = true
       throw new PeriodicCyclePreempted()
     }
+  }
+
+  /** @param {unknown} failure */
+  recordCycleRpcFailure(failure) {
+    if (this.rpcCallContext.getStore()?.optionalBaseLane) return
+    this.cycleRpcFailure ||= failure
   }
 
   /** @param {unknown} error */
@@ -2306,7 +2414,7 @@ class OpportunityBoard {
     const incomplete = quoteResults.find((result) => result?.error && quoteTransportIsIncomplete(result.error))
     if (incomplete) {
       const failure = incompleteRpcError('V3 quote evidence incomplete', incomplete.error)
-      this.cycleRpcFailure ||= failure
+      this.recordCycleRpcFailure(failure)
       throw failure
     }
     const successful = quoteResults
@@ -2441,7 +2549,7 @@ class OpportunityBoard {
           return { pool, anchor, tokenQuote }
         } catch (error) {
           if (quoteTransportIsIncomplete(error))
-            this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
+            this.recordCycleRpcFailure(incompleteRpcError('V4 quote evidence incomplete', error))
           failures.push({ leg: `${base.symbol}_TO_${pool.quoteSymbol}_TO_TOKEN`, reason: publicError(error) })
           return null
         }
@@ -2474,7 +2582,7 @@ class OpportunityBoard {
           return this.screenCandidateRoute(amountIn, fixed, base, entry, pool, quoteAsset, anchor)
         } catch (error) {
           if (quoteTransportIsIncomplete(error))
-            this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
+            this.recordCycleRpcFailure(incompleteRpcError('V4 quote evidence incomplete', error))
           failures.push({ leg: `TOKEN_TO_${pool.quoteSymbol}_TO_${base.symbol}`, reason: publicError(error) })
           return null
         }
@@ -2545,7 +2653,7 @@ class OpportunityBoard {
         return this.screenCandidateRoute(amountIn, fixed, base, entry, exitPool, quoteAsset, exitAnchor)
       } catch (error) {
         if (quoteTransportIsIncomplete(error)) {
-          this.cycleRpcFailure ||= incompleteRpcError('V4 quote evidence incomplete', error)
+          this.recordCycleRpcFailure(incompleteRpcError('V4 quote evidence incomplete', error))
         }
         failures.push({
           leg: `${base.symbol}_${entryPool.quoteSymbol}_TOKEN_${exitPool.quoteSymbol}_${base.symbol}`,
@@ -2625,14 +2733,28 @@ class OpportunityBoard {
         previousAmount = null
       }
     }
-    const probeAmounts = boundedProbe
-      ? selectEventProbeAmounts(
+    const previousActionable = [BoardStatus.SCREENED_POSITIVE, BoardStatus.GROSS_POSITIVE].includes(
+      previousLane?.status,
+    )
+    const eventProbePlan = eventFastPath
+      ? planEventProbeAmounts(
           configuredProbes,
           previousAmount,
           amountGrid[amountGrid.length - 1],
           cycleProbe?.amountLimit || this.config.eventAmountLimit,
+          previousActionable,
         )
-      : [...new Set(configuredProbes.map((amount) => amount.toString()))].map((amount) => BigInt(amount))
+      : null
+    const probeAmounts = eventFastPath
+      ? eventProbePlan.initial
+      : coverageProbe
+        ? selectEventProbeAmounts(
+            configuredProbes,
+            previousAmount,
+            amountGrid[amountGrid.length - 1],
+            cycleProbe?.amountLimit || this.config.eventAmountLimit,
+          )
+        : [...new Set(configuredProbes.map((amount) => amount.toString()))].map((amount) => BigInt(amount))
     if (eventFastPath) {
       this.eventMetrics.eventFastPathAmounts += probeAmounts.length
       this.eventMetrics.eventFastPathPairs += probePairs.length
@@ -2649,6 +2771,15 @@ class OpportunityBoard {
           : this.quoteCandidateBaseAmount(candidate, fixed, amount, base)
       })
     const evaluated = await evaluate(probeAmounts)
+    if (eventFastPath && eventProbePlan.deferred.length > 0) {
+      if (eventProbeNeedsExpansion(evaluated)) {
+        this.eventMetrics.eventAdaptiveProbeExpansions += 1
+        this.eventMetrics.eventFastPathAmounts += eventProbePlan.deferred.length
+        evaluated.push(...(await evaluate(eventProbePlan.deferred)))
+      } else {
+        this.eventMetrics.eventDeferredAmountQuotesAvoided += eventProbePlan.deferred.length
+      }
+    }
     this.throwIfPeriodicPreempted()
     const expandGrid =
       !boundedProbe &&
@@ -2820,31 +2951,51 @@ class OpportunityBoard {
     else if (this.rpcCallContext.getStore()?.probe?.mode === 'BOUNDED_COVERAGE_SAMPLE') {
       this.eventMetrics.periodicProbeCandidates += 1
     }
-    const usdgLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.USDG, options)
-    this.throwIfPeriodicPreempted()
+    const failedWethLane = (error) => ({
+      baseAsset: 'WETH',
+      baseToken: WETH,
+      baseDecimals: 18,
+      status: BoardStatus.UNQUOTABLE,
+      quotedAt: new Date().toISOString(),
+      blockNumber: fixed.blockNumber.toString(),
+      blockHash: fixed.block.hash,
+      route: null,
+      normalizedScreenedNetUsdg: null,
+      evidenceLevel: 'WETH_LANE_FIXED_BLOCK_QUOTE_INCOMPLETE',
+      executionEstimate: 'NOT_RUN',
+      receiptEvidence: 'NONE',
+      failures: [{ leg: 'WETH_LANE', reason: publicError(error) }],
+    })
+    const quoteWethLane = () => {
+      const parentContext = this.rpcCallContext.getStore()
+      return this.rpcCallContext.run({ ...parentContext, optionalBaseLane: true }, () =>
+        this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.WETH, options),
+      )
+    }
+    let usdgLane
     let wethLane = null
-    if (this.config.wethBaseEnabled) {
-      const priorFailure = this.cycleRpcFailure
+    if (this.config.wethBaseEnabled && options.eventTrigger) {
+      this.eventMetrics.eventParallelBaseCycles += 1
+      const lanes = await runRequiredWithOptional(
+        () => this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.USDG, options),
+        quoteWethLane,
+      )
+      usdgLane = lanes.required
+      wethLane = lanes.optional
+      if (lanes.optionalError) {
+        if (this.isPeriodicPreemption(lanes.optionalError)) throw new PeriodicCyclePreempted()
+        wethLane = failedWethLane(lanes.optionalError)
+      }
+    } else {
+      usdgLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.USDG, options)
+      this.throwIfPeriodicPreempted()
+    }
+    if (this.config.wethBaseEnabled && !options.eventTrigger) {
       try {
-        wethLane = await this.quoteCandidateLane(candidate, fixed, BASE_ASSETS.WETH, options)
+        wethLane = await quoteWethLane()
       } catch (error) {
         if (this.isPeriodicPreemption(error)) throw new PeriodicCyclePreempted()
-        if (!priorFailure) this.cycleRpcFailure = null
-        wethLane = {
-          baseAsset: 'WETH',
-          baseToken: WETH,
-          baseDecimals: 18,
-          status: BoardStatus.UNQUOTABLE,
-          quotedAt: new Date().toISOString(),
-          blockNumber: fixed.blockNumber.toString(),
-          blockHash: fixed.block.hash,
-          route: null,
-          normalizedScreenedNetUsdg: null,
-          evidenceLevel: 'WETH_LANE_FIXED_BLOCK_QUOTE_INCOMPLETE',
-          executionEstimate: 'NOT_RUN',
-          receiptEvidence: 'NONE',
-          failures: [{ leg: 'WETH_LANE', reason: publicError(error) }],
-        }
+        wethLane = failedWethLane(error)
       }
     }
     const baseOpportunities = { USDG: usdgLane, ...(wethLane ? { WETH: wethLane } : {}) }
@@ -3040,6 +3191,19 @@ class OpportunityBoard {
   async runCycle(options = {}) {
     const { forceCatalog = false, eventWake = null } = options
     if (this.inCycle) return null
+    const cycleStartedAtMs = Date.now()
+    let eventPhaseStartedAt = performance.now()
+    const eventTiming = eventWake
+      ? {
+          detectedToCycleStartMs: eventWake.observedAtMs ? Math.max(0, cycleStartedAtMs - eventWake.observedAtMs) : 0,
+        }
+      : null
+    const markEventPhase = (name) => {
+      if (!eventTiming) return
+      const now = performance.now()
+      eventTiming[name] = Number((now - eventPhaseStartedAt).toFixed(2))
+      eventPhaseStartedAt = now
+    }
     this.inCycle = true
     this.cycleRpcFailure = null
     this.v3ShortlistRefreshBudget = eventWake ? 0 : this.config.v3ShortlistRefreshesPerCycle
@@ -3061,12 +3225,18 @@ class OpportunityBoard {
         await this.refreshCatalog({ full: fullCatalogDue })
         this.catalogRefreshRequested = false
       }
-      // The background hot poller may advance while this cycle awaits quotes.
-      // Build routing before the fixed-block boundary so every later event in
-      // the same cycle can wake the candidates represented by that snapshot.
-      this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
-      this.publish('SCANNING')
+      // Periodic work may change catalog metadata before quoting, so it
+      // refreshes routing and publishes SCANNING. Event work cannot change the
+      // catalog here and already starts from the dependency index committed by
+      // the previous cycle. Do not serialize a multi-thousand-row projection
+      // ahead of the latency-sensitive fixed-block quote.
+      if (!eventWake) {
+        this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
+        this.publish('SCANNING')
+      }
+      markEventPhase('preFixedBlockMs')
       const fixed = await this.fixedBlock()
+      markEventPhase('fixedBlockMs')
       this.throwIfPeriodicPreempted()
       if (this.hotCursor.nextBlock === null) {
         this.hotCursor = {
@@ -3085,6 +3255,7 @@ class OpportunityBoard {
       )
       selectedCount = selected.length
       const triggerByCandidate = new Map((eventWake?.triggers || []).map((trigger) => [trigger.candidateId, trigger]))
+      markEventPhase('candidateSelectionMs')
       await mapLimit(this.config.quoteConcurrency, selected, async (candidate) => {
         try {
           const trigger = triggerByCandidate.get(candidate.id)
@@ -3124,9 +3295,18 @@ class OpportunityBoard {
           })
         }
       })
+      markEventPhase('candidateQuoteMs')
       if (this.cycleRpcFailure) throw this.cycleRpcFailure
       const quotesCompletedAt = new Date().toISOString()
       this.lastQuoteAt = quotesCompletedAt
+      if (eventTiming) {
+        eventTiming.observedToQuoteCompleteMs = eventWake.observedAtMs
+          ? Math.max(0, Date.now() - eventWake.observedAtMs)
+          : eventTiming.preFixedBlockMs +
+            eventTiming.fixedBlockMs +
+            eventTiming.candidateSelectionMs +
+            eventTiming.candidateQuoteMs
+      }
       const executionCheckpointCandidateCount = screenedPositiveObservationCount(
         selected.map((candidate) => this.observations.get(candidate.id)),
       )
@@ -3166,6 +3346,7 @@ class OpportunityBoard {
         this.throwIfPeriodicPreempted()
       }
       this.dependencyIndex = buildShadowDependencyIndex(this.catalog, this.observations)
+      markEventPhase('postQuoteBookkeepingMs')
       const cycleQuoterCalls =
         this.quoteRpcMetrics.v3QuoterCalls + this.quoteRpcMetrics.v4QuoterCalls - quoterCallsBefore
       this.eventMetrics.lastCycleTrigger = eventWake ? 'POOL_EVENT' : 'PERIODIC_RECONCILIATION'
@@ -3174,7 +3355,8 @@ class OpportunityBoard {
       if (eventWake) {
         this.eventMetrics.eventQuoteCandidates += selected.length
         this.eventMetrics.eventDrivenQuoterCalls += cycleQuoterCalls
-        this.eventMetrics.lastEventToQuoteMs = eventWake.observedAtMs ? Date.now() - eventWake.observedAtMs : null
+        this.eventMetrics.lastEventToQuoteMs = eventTiming.observedToQuoteCompleteMs
+        this.recordEventCycleLatency(eventTiming)
       } else {
         this.eventMetrics.reconciliationQuoterCalls += cycleQuoterCalls
       }

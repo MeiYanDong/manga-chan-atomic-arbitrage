@@ -87,6 +87,36 @@ export function jsonRpcCallCount(body) {
   }
 }
 
+/**
+ * Classify JSON-RPC work without retaining calldata, endpoint URLs or other
+ * request payloads. Contract labels are supplied by the caller so this helper
+ * remains chain-agnostic and the public telemetry exposes only operator-safe
+ * names such as V3_QUOTER or V4_QUOTER.
+ *
+ * @param {unknown} body
+ * @param {Record<string, string>} [contractLabels]
+ */
+export function jsonRpcOperationLabels(body, contractLabels = {}) {
+  if (typeof body !== 'string' || body.length === 0) return ['UNKNOWN']
+  let parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return ['UNKNOWN']
+  }
+  const calls = Array.isArray(parsed) ? parsed : [parsed]
+  if (calls.length === 0) return ['UNKNOWN']
+  const normalizedContracts = new Map(
+    Object.entries(contractLabels).map(([address, label]) => [address.toLowerCase(), String(label)]),
+  )
+  return calls.map((call) => {
+    const method = typeof call?.method === 'string' && call.method.length > 0 ? call.method : 'UNKNOWN'
+    if (method !== 'eth_call') return method
+    const target = typeof call?.params?.[0]?.to === 'string' ? call.params[0].to.toLowerCase() : null
+    return target && normalizedContracts.has(target) ? `eth_call:${normalizedContracts.get(target)}` : 'eth_call:OTHER'
+  })
+}
+
 /** @param {number[]} samples */
 export function latencyPercentiles(samples) {
   const values = samples.filter((value) => Number.isFinite(value) && value >= 0).sort((left, right) => left - right)
