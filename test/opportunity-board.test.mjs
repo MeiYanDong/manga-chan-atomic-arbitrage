@@ -9,6 +9,8 @@ import {
   EpisodeObservation,
   EpisodeState,
   applyFreshness,
+  boardHealthIsReady,
+  boardRuntimeStatusIsReady,
   buildBoardSnapshot,
   candidateWakePriority,
   chooseBestBaseOpportunity,
@@ -37,6 +39,43 @@ test('cycle pacing preserves start interval and enforces a post-cycle cooldown',
   assert.throws(
     () => nextCycleDelay({ scanIntervalMs: 120_000, cycleDurationMs: -1, minimumPauseMs: 60_000 }),
     /non-negative/,
+  )
+})
+
+test('runtime health accepts completed live cycles without trusting a stale persisted snapshot status', () => {
+  assert.equal(boardRuntimeStatusIsReady('RUNNING'), true)
+  assert.equal(boardRuntimeStatusIsReady('SCANNING'), true)
+  assert.equal(boardRuntimeStatusIsReady('DEGRADED'), false)
+  assert.equal(boardRuntimeStatusIsReady('DEGRADED_PARTIAL_CATALOG'), false)
+  assert.equal(boardRuntimeStatusIsReady(null), false)
+  assert.equal(boardRuntimeStatusIsReady(undefined), false)
+})
+
+test('board health keeps snapshot, freshness and SQLite parity gates fail-closed after live recovery', () => {
+  const recovered = {
+    hasSnapshot: true,
+    runtimeStatus: 'RUNNING',
+    cycleAgeMs: 1_000,
+    maximumAgeMs: 60_000,
+    persistenceRequired: true,
+    persistenceStatus: 'HEALTHY',
+    persistenceParity: true,
+  }
+  assert.equal(boardHealthIsReady(recovered), true)
+  assert.equal(boardHealthIsReady({ ...recovered, runtimeStatus: 'DEGRADED' }), false)
+  assert.equal(boardHealthIsReady({ ...recovered, hasSnapshot: false }), false)
+  assert.equal(boardHealthIsReady({ ...recovered, cycleAgeMs: Number.POSITIVE_INFINITY }), false)
+  assert.equal(boardHealthIsReady({ ...recovered, cycleAgeMs: 60_001 }), false)
+  assert.equal(boardHealthIsReady({ ...recovered, persistenceStatus: 'DEGRADED' }), false)
+  assert.equal(boardHealthIsReady({ ...recovered, persistenceParity: false }), false)
+  assert.equal(
+    boardHealthIsReady({
+      ...recovered,
+      persistenceRequired: false,
+      persistenceStatus: 'DEGRADED',
+      persistenceParity: false,
+    }),
+    true,
   )
 })
 

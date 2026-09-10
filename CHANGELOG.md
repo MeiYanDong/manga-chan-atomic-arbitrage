@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Decouple loopback health from the last full-board projection. A successful event cycle now restores live health
+  immediately even when its non-material economic snapshot is intentionally deferred; error publications, partial
+  catalogs, stale cycles and unhealthy SQLite parity remain fail-closed.
 - Coalesce routine event-cycle board publications into the next mandatory periodic snapshot. New positive screens and
   removal of a previously signer-visible positive or reconciliation of an open economic episode still publish
   immediately; non-material negative refreshes persist only their small runtime cursor until the next periodic

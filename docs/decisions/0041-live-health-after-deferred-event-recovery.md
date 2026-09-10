@@ -1,0 +1,43 @@
+# ADR 0041: live health after deferred event recovery
+
+- Status: Accepted; production verification pending
+- Date: 2026-09-11
+
+## Context
+
+ADR 0040 intentionally allows an ordinary successful event cycle to update quotes and the small runtime checkpoint
+without replacing the complete JSON and SQLite projections. The health endpoint still read its status from the last
+full snapshot. Production then observed three event errors that correctly published `DEGRADED`; subsequent successful
+event cycles were deferred, so the process and APIs recovered while `/healthz` continued returning 503 until the next
+periodic full publication.
+
+This is a control-plane correctness problem, not evidence of an economic or signing failure. A false 503 can trigger
+operator confusion or unnecessary service recovery, while treating every successful event as a full publication would
+undo the latency improvement.
+
+## Decision
+
+- Track the status of the most recently completed runtime cycle independently from the last full persisted snapshot.
+- A completed `RUNNING` or intentional `SCANNING` cycle is health-ready. `DEGRADED`, partial-catalog and startup states
+  remain not ready.
+- Set the live status after a full publication succeeds and after a deferred non-material event safely persists its
+  runtime checkpoint.
+- Keep health freshness, SQLite status and SQLite parity as independent fail-closed conditions.
+- Return both live runtime status and persisted-snapshot status from the loopback health endpoint for operational
+  diagnosis; neither field is added to the user-facing dashboard.
+- Do not change event publication policy, source coverage, RPC routing, provider caps, quote breadth, profit floors,
+  capital, authorization, signing or transaction broadcast.
+
+## Consequences
+
+- Health recovers on the first completed successful event cycle rather than waiting for a periodic full projection.
+- A persisted economic snapshot may still show the prior error until its planned replacement. That lag is explicit and
+  separately observable instead of silently controlling process health.
+- A genuine runtime error, incomplete catalog, stale last cycle or unhealthy SQLite projection continues to return 503.
+- This correction does not reduce the remaining synchronous cost of mandatory periodic SQLite publication.
+
+## Rollback
+
+Restart only the signer-free opportunity board on release
+`f0bd3f8c124b611277238278d986f17d5933ce27`. Do not restart or re-arm the dual signer, change its authorization, expand
+ChainStack caps or modify wallet state.

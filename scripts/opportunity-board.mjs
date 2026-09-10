@@ -49,6 +49,7 @@ import {
   CandidateWakePriority,
   EpisodeState,
   appendEvents,
+  boardHealthIsReady,
   buildBoardSnapshot,
   candidateWakePriority,
   catalogIsComplete,
@@ -849,6 +850,7 @@ class OpportunityBoard {
     this.lastQuoteAt = null
     this.consecutiveErrors = 0
     this.lastError = null
+    this.runtimeHealthStatus = null
     this.cycleRpcFailure = null
     this.inCycle = false
     this.stopping = false
@@ -3229,6 +3231,7 @@ class OpportunityBoard {
     markPhase('runtimeStateMs')
     this.previousSnapshot = reconciled.snapshot
     this.snapshot = reconciled.snapshot
+    this.runtimeHealthStatus = status
     timing.totalMs = Number((performance.now() - startedAt).toFixed(2))
     this.eventMetrics.lastFullPublicationTiming = timing
     return reconciled
@@ -3537,6 +3540,7 @@ class OpportunityBoard {
         this.eventMetrics.eventDeferredFullSnapshotPublications += 1
         this.eventMetrics.lastDeferredEventPublicationAt = this.lastCycleAt
         this.persistState(this.lastCycleAt)
+        this.runtimeHealthStatus = finalStatus
         return this.deferredEventCycleResult(finalStatus, this.lastCycleAt)
       }
       if (publication === EventCyclePublication.EVENT_EXECUTION_FEED_CLEAR) {
@@ -3715,18 +3719,19 @@ class OpportunityBoard {
       }
       if (requestUrl.pathname === '/healthz') {
         const age = this.lastCycleAt ? Date.now() - Date.parse(this.lastCycleAt) : Number.POSITIVE_INFINITY
-        const healthyStatus = ['RUNNING', 'SCANNING'].includes(this.snapshot?.health?.status)
-        const persistenceHealthy =
-          this.config.readModel !== 'sqlite' ||
-          (this.persistenceState.status === 'HEALTHY' && this.persistenceState.parity !== false)
-        const healthy = Boolean(
-          this.snapshot &&
-          healthyStatus &&
-          persistenceHealthy &&
-          age <= Math.max(this.config.staleMs * 2, this.config.scanIntervalMs * 4),
-        )
+        const healthy = boardHealthIsReady({
+          hasSnapshot: Boolean(this.snapshot),
+          runtimeStatus: this.runtimeHealthStatus,
+          cycleAgeMs: age,
+          maximumAgeMs: Math.max(this.config.staleMs * 2, this.config.scanIntervalMs * 4),
+          persistenceRequired: this.config.readModel === 'sqlite',
+          persistenceStatus: this.persistenceState.status,
+          persistenceParity: this.persistenceState.parity,
+        })
         return this.respondJson(response, healthy ? 200 : 503, {
           status: healthy ? 'HEALTHY' : 'NOT_READY',
+          runtimeStatus: this.runtimeHealthStatus,
+          persistedSnapshotStatus: this.snapshot?.health?.status ?? null,
           lastCycleAt: this.lastCycleAt,
           candidateTokens: this.snapshot?.coverage?.candidateTokens ?? 0,
           screenedPositive: this.snapshot?.coverage?.counts?.[BoardStatus.SCREENED_POSITIVE] ?? 0,
