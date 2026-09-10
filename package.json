@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "description": "Bounded MANGA atomic-arbitrage executor and read-only multi-pool opportunity board on Robinhood Chain",
   "license": "MIT",
   "private": false,
@@ -61,6 +61,7 @@
     "status": "node scripts/manga-chan-arb.mjs status",
     "runtime:verify": "node scripts/manga-chan-arb.mjs runtime-verify",
     "rpc:benchmark": "node scripts/benchmark-rpc.mjs",
+    "rpc:benchmark:board-hot": "node scripts/benchmark-board-hot-rpc.mjs",
     "deployment:recover": "node scripts/manga-chan-arb.mjs recover-deployment",
     "preflight": "node scripts/manga-chan-arb.mjs preflight",
     "execute": "node scripts/manga-chan-arb.mjs execute",

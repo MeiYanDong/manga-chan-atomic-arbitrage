@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add an opt-in managed RPC lane only for `EXECUTOR_COMPATIBLE` and `EXECUTOR_SHAPE` event quotes while retaining
+  public-RPC log polling, discovery, backfill and periodic coverage. Persist strict UTC-day ceilings of 200 event
+  candidates and 4,000 logical JSON-RPC calls, degrade to the public reader on cap/transient failure, and expose
+  provider-role, fallback and latency telemetry without adding signer capability or changing any economic gate.
+
 - Prioritize event wakes by live execution evidence, then the deployed executor's exact PoolKey shape, before
   shadow-only candidates; preserve freshest-first ordering inside each tier and keep broad shadow coverage in the
   protected periodic lane. Expose selected-tier counters without changing RPC endpoints, signing authority or economic
