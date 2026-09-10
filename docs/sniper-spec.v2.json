@@ -33,7 +33,17 @@
         "tier": "STATE",
         "source": "isolated PAIR opportunity board",
         "causal_claim": "all four quote legs and the native mark at one canonical block identify a candidate relative-price discrepancy",
-        "known_fields": ["chain_id", "target", "entry_pool", "exit_pool", "route_paths", "amount", "quote_block_hash"],
+        "known_fields": [
+          "chain_id",
+          "target",
+          "entry_pool",
+          "exit_pool",
+          "route_paths",
+          "amount",
+          "quote_block_hash",
+          "candidate_hash",
+          "trigger_board_generation"
+        ],
         "late_binding_fields": ["executor_simulation", "execution_gas", "nonce", "fee_quote", "deadline"]
       },
       {
@@ -47,7 +57,8 @@
     ],
     "chosen_primary": "current-executor-simulation",
     "fallbacks": ["NO_SHOT when the board is stale, no candidate simulates, or exact gas removes the edge"],
-    "late_binding_fields": ["nonce", "max_fee_per_gas", "deadline", "current_board_membership"],
+    "late_binding_fields": ["nonce", "max_fee_per_gas", "deadline"],
+    "trigger_handoff_policy": "freeze the typed screened-positive candidate revision once; reject it on age or canonical-block failure, but never replace it from a newer mutable board projection during exact preflight",
     "false_positive_policy": "reject before signing; a board proxy can never independently authorize execution",
     "false_negative_audit": "compare all fresh typed screened candidates with exact-preflight outcomes and retain rejected reasons"
   },
@@ -161,6 +172,7 @@
       "source_occurred_at",
       "received_at",
       "normalized_at",
+      "trigger_frozen_at",
       "decision_started_at",
       "decided_at",
       "prepared_at",
@@ -239,7 +251,7 @@
       },
       {
         "id": "exact_atomic_profit_boundary",
-        "condition": "current-block GenericAtomicArb simulation succeeds and exact gas supports both the on-chain gross floor and configured net floor",
+        "condition": "the frozen typed trigger remains within its age and canonical quote-block boundary, then current-block GenericAtomicArb simulation succeeds and exact gas supports both the on-chain gross floor and configured net floor",
         "risk_reduced": "stale screen, intermediate inventory and predictable negative-net execution",
         "false_block_cost": "a profitable transaction may be missed when RPC state is delayed",
         "latency_budget_ms": 15000,
