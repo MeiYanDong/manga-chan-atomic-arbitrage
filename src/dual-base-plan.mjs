@@ -2,6 +2,73 @@ import { GENERIC_USDG } from './generic-plan.mjs'
 import { buildGenericExecutionCandidates } from './generic-plan.mjs'
 import { buildWethExecutionCandidates } from './weth-plan.mjs'
 
+const CANDIDATE_HASH = /^0x[0-9a-f]{64}$/i
+
+function triggerTiming(candidate, options = {}) {
+  const nowMs = options.nowMs ?? Date.now()
+  const maxAgeMs = options.maxAgeMs ?? 30_000
+  if (!Number.isFinite(nowMs)) throw new Error('trigger time must be finite')
+  if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs <= 0) throw new Error('trigger max age must be positive')
+  const quotedAtMs = Date.parse(candidate?.quotedAt || '')
+  if (!Number.isFinite(quotedAtMs)) throw new Error('trigger candidate has no valid quote timestamp')
+  if (nowMs - quotedAtMs > maxAgeMs) throw new Error('trigger candidate aged out before exact preflight')
+  return { nowMs, maxAgeMs }
+}
+
+/**
+ * Capture the exact typed candidate revision which caused the live watcher to
+ * escalate. The board may publish a newer projection while exact simulation
+ * is running; that newer projection must not silently replace this candidate.
+ *
+ * @param {Record<string, any>} snapshot
+ * @param {Record<string, any>} candidate
+ * @param {{nowMs?: number, maxAgeMs?: number}} [options]
+ */
+export function freezeDualExecutionTrigger(snapshot, candidate, options = {}) {
+  const boardGeneratedAt = String(snapshot?.generatedAt || '')
+  if (!Number.isFinite(Date.parse(boardGeneratedAt))) throw new Error('trigger board has no valid generation timestamp')
+  if (!candidate || !CANDIDATE_HASH.test(String(candidate.candidateHash || ''))) {
+    throw new Error('trigger candidate has no valid candidate hash')
+  }
+  const { nowMs } = triggerTiming(candidate, options)
+  return Object.freeze({
+    schemaVersion: 1,
+    handoff: 'FROZEN_WATCH_TRIGGER',
+    boardGeneratedAt,
+    capturedAt: new Date(nowMs).toISOString(),
+    candidateHash: candidate.candidateHash,
+    candidate: Object.freeze({ ...candidate }),
+  })
+}
+
+/**
+ * Revalidate a frozen trigger immediately before exact work without consulting
+ * a mutable board projection. Canonical quote-block, current-state simulation,
+ * nonce, balance, Gas and authorization checks remain separate live gates.
+ *
+ * @param {Record<string, any>} trigger
+ * @param {{nowMs?: number, maxAgeMs?: number}} [options]
+ */
+export function selectionFromFrozenDualTrigger(trigger, options = {}) {
+  if (
+    trigger?.schemaVersion !== 1 ||
+    trigger?.handoff !== 'FROZEN_WATCH_TRIGGER' ||
+    !CANDIDATE_HASH.test(String(trigger?.candidateHash || '')) ||
+    trigger?.candidate?.candidateHash !== trigger.candidateHash ||
+    !Number.isFinite(Date.parse(trigger?.boardGeneratedAt || ''))
+  ) {
+    throw new Error('invalid frozen dual execution trigger')
+  }
+  triggerTiming(trigger.candidate, options)
+  return {
+    snapshot: {
+      generatedAt: trigger.boardGeneratedAt,
+      executionHandoff: trigger.handoff,
+    },
+    candidates: [trigger.candidate],
+  }
+}
+
 /**
  * Merge independently validated USDG and WETH candidates, then rank them in a
  * common conservative USDG unit. A missing lane is non-fatal; malformed rows

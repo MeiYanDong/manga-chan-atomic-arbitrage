@@ -22,7 +22,11 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
-import { buildDualBaseExecutionCandidates } from '../src/dual-base-plan.mjs'
+import {
+  buildDualBaseExecutionCandidates,
+  freezeDualExecutionTrigger,
+  selectionFromFrozenDualTrigger,
+} from '../src/dual-base-plan.mjs'
 import {
   DUAL_AUTHORIZATION_LIFETIME,
   DUAL_AUTHORIZATION_POLICY_VERSION,
@@ -335,6 +339,12 @@ async function boardCandidates({ candidateHash = null, limit = RUNTIME_CONFIG.ge
     : selection
   if (candidateHash && candidates.length === 0)
     throw new Error('triggered dual-base candidate left the fresh board set')
+  await assertCanonicalCandidateQuoteBlocks(candidates)
+  return { snapshot, candidates }
+}
+
+/** @param {Record<string, any>[]} candidates */
+async function assertCanonicalCandidateQuoteBlocks(candidates) {
   const quotedBlocks = await Promise.all(
     candidates.map((candidate) =>
       publicClient.getBlock({ blockNumber: candidate.quoteBlockNumber }).then((block) => ({ candidate, block })),
@@ -345,7 +355,15 @@ async function boardCandidates({ candidateHash = null, limit = RUNTIME_CONFIG.ge
       throw new Error('board quote block hash is no longer canonical')
     }
   }
-  return { snapshot, candidates }
+}
+
+/** @param {Record<string, any>} trigger */
+async function frozenBoardCandidates(trigger) {
+  const selection = selectionFromFrozenDualTrigger(trigger, {
+    maxAgeMs: RUNTIME_CONFIG.genericMaxQuoteAgeMs,
+  })
+  await assertCanonicalCandidateQuoteBlocks(selection.candidates)
+  return selection
 }
 
 function parseNonNegativeUnits(value, decimals, label) {
@@ -1029,7 +1047,12 @@ function exactEvaluationView(item) {
   }
 }
 
-async function executionPreflight({ print = true, candidateHash = null, authorizationId = null } = {}) {
+async function executionPreflight({
+  print = true,
+  candidateHash = null,
+  authorizationId = null,
+  frozenTrigger = null,
+} = {}) {
   assertLegacySignersInactive()
   assertDualExecutionContext(authorizationId)
   const unresolved = latestUnresolved()
@@ -1042,7 +1065,7 @@ async function executionPreflight({ print = true, candidateHash = null, authoriz
     assertDualAuthorization(arm, deployments)
   }
   const [{ snapshot: board, candidates }, wallet] = await Promise.all([
-    boardCandidates({ candidateHash }),
+    frozenTrigger ? frozenBoardCandidates(frozenTrigger) : boardCandidates({ candidateHash }),
     walletSnapshot(),
   ])
   if (wallet.nonceLatest !== wallet.noncePending) throw new Error('wallet has a pending nonce')
@@ -1099,6 +1122,7 @@ async function executionPreflight({ print = true, candidateHash = null, authoriz
   const report = {
     status: 'DUAL_BASE_READY_TO_EXECUTE',
     evidence: 'SAME_BLOCK_EXACT_CALL_AND_GAS_ESTIMATE_NO_SIGNATURE_NO_BROADCAST',
+    executionHandoff: frozenTrigger?.handoff || 'CURRENT_BOARD_SELECTION',
     exactBlockNumber: block.number,
     wallet: WALLET,
     nonce: wallet.nonceLatest,
@@ -1243,13 +1267,13 @@ async function executionStateFromReceipt(plan, hash, receipt, reconciled = false
   return { ...record, decimals }
 }
 
-async function execute({ authorizationId = null, abortRequested = null } = {}) {
+async function execute({ authorizationId = null, abortRequested = null, frozenTrigger = null } = {}) {
   const release = acquireLock(WALLET_LOCK_PATH, 'dual-v3-wallet')
   try {
     assertLiveTransport(RUNTIME_CONFIG)
     assertLegacySignersInactive()
     assertDualExecutionContext(authorizationId)
-    const check = await executionPreflight({ print: true, authorizationId })
+    const check = await executionPreflight({ print: true, authorizationId, frozenTrigger })
     const selected = check.selected
     const candidate = selected.candidate
     const deployment = selected.deployment
@@ -1264,10 +1288,6 @@ async function execute({ authorizationId = null, abortRequested = null } = {}) {
         throw new Error(`dual watcher nonce conflict: observed=${check.wallet.nonceLatest}, expected=${expectedNonce}`)
       }
       assertArmCandidateBounds(liveArm, candidate, check.deployments)
-    }
-    const currentBoard = await boardCandidates({ candidateHash: candidate.candidateHash, limit: 32 })
-    if (!currentBoard.candidates.some((item) => item.candidateHash === candidate.candidateHash)) {
-      throw new Error('selected dual-base candidate left the positive board set after exact preflight')
     }
     const [latest, pending, currentGasPrice, executorBaseBefore, walletEthBefore, boundary] = await Promise.all([
       publicClient.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
@@ -2075,7 +2095,7 @@ async function watchDual() {
       executors: { USDG: deployments.usdg.executor, WETH: deployments.weth.executor },
       startedAt,
       updatedAt: startedAt,
-      triggerMode: 'LOOPBACK_BOARD_THEN_SAME_BLOCK_DUAL_EXACT_PREFLIGHT',
+      triggerMode: 'LOOPBACK_FROZEN_TRIGGER_THEN_SAME_BLOCK_DUAL_EXACT_PREFLIGHT',
       idleRpcBehavior: 'NONE',
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
       authorizationLifetime: arm.authorizationLifetime,
@@ -2175,12 +2195,18 @@ async function watchDual() {
           continue
         }
         attemptedHashes.add(candidate.candidateHash)
+        const frozenTrigger = freezeDualExecutionTrigger(board.snapshot, candidate, {
+          maxAgeMs: RUNTIME_CONFIG.genericMaxQuoteAgeMs,
+        })
         appendAudit('dual_watch_exact_preflight_started', {
           authorizationId: currentArm.authorizationId,
           triggeringCandidateHash: candidate.candidateHash,
           triggeringBaseAsset: candidate.baseAsset,
           triggeringRoute: candidate.routeLabel,
           screenedNetUsdgWei: candidateScreenedNetUsdg(candidate),
+          executionHandoff: frozenTrigger.handoff,
+          triggerBoardGeneratedAt: frozenTrigger.boardGeneratedAt,
+          triggerCapturedAt: frozenTrigger.capturedAt,
         })
         watchState = {
           ...watchState,
@@ -2199,6 +2225,7 @@ async function watchDual() {
         const record = await execute({
           authorizationId: currentArm.authorizationId,
           abortRequested: () => stopRequested,
+          frozenTrigger,
         })
         deployments = refreshDeploymentLedgers(deployments)
         const confirmedUsage = assertDualAuthorization(currentArm, deployments)

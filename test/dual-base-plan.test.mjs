@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { encodePacked } from 'viem'
-import { buildDualBaseExecutionCandidates } from '../src/dual-base-plan.mjs'
+import {
+  buildDualBaseExecutionCandidates,
+  freezeDualExecutionTrigger,
+  selectionFromFrozenDualTrigger,
+} from '../src/dual-base-plan.mjs'
 import { GENERIC_PAIR_HOOK, GENERIC_USDG, GENERIC_WETH, pairPoolId } from '../src/generic-plan.mjs'
 import { BoardStatus } from '../src/opportunity-board.mjs'
 import { PoolAdmission, PoolEvidence } from '../src/pair-catalog.mjs'
@@ -79,6 +83,7 @@ function fixture() {
   }
   return {
     schemaVersion: 5,
+    generatedAt: quotedAt,
     service: 'manga-opportunity-board',
     mode: 'READ_ONLY_NO_SIGNING_NO_BROADCAST',
     health: { signerLoaded: false },
@@ -147,5 +152,39 @@ test('dual signer feed accepts a checkpoint inside 30 seconds and rejects the sa
         maxAgeMs: 30_000,
       }),
     /no fresh typed dual-base screened-positive candidate/,
+  )
+})
+
+test('dual watcher freezes the triggering revision while the board advances', () => {
+  const snapshot = fixture()
+  const nowMs = Date.parse('2026-09-08T00:00:10.000Z')
+  const [candidate] = buildDualBaseExecutionCandidates(snapshot, { nowMs })
+  const trigger = freezeDualExecutionTrigger(snapshot, candidate, { nowMs })
+
+  snapshot.generatedAt = '2026-09-08T00:00:11.000Z'
+  snapshot.items = []
+
+  const selection = selectionFromFrozenDualTrigger(trigger, {
+    nowMs: Date.parse('2026-09-08T00:00:20.000Z'),
+  })
+  assert.equal(selection.snapshot.generatedAt, '2026-09-08T00:00:00.000Z')
+  assert.equal(selection.snapshot.executionHandoff, 'FROZEN_WATCH_TRIGGER')
+  assert.equal(selection.candidates.length, 1)
+  assert.equal(selection.candidates[0].candidateHash, candidate.candidateHash)
+})
+
+test('dual watcher rejects a frozen trigger that expires before exact preflight', () => {
+  const snapshot = fixture()
+  const nowMs = Date.parse('2026-09-08T00:00:10.000Z')
+  const [candidate] = buildDualBaseExecutionCandidates(snapshot, { nowMs })
+  const trigger = freezeDualExecutionTrigger(snapshot, candidate, { nowMs })
+
+  assert.throws(
+    () =>
+      selectionFromFrozenDualTrigger(trigger, {
+        nowMs: Date.parse('2026-09-08T00:00:30.001Z'),
+        maxAgeMs: 30_000,
+      }),
+    /aged out before exact preflight/,
   )
 })
