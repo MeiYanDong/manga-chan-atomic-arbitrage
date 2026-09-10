@@ -41,8 +41,10 @@ import {
 } from '../src/event-driven-shadow.mjs'
 import {
   BoardStatus,
+  CandidateWakePriority,
   appendEvents,
   buildBoardSnapshot,
+  candidateWakePriority,
   catalogIsComplete,
   chooseBestBaseOpportunity,
   compactExecutionBoardSnapshot,
@@ -684,6 +686,10 @@ class OpportunityBoard {
       dedupedLogs: 0,
       candidateWakes: 0,
       eventQuoteCandidates: 0,
+      eventLiveCompatibleCandidatesSelected: 0,
+      eventExecutorShapeCandidatesSelected: 0,
+      eventShadowOnlyCandidatesSelected: 0,
+      lastSelectedWakeTier: null,
       eventFastPathCandidates: 0,
       eventFastPathAmounts: 0,
       eventFastPathPairs: 0,
@@ -1812,13 +1818,31 @@ class OpportunityBoard {
     const deadline = Date.now() + timeoutMs
     while (!this.stopping && Date.now() < deadline) {
       if (this.eventQueue.size > 0) {
+        const candidatesById = new Map(this.catalog.map((candidate) => [candidate.id, candidate]))
         const wake = this.eventQueue.take(this.config.eventWakeMaxCandidates, {
           nowMs: Date.now(),
           maxAgeMs: this.config.eventWakeMaxAgeMs,
           newestFirst: true,
+          priorityForCandidate: (candidateId) => candidateWakePriority(candidatesById.get(candidateId)),
         })
         this.eventMetrics.staleEventCandidateDrops += wake.staleDropped
         if (wake.candidateIds.length > 0) {
+          for (const priority of wake.candidatePriorities) {
+            if (priority === CandidateWakePriority.EXECUTOR_COMPATIBLE) {
+              this.eventMetrics.eventLiveCompatibleCandidatesSelected += 1
+            } else if (priority === CandidateWakePriority.EXECUTOR_SHAPE) {
+              this.eventMetrics.eventExecutorShapeCandidatesSelected += 1
+            } else {
+              this.eventMetrics.eventShadowOnlyCandidatesSelected += 1
+            }
+          }
+          const highestPriority = Math.max(...wake.candidatePriorities)
+          this.eventMetrics.lastSelectedWakeTier =
+            highestPriority === CandidateWakePriority.EXECUTOR_COMPATIBLE
+              ? 'EXECUTOR_COMPATIBLE'
+              : highestPriority === CandidateWakePriority.EXECUTOR_SHAPE
+                ? 'EXECUTOR_SHAPE'
+                : 'SHADOW_ONLY'
           return { ...wake, observedAtMs: wake.newestObservedAtMs }
         }
       }

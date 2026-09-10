@@ -449,7 +449,7 @@ export class CandidateWakeQueue {
 
   /**
    * @param {number} limit
-   * @param {{nowMs?: number, maxAgeMs?: number, newestFirst?: boolean}} [options]
+   * @param {{nowMs?: number, maxAgeMs?: number, newestFirst?: boolean, priorityForCandidate?: (candidateId: string) => number}} [options]
    */
   take(limit, options = {}) {
     if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('wake limit must be a positive safe integer')
@@ -457,6 +457,17 @@ export class CandidateWakeQueue {
     const maxAgeMs = options.maxAgeMs ?? Number.MAX_SAFE_INTEGER
     if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !Number.isSafeInteger(maxAgeMs) || maxAgeMs < 0) {
       throw new Error('wake freshness values must be non-negative safe integers')
+    }
+    if (options.priorityForCandidate !== undefined && typeof options.priorityForCandidate !== 'function') {
+      throw new Error('wake priority selector must be a function')
+    }
+    const priorityForCandidate = options.priorityForCandidate || (() => 0)
+    const priority = (candidateId) => {
+      const value = priorityForCandidate(candidateId)
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new Error('wake priority must be a non-negative safe integer')
+      }
+      return value
     }
     let staleDropped = 0
     for (const [candidateId, item] of this.pending) {
@@ -466,16 +477,19 @@ export class CandidateWakeQueue {
     }
     this.staleCandidateDrops += staleDropped
     const selected = [...this.pending.values()]
+      .map((item) => ({ ...item, wakePriority: priority(item.candidateId) }))
       .sort((left, right) => {
+        const priorityOrder = right.wakePriority - left.wakePriority
         const timeOrder = options.newestFirst
           ? right.lastObservedAtMs - left.lastObservedAtMs
           : left.firstObservedAtMs - right.firstObservedAtMs
-        return timeOrder || left.candidateId.localeCompare(right.candidateId)
+        return priorityOrder || timeOrder || left.candidateId.localeCompare(right.candidateId)
       })
       .slice(0, limit)
     for (const item of selected) this.pending.delete(item.candidateId)
     return {
       candidateIds: selected.map((item) => item.candidateId),
+      candidatePriorities: selected.map((item) => item.wakePriority),
       triggers: selected,
       oldestObservedAtMs: selected.length > 0 ? Math.min(...selected.map((item) => item.firstObservedAtMs)) : null,
       newestObservedAtMs: selected.length > 0 ? Math.max(...selected.map((item) => item.lastObservedAtMs)) : null,

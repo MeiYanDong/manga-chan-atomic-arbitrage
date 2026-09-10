@@ -5,10 +5,12 @@ import path from 'node:path'
 import test from 'node:test'
 import {
   BoardStatus,
+  CandidateWakePriority,
   EpisodeObservation,
   EpisodeState,
   applyFreshness,
   buildBoardSnapshot,
+  candidateWakePriority,
   chooseBestBaseOpportunity,
   catalogIsComplete,
   compactExecutionBoardSnapshot,
@@ -25,7 +27,7 @@ import {
   writeJsonAtomic,
   writeStableJsonAtomic,
 } from '../src/opportunity-board.mjs'
-import { canonicalPoolKey, pairPoolId } from '../src/pair-catalog.mjs'
+import { canonicalPoolKey, pairPoolId, PoolAdmission } from '../src/pair-catalog.mjs'
 import { stablePayloadHash } from '../src/source-provenance.mjs'
 
 test('cycle pacing preserves start interval and enforces a post-cycle cooldown', () => {
@@ -297,6 +299,33 @@ test('PAIR discovery verifies PoolKeys and admits structurally safe shadow pools
     unknownDepth.pools.map((pool) => pool.executionAdmission).sort(),
     ['SHADOW_ONLY_DEPTH_UNKNOWN', 'SHADOW_ONLY_DISABLED_QUOTE'].sort(),
   )
+})
+
+test('event wake priority reflects current executor evidence without promoting structural claims', () => {
+  const structural = normalizePairCandidate(candidateFixture(), { minDepthUsd: 100 })
+  assert.equal(structural.executorShapePoolCount, 2)
+  assert.equal(structural.liveCompatiblePoolCount, 0)
+  assert.equal(candidateWakePriority(structural), CandidateWakePriority.EXECUTOR_SHAPE)
+
+  const compatible = {
+    ...structural,
+    pools: structural.pools.map((pool) => ({
+      ...pool,
+      executionAdmission: PoolAdmission.EXECUTOR_COMPATIBLE,
+    })),
+  }
+  assert.equal(candidateWakePriority(compatible), CandidateWakePriority.EXECUTOR_COMPATIBLE)
+
+  const shadowOnly = {
+    ...structural,
+    pools: structural.pools.map((pool) => ({
+      ...pool,
+      hookAddress: '0x5555555555555555555555555555555555555555',
+      executionAdmission: PoolAdmission.SHADOW_ONLY_UNSUPPORTED_HOOK,
+    })),
+  }
+  assert.equal(candidateWakePriority(shadowOnly), CandidateWakePriority.SHADOW_ONLY)
+  assert.equal(candidateWakePriority(null), CandidateWakePriority.SHADOW_ONLY)
 })
 
 test('catalog completeness is evaluated after newest-page reconciliation', () => {
