@@ -86,11 +86,16 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free board and dual watcher are running release `ccf7dfb53dcc8b746929b704013eb25cc839529e`. At the
-  `2026-09-09 20:08 CST` readback, the bounded graph contained 46,105 source targets, 64,162 retained pools, 4,280
-  multi-pool targets and 3,457 admitted candidates. Only three candidates had fresh quotes and none screened positive.
-  Both services had zero restarts and zero OOM events. The board remains loopback-only and has no signer or broadcast
-  path.
+- The signer-free board and dual watcher are running release `2f3007ddd9293863a56c0665cde30d6705b9f7a7`. At the
+  `2026-09-10 17:29 CST` readback, the bounded graph contained 67,138 retained source pools, 4,355 multi-pool targets
+  and 3,524 admitted candidates. Only two candidates had fresh quotes; one had gross profit but was net-negative after
+  Gas, and none screened net-positive. Both services had zero restarts and zero OOM events. The board remains
+  loopback-only and has no signer or broadcast path.
+- The dual watcher now freezes the exact typed candidate revision that causes escalation. A concurrent board refresh
+  can no longer replace that revision or reject it merely because its quote-block-bound candidate hash disappeared
+  from the latest projection. Quote age, canonical block identity, current exact simulation, Gas, nonce, principal,
+  authorization, final simulation and receipt gates remain unchanged. The new handoff path is production-loaded but
+  has not yet seen a post-release screened-positive trigger.
 - The private business dashboard and isolated Feishu reporter are production-promoted. The reporter delivered the
   completed Beijing day `2026-09-07` with Feishu response code `0`, persisted one success receipt, rejected a duplicate
   same-day send, and is enabled as a five-minute refresh/retry timer with a 09:05 Beijing reporting cutoff. The latest
