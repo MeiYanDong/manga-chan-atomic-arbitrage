@@ -1,6 +1,6 @@
 # ADR 0034: prioritize executable event wakes before shadow-only work
 
-- Status: Accepted; production verification pending
+- Status: Accepted and production-verified on v0.8.5
 - Date: 2026-09-10
 
 ## Context
