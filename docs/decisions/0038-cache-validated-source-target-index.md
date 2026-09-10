@@ -1,6 +1,6 @@
 # ADR 0038: cache the validated source-target index on the hot poll path
 
-- Status: Accepted for implementation; production observation pending
+- Status: Production-observed on release `55df95ed9d152bd66bfe273cbee578caccb456b8`
 - Date: 2026-09-10
 
 ## Context
@@ -56,3 +56,16 @@ block evidence, provider caps, profit floors, signing and receipt reconciliation
 
 Restart only the signer-free board on release `a9f5f99e4187f0996e0f4cf7bb8e6988d9705fa8`. Do not restart or re-arm the
 dual signer, and retain the durable quote-budget, evidence and execution ledgers.
+
+## Production follow-up
+
+The reviewed release passed GitHub and Linux artifact gates and was promoted board-only. In its first 200-block
+catch-up sample, it reduced aggregate decode/route work from the earlier 5,587.10 ms observation to 252.23 ms and the
+complete poll from 11,309 ms to 1,088.91 ms. A later sample covering 79 blocks and 548 decoded events completed
+decode/route in 64.64 ms and the complete poll in 824.57 ms. These short, differently shaped samples confirm activation
+and remove the prior CPU-scale bottleneck; they are not a durable latency SLO.
+
+The release still allowed up to four synchronous writes of the 45,294,139-byte source projection in a single protected
+periodic cycle. That separate remaining bottleneck led to
+[ADR 0039](0039-coalesce-periodic-source-projection.md). Full promotion evidence is in
+[the production record](../evidence/2026-09-10-cached-source-target-hot-path-production-promotion.md).

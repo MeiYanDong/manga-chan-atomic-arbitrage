@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Coalesce the four possible large source-catalog writes in one protected periodic cycle into one atomic projection.
+  Freeze the last projected source cursors until that file and the general runtime checkpoint commit in order, so a
+  crash can cause safe re-observation but cannot skip an unprojected block range. Expose projection count, duration and
+  total periodic-maintenance timing without changing sources, admission, signing or RPC budgets.
+- Cache the validated source-target index across hot polls, use its branded fast retention path, skip empty Initialize
+  ingestion and avoid unchanged PAIR/ambiguity merges. Split decode, coalescing, Initialize ingestion and route/queue
+  timing while retaining the aggregate metric.
 - Add an opt-in managed RPC lane only for `EXECUTOR_COMPATIBLE` and `EXECUTOR_SHAPE` event quotes while retaining
   public-RPC log polling, discovery, backfill and periodic coverage. Persist strict UTC-day ceilings of 200 event
   candidates and 4,000 logical JSON-RPC calls, degrade to the public reader on cap/transient failure, and expose
