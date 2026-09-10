@@ -9,6 +9,8 @@ import {
   stablePayloadHash,
 } from './source-provenance.mjs'
 
+const SOURCE_TARGET_INDEXES = new WeakSet()
+
 export const LONG_LAUNCH_CREATED_TOPIC = '0xadc6f1f726f7c710f77ec06adc75f3bb964e5be19581b072c67f7b9b4039267b'
 export const DOPPLER_CREATE_TOPIC = '0x68ff1cfcdcf76864161555fc0de1878d8f83ec6949bf351df74d8a4a1a2679ab'
 export const SOURCE_CATALOG_SCHEMA_VERSION = 5
@@ -444,16 +446,39 @@ export function sourceTargetAddresses({
   for (const launch of longLaunches) addSourceTarget(output, launch.asset)
   for (const launch of dopplerLaunches) addSourceTarget(output, launch.asset)
   for (const target of dopplerTargetIndex) addSourceTarget(output, target.asset || target)
+  SOURCE_TARGET_INDEXES.add(output)
   return output
+}
+
+/** @param {unknown} value */
+export function isSourceTargetAddressIndex(value) {
+  return value instanceof Set && SOURCE_TARGET_INDEXES.has(value)
 }
 
 export function retainPoolsForSourceTargets(pools, targetAddresses) {
   const targets = new Set()
   for (const value of targetAddresses || []) addSourceTarget(targets, value)
+  SOURCE_TARGET_INDEXES.add(targets)
+  return retainPoolsForSourceTargetIndex(pools, targets)
+}
+
+/**
+ * Filter with an index already produced by `sourceTargetAddresses`. This is a
+ * deliberate trust boundary for the board's in-memory cache: source facts are
+ * validated when they enter the projection, so a hot poll must not checksum
+ * tens of thousands of unchanged addresses again.
+ *
+ * @param {Record<string, any>[]} pools
+ * @param {Set<string>} targetIndex
+ */
+export function retainPoolsForSourceTargetIndex(pools, targetIndex) {
+  if (!isSourceTargetAddressIndex(targetIndex)) {
+    throw new Error('source target index must come from sourceTargetAddresses')
+  }
   return (pools || []).filter((pool) => {
     const currency0 = String(pool?.currency0 || '').toLowerCase()
     const currency1 = String(pool?.currency1 || '').toLowerCase()
-    return targets.has(currency0) || targets.has(currency1)
+    return targetIndex.has(currency0) || targetIndex.has(currency1)
   })
 }
 

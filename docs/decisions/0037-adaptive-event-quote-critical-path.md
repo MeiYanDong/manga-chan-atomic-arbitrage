@@ -1,6 +1,6 @@
 # ADR 0037: adaptive event-quote critical path
 
-- Status: Accepted for implementation; production observation pending
+- Status: Production-observed on release `a9f5f99e4187f0996e0f4cf7bb8e6988d9705fa8`
 - Date: 2026-09-10
 
 ## Context
@@ -66,3 +66,15 @@ net-profit, principal, nonce, authorization, final simulation, receipt and post-
 
 Restart only the signer-free board on the prior reviewed release. Do not restart or re-arm the active signer. Retain
 the durable RPC budget and economic ledgers so rollback cannot manufacture unused quota or erase receipt history.
+
+## Production follow-up
+
+The reviewed release passed Linux artifact gates and was promoted board-only. Its first three natural managed cycles
+used 33 managed logical calls in total, avoided six deferred amount quotes and had no HTTP failure or public fallback.
+Across the first 18 managed cycles, the new process recorded 188 managed logical calls and one transient failure. These
+short windows confirm activation and reduced ordinary call fan-out, not durable performance or profit.
+
+The pre-fixed-block phase fell below 0.15 ms in the observed window, but public catch-up ingestion still spent about
+5.6 seconds in its combined decode/route phase and could block loopback reads during large maintenance. That separate
+bottleneck is addressed by [ADR 0038](0038-cache-validated-source-target-index.md). Full evidence is in
+[the production promotion record](../evidence/2026-09-10-adaptive-event-quote-production-promotion.md).

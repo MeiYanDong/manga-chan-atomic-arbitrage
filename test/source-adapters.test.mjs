@@ -23,6 +23,7 @@ import {
   markAdapterSuccess,
   mergeDopplerTargetFacts,
   planSourceTargetPoolRange,
+  retainPoolsForSourceTargetIndex,
   retainPoolsForSourceTargets,
   selectVisibleDopplerLaunches,
   sourceFactsByAsset,
@@ -184,6 +185,25 @@ test('pool retention admits only currencies discovered as source targets', () =>
     ['ninecat-ai', 'listed-ai'],
   )
   assert.equal(targets.has(AI.toLowerCase()), false, 'a quote currency must not recursively expand the target set')
+  assert.deepEqual(
+    retainPoolsForSourceTargetIndex(
+      [
+        { poolId: 'ninecat-ai', currency0: NINECAT, currency1: AI },
+        {
+          poolId: 'unrelated',
+          currency0: getAddress('0x4444444444444444444444444444444444444444'),
+          currency1: getAddress('0x5555555555555555555555555555555555555555'),
+        },
+      ],
+      targets,
+    ).map((pool) => pool.poolId),
+    ['ninecat-ai'],
+    'a prevalidated index preserves the same admission result without rebuilding the index',
+  )
+  assert.throws(
+    () => retainPoolsForSourceTargetIndex([], /** @type {any} */ (new Set([NINECAT.toLowerCase()]))),
+    /source target index must come from sourceTargetAddresses/,
+  )
 })
 
 test('startup catalog migration records the bounded retention decision', () => {

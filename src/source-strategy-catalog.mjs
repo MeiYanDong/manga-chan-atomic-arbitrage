@@ -1,6 +1,6 @@
 import { getAddress } from 'viem'
 import { catalogAddress, isExecutorPoolKeyShape, mergeApiAndChainCatalog } from './pair-catalog.mjs'
-import { sourceTargetAddresses } from './source-adapters.mjs'
+import { isSourceTargetAddressIndex, sourceTargetAddresses } from './source-adapters.mjs'
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 
@@ -183,6 +183,7 @@ function compareRank(left, right) {
  *   longLaunches?: Record<string, any>[],
  *   dopplerTargetIndex?: Record<string, any>[],
  *   genericPools?: Record<string, any>[],
+ *   sourceTargetIndex?: Set<string>,
  *   maxPoolsPerTarget?: number,
  * }} input
  */
@@ -194,11 +195,16 @@ export function buildSourceStrategyCatalog(input = {}) {
   const metadata = metadataIndex(input)
   const claims = sourceClaims(input)
   const numeraires = declaredNumeraires(input)
-  const targets = sourceTargetAddresses({
-    pairListings: input.pairListings,
-    longLaunches: input.longLaunches,
-    dopplerTargetIndex: input.dopplerTargetIndex,
-  })
+  if (input.sourceTargetIndex !== undefined && !isSourceTargetAddressIndex(input.sourceTargetIndex)) {
+    throw new Error('sourceTargetIndex must come from sourceTargetAddresses')
+  }
+  const targets =
+    input.sourceTargetIndex ||
+    sourceTargetAddresses({
+      pairListings: input.pairListings,
+      longLaunches: input.longLaunches,
+      dopplerTargetIndex: input.dopplerTargetIndex,
+    })
   const tokens = new Map(
     mergeApiAndChainCatalog(input.apiTokens || [], input.chainPools || [], input.quoteAssets || new Map()).map(
       (token) => [token.address.toLowerCase(), token],
