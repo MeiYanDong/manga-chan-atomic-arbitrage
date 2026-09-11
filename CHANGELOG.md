@@ -7,6 +7,8 @@
   preserve partial/unknown states, and consume only a field-allowlisted Base runtime heartbeat. Isolate its low-frequency
   Base reads on a production-verified public endpoint after the official endpoint rate-limited bounded contract calls;
   neither execution RPC nor signer service is changed or restarted.
+- Add a reproducible Ubuntu `ssh.socket` drop-in for the private dashboard tunnel. Port 2222 remains key-only,
+  client-local-forward-only and cloud-firewall-restricted; the dashboard itself stays bound to loopback.
 
 - Decouple loopback health from the last full-board projection. A successful event cycle now restores live health
   immediately even when its non-material economic snapshot is intentionally deferred; error publications, partial

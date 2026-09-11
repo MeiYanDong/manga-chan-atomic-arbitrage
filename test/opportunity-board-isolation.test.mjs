@@ -267,11 +267,22 @@ test('business reporter can read ledgers but cannot sign or write trading state'
 
 test('SSH access permits only a client-local forward to the loopback board', () => {
   const sshd = fs.readFileSync(path.join(root, 'deploy', 'sshd', '60-manga-chan-arbitrage-hardening.conf'), 'utf8')
+  const ports = fs.readFileSync(path.join(root, 'deploy', 'sshd', '61-dashboard-tunnel-port.conf'), 'utf8')
+  const socket = fs.readFileSync(
+    path.join(root, 'deploy', 'systemd', 'ssh.socket.d', '61-dashboard-tunnel-port.conf'),
+    'utf8',
+  )
   assert.match(sshd, /^AllowTcpForwarding local$/m)
   assert.match(sshd, /^PermitOpen 127\.0\.0\.1:8788$/m)
   assert.match(sshd, /^GatewayPorts no$/m)
   assert.match(sshd, /^PermitTunnel no$/m)
   assert.match(sshd, /^PasswordAuthentication no$/m)
+  assert.match(ports, /^Port 22$/m)
+  assert.match(ports, /^Port 2222$/m)
+  assert.match(socket, /^ListenStream=$/m)
+  assert.match(socket, /^ListenStream=0\.0\.0\.0:2222$/m)
+  assert.match(socket, /^ListenStream=\[::\]:2222$/m)
+  assert.doesNotMatch(socket, /8788/)
 })
 
 test('generic signer keeps the board read-only and uses a bounded loopback-escalation watcher', () => {
