@@ -142,13 +142,34 @@ Keep the timer disabled if the release identity or health readback disagrees. A 
 re-arm or otherwise mutate the trading watcher.
 
 The HTTP service deliberately listens only on loopback. View it through an SSH tunnel instead of opening a public
-firewall port. The supplied SSH drop-in permits only client-local forwarding to `127.0.0.1:8788`; validate it with
+dashboard port. The supplied SSH drop-in permits only client-local forwarding to `127.0.0.1:8788`; validate it with
 `sshd -t`, reload SSH, and prove a fresh key-only session before relying on the tunnel. Runtime evidence is stored in
 `/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl`, `state.json`, `chain-catalog.json`,
 `source-catalog.json`, `board.sqlite`, `evidence.jsonl` and `pool-mirror.json`; none belongs in Git. Chain/source catalogs
 are complete only from their recorded configured start blocks. The mirror contains event state, not a quote or
 execution instruction. Keep the directory when rolling between SQLite and the legacy reader; the rollback flag never
 deletes the append-only ledger.
+
+On Ubuntu hosts where `ssh.socket` owns port 22, install both reviewed port files. Port 2222 is an SSH transport, never
+the dashboard listener, and its cloud firewall rule must be limited to the operator's current `/32` CIDR:
+
+```bash
+sudo install -o root -g root -m 0644 \
+  deploy/sshd/61-dashboard-tunnel-port.conf \
+  /etc/ssh/sshd_config.d/61-dashboard-tunnel-port.conf
+sudo install -d -o root -g root -m 0755 /etc/systemd/system/ssh.socket.d
+sudo install -o root -g root -m 0644 \
+  deploy/systemd/ssh.socket.d/61-dashboard-tunnel-port.conf \
+  /etc/systemd/system/ssh.socket.d/61-dashboard-tunnel-port.conf
+sudo sshd -t
+sudo systemctl daemon-reload
+sudo systemctl stop ssh.service
+sudo systemctl restart ssh.socket
+sudo systemctl start ssh.service
+```
+
+Keep the cloud recovery channel available while changing the listener. Verify key-only authentication on 2222 before
+starting `ssh -N -L 127.0.0.1:18788:127.0.0.1:8788 -p 2222 <production-host>`. Never open 8788 in the cloud firewall.
 
 The exact current source catalog is the private atomically replaced `source-catalog.json` projection. It is written as
 canonical JSON through a bounded buffer and linked from economic checkpoints by SHA-256; routine snapshot commits do
