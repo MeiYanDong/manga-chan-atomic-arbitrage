@@ -32,6 +32,11 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'MANGA_WETH_SEED_ETH=0.001',
       'MANGA_WETH_MAX_AMOUNT_WETH=0.5',
       'MANGA_WETH_MIN_GROSS_PROFIT_WETH=0.000002',
+      'EARN_LIVE_AMOUNT_CANDIDATES=0.0004,0.0008',
+      'EARN_LIVE_MIN_NET_WETH=0.00003',
+      'EARN_LIVE_MIN_HEADROOM_WETH=0.00002',
+      'EARN_LIVE_MAX_FAILED_GAS_WETH=0.0001',
+      'EARN_LIVE_WALLET_RESERVE_WETH=0.0003',
     ].join('\n'),
     { mode: 0o600 },
   )
@@ -57,6 +62,11 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.wethSeedEth, '0.001')
   assert.equal(config.wethMaxAmountWeth, '0.5')
   assert.equal(config.wethMinGrossProfitWeth, '0.000002')
+  assert.equal(config.earnLiveAmountCandidates, '0.0004,0.0008')
+  assert.equal(config.earnLiveMinNetWeth, '0.00003')
+  assert.equal(config.earnLiveMinHeadroomWeth, '0.00002')
+  assert.equal(config.earnLiveMaxFailedGasWeth, '0.0001')
+  assert.equal(config.earnLiveWalletReserveWeth, '0.0003')
   assert.doesNotThrow(() => assertLiveTransport(config, { requireWss: true }))
 })
 
