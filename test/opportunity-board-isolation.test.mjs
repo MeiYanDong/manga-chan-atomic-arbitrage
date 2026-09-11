@@ -260,6 +260,7 @@ test('business reporter can read ledgers but cannot sign or write trading state'
     basePortfolioDropIn,
     /^Environment=MANGA_BUSINESS_BASE_HEARTBEAT_PATH=\/run\/atomic-cycle-portfolio\/heartbeat\.json$/m,
   )
+  assert.match(basePortfolioDropIn, /^Environment=MANGA_BUSINESS_BASE_RPC_URL=https:\/\/base-rpc\.publicnode\.com$/m)
   assert.match(basePortfolioDropIn, /^ReadOnlyPaths=-\/run\/atomic-cycle-portfolio$/m)
   assert.doesNotMatch(basePortfolioDropIn, /^ReadWritePaths=/m)
 })

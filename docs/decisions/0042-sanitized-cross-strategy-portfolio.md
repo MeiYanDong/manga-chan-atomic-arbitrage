@@ -27,6 +27,9 @@ RPC work to the execution path.
    one-shot reporter supplementary membership in the Base runtime group solely to read this sanitized file.
 5. Keep every portfolio endpoint same-origin, loopback-only and read-only. No POST, wallet connector, arbitrary RPC proxy,
    signing or withdrawal code is added.
+6. Let production override the Base business reader independently of every execution RPC. The current host uses the
+   reviewed public PublicNode endpoint after the official endpoint returned `-32016` for bounded contract reads. This
+   override is limited to the five-minute portfolio projection and remains fail-closed on missing fields.
 
 ## Consequences
 

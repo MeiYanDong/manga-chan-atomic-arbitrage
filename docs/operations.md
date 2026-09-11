@@ -235,14 +235,17 @@ sudo install -o root -g root -m 0644 \
   deploy/systemd/manga-business-report-base-portfolio.conf \
   /etc/systemd/system/manga-business-report.service.d/20-base-portfolio.conf
 sudo systemctl daemon-reload
-sudo systemctl restart atomic-cycle-live.service
 sudo systemctl start manga-business-report.service
 ```
 
 The drop-in grants the reporter only supplementary membership in `atomic-cycle`; the private state directory and signer
-remain owner-only. Validate that `/run/atomic-cycle-portfolio/heartbeat.json` is `0640`, the Base executor identity
-matches the registry, and the business snapshot reports `7` monitored objects. Do not grant access to
-`/var/lib/atomic-cycle-engine`.
+remain owner-only. It also pins only this low-frequency business projection to the reviewed public Base reader; it does
+not change the Base execution service, signer RPC or nonce owner. The default official Base endpoint is intentionally
+not used by this production projection because the release-host verification returned JSON-RPC `-32016` on the bounded
+contract reads, while the configured public reader completed the same fixed-block seven-account snapshot. Validate that
+`/run/atomic-cycle-portfolio/heartbeat.json` is `0640`, the Base executor identity matches the registry, and the business
+snapshot reports `7` monitored objects. Do not grant access to `/var/lib/atomic-cycle-engine` and do not restart either
+trading service merely to install this reporter drop-in.
 
 Acceptance requires Feishu response code `0`, one fsynced `DELIVERED` receipt for the previous Beijing day, a mode-0640
 sanitized snapshot and an enabled next timer trigger. Inspect metadata and selected non-secret fields; never print or

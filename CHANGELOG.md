@@ -4,7 +4,9 @@
 
 - Add one Chinese-first `资金` page for two operator wallets, three active executors and two stopped-but-funded
   executors across Base and Robinhood Chain. Read balances at one fixed block per chain, verify executor identity,
-  preserve partial/unknown states, and consume only a field-allowlisted Base runtime heartbeat.
+  preserve partial/unknown states, and consume only a field-allowlisted Base runtime heartbeat. Isolate its low-frequency
+  Base reads on a production-verified public endpoint after the official endpoint rate-limited bounded contract calls;
+  neither execution RPC nor signer service is changed or restarted.
 
 - Decouple loopback health from the last full-board projection. A successful event cycle now restores live health
   immediately even when its non-material economic snapshot is intentionally deferred; error publications, partial
