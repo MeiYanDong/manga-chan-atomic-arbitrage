@@ -69,6 +69,12 @@ custom bot at 09:05, retrying every five minutes until one durable success recei
 broadcast a transaction, and neither turns a quote or process heartbeat into profit evidence. See
 [ADR 0024](docs/decisions/0024-sanitized-business-dashboard-and-feishu-reporting.md).
 
+The same five-minute snapshot now includes a sanitized cross-strategy funds registry: two operator wallets, three active
+executors and two stopped-but-funded executors across Base and Robinhood Chain. The `资金` page keeps the two parked
+contracts visible until a separately authorized, receipt-reconciled collection is complete. Base contributes only a
+field-allowlisted `/run` heartbeat; its signer and private mutation ledger remain inaccessible. See
+[ADR 0042](docs/decisions/0042-sanitized-cross-strategy-portfolio.md).
+
 `PAIR API` in that sentence is a discovery boundary, not an issuer label. The accepted multi-platform dashboard design
 keeps discovery, listing, platform route, launch protocol, liquidity venue, asset class, quote and execution provenance
 independent. See [ADR 0009](docs/decisions/0009-orthogonal-source-provenance.md) and the
@@ -381,7 +387,8 @@ price calculation for the fixed-block Quoter result. Runtime evidence is availab
 `/api/chain-catalog` through the same loopback-only SSH tunnel.
 
 The private source-aware console and read-only API are served on the same loopback listener. The console uses four
-operator tasks: 总览, 机会, 账单 and 更多. It starts with the current strategy result, separates account-wide history,
+operator tasks: 总览, 资金, 机会, 账单 and 更多. It starts with the current strategy result, keeps all funded wallets and
+contracts visible, separates account-wide history,
 and divides candidates into 可以执行, 接近门槛 and 全部观察. Exact values, Gas, hashes, addresses and claim evidence
 remain available through deliberate disclosure instead of appearing in the primary reading path. See
 [ADR 0025](docs/decisions/0025-user-first-progressive-disclosure.md) and the

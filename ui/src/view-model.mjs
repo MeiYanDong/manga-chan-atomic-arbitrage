@@ -1,8 +1,9 @@
 export const PAGES = Object.freeze([
   { id: 'overview', label: '总览', description: '先看结果', index: '01' },
-  { id: 'opportunities', label: '机会', description: '再看原因', index: '02' },
-  { id: 'execution', label: '账单', description: '核对每一笔', index: '03' },
-  { id: 'more', label: '更多', description: '来源与系统', index: '04' },
+  { id: 'portfolio', label: '资金', description: '钱包与合约', index: '02' },
+  { id: 'opportunities', label: '机会', description: '再看原因', index: '03' },
+  { id: 'execution', label: '账单', description: '核对每一笔', index: '04' },
+  { id: 'more', label: '更多', description: '来源与系统', index: '05' },
 ])
 
 export function currentPage(hash) {
@@ -45,13 +46,35 @@ export function relativeAge(timestamp, now = Date.now()) {
 }
 
 export function toneForStatus(status) {
-  if (['CHAIN_ATTESTED', 'CORROBORATED', 'CURRENT', 'HEALTHY', 'CONFIRMED', 'REALIZED_NET_VERIFIED'].includes(status)) {
+  if (
+    [
+      'CHAIN_ATTESTED',
+      'CORROBORATED',
+      'CURRENT',
+      'HEALTHY',
+      'CONFIRMED',
+      'REALIZED_NET_VERIFIED',
+      'VERIFIED',
+      'RUNNING',
+    ].includes(status)
+  ) {
     return 'verified'
   }
-  if (['FRESH_PROXY_POSITIVE', 'SCREENED_PROXY', 'BACKFILL_PARTIAL', 'PARTIAL', 'STALE', 'LIMITED'].includes(status)) {
+  if (
+    [
+      'FRESH_PROXY_POSITIVE',
+      'SCREENED_PROXY',
+      'BACKFILL_PARTIAL',
+      'PARTIAL',
+      'PENDING',
+      'PARKED',
+      'STALE',
+      'LIMITED',
+    ].includes(status)
+  ) {
     return 'proxy'
   }
-  if (['CONFLICTED', 'ERROR', 'DEGRADED', 'REVERTED', 'HALTED'].includes(status)) return 'danger'
+  if (['ALERT', 'CONFLICTED', 'ERROR', 'DEGRADED', 'REVERTED', 'HALTED', 'STOPPED'].includes(status)) return 'danger'
   return 'neutral'
 }
 
@@ -131,6 +154,11 @@ export function noTradeReason(business, overview) {
 export function humanStatus(status) {
   const labels = {
     RUNNING: '运行中',
+    VERIFIED: '已核验',
+    PARTIAL: '部分待核验',
+    ALERT: '需要处理',
+    PENDING: '有待确认交易',
+    PARKED: '等待归集',
     SCANNING: '扫描中',
     HEALTHY: '正常',
     DEGRADED: '数据降级',

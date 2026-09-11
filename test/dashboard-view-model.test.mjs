@@ -24,11 +24,12 @@ import {
 } from '../ui/src/view-model.mjs'
 
 test('dashboard navigation only accepts known workspaces', () => {
-  assert.equal(PAGES.length, 4)
+  assert.equal(PAGES.length, 5)
   assert.deepEqual(
     PAGES.map((page) => page.label),
-    ['总览', '机会', '账单', '更多'],
+    ['总览', '资金', '机会', '账单', '更多'],
   )
+  assert.equal(currentPage('#/portfolio'), 'portfolio')
   assert.equal(currentPage('#/radar'), 'opportunities')
   assert.equal(currentPage('#/sources'), 'more')
   assert.equal(currentPage('#/execution/detail'), 'execution')
@@ -71,6 +72,8 @@ test('business labels are human-facing while preserving degraded and unknown sta
     '本策略暂未成交',
   )
   assert.equal(humanStatus('CONNECTED'), '已连接')
+  assert.equal(humanStatus('PARKED'), '等待归集')
+  assert.equal(humanStatus('VERIFIED'), '已核验')
   assert.equal(humanStatus('SOMETHING_NEW'), '待核验')
   assert.equal(sourceLabel('PAIR'), 'PAIR 平台')
   assert.equal(sourceLabel('LONG_ROUTE'), 'LONG 路线')

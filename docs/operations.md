@@ -224,8 +224,25 @@ sudo systemctl show manga-business-report.service --property=Result,ExecMainStat
 sudo systemctl enable --now manga-business-report.timer
 sudo systemctl list-timers manga-business-report.timer
 curl --fail --silent --show-error http://127.0.0.1:8788/api/v1/business | jq \
-  '{generatedAt,accountingScope,strategy,capital,economics,market,delivery}'
+  '{generatedAt,accountingScope,strategy,capital,economics,market,portfolio,delivery}'
 ```
+
+When the Base canary runs on the same host, install the reviewed optional drop-in before refreshing the snapshot:
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/systemd/system/manga-business-report.service.d
+sudo install -o root -g root -m 0644 \
+  deploy/systemd/manga-business-report-base-portfolio.conf \
+  /etc/systemd/system/manga-business-report.service.d/20-base-portfolio.conf
+sudo systemctl daemon-reload
+sudo systemctl restart atomic-cycle-live.service
+sudo systemctl start manga-business-report.service
+```
+
+The drop-in grants the reporter only supplementary membership in `atomic-cycle`; the private state directory and signer
+remain owner-only. Validate that `/run/atomic-cycle-portfolio/heartbeat.json` is `0640`, the Base executor identity
+matches the registry, and the business snapshot reports `7` monitored objects. Do not grant access to
+`/var/lib/atomic-cycle-engine`.
 
 Acceptance requires Feishu response code `0`, one fsynced `DELIVERED` receipt for the previous Beijing day, a mode-0640
 sanitized snapshot and an enabled next timer trigger. Inspect metadata and selected non-secret fields; never print or

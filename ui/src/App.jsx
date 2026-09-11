@@ -125,8 +125,12 @@ function EmptyState({ title, body, action = null }) {
 }
 
 function GlobalHeader({ overview, business, refreshedAt, loading, error }) {
+  const services = business?.portfolio?.services || []
   const serviceHealthy =
-    business?.strategy?.status === 'RUNNING' && ['HEALTHY', 'SCANNING', 'RUNNING'].includes(business?.market?.status)
+    business?.strategy?.status === 'RUNNING' &&
+    ['HEALTHY', 'SCANNING', 'RUNNING'].includes(business?.market?.status) &&
+    services.length === 2 &&
+    services.every((service) => service.status === 'RUNNING')
   const coverageLimited = ['LIMITED', 'DEGRADED'].includes(overview?.coverageQuality?.status)
   const label = error
     ? '数据读取异常'
@@ -145,7 +149,7 @@ function GlobalHeader({ overview, business, refreshedAt, loading, error }) {
         </span>
         <span>
           <strong>套利经营台</strong>
-          <small>MANGA</small>
+          <small>BASE + ROBINHOOD</small>
         </span>
       </a>
       <div className={`live-state ${error || !serviceHealthy || coverageLimited ? 'live-state-warning' : ''}`}>
@@ -484,12 +488,38 @@ function DeliveryCard({ delivery }) {
   )
 }
 
+function PortfolioGlance({ portfolio }) {
+  if (!portfolio) {
+    return <div className="notice notice-warning">双链资金快照正在建立，暂不把未知余额显示成零。</div>
+  }
+  return (
+    <section className={`portfolio-glance portfolio-glance-${toneForStatus(portfolio.status)}`}>
+      <div>
+        <span className="eyebrow">资金雷达</span>
+        <h2>现在盯住 {portfolio.summary.watchedObjects} 个钱包与合约</h2>
+        <p>
+          {portfolio.summary.activeObjects} 个持续运行，{portfolio.summary.parkedObjects} 个等待资金归集。
+        </p>
+      </div>
+      <div className="parked-balance">
+        <span>旧合约待归集</span>
+        <strong>{primaryNumber(portfolio.summary.parkedUsdg)}</strong>
+        <small>USDG</small>
+      </div>
+      <a className="button button-primary" href="#/portfolio">
+        查看全部资金
+      </a>
+    </section>
+  )
+}
+
 function OverviewPage({ data }) {
   const business = data.business
   return (
     <div className="page-stack">
       <ResultHero business={business} overview={data.overview} />
       {!business && <div className="notice notice-warning">经营快照正在建立，交易权限没有变化。</div>}
+      <PortfolioGlance portfolio={business?.portfolio} />
       <SummaryCards business={business} overview={data.overview} />
       <OpportunityFunnel overview={data.overview} />
       <div className="overview-split">
@@ -497,6 +527,159 @@ function OverviewPage({ data }) {
         <DeliveryCard delivery={business?.delivery} />
       </div>
       <RecentExecutions items={business?.recentExecutions || []} />
+    </div>
+  )
+}
+
+function accountPrimaryBalance(account) {
+  return account?.assets?.find((asset) => asset.symbol === account.primaryAsset) || null
+}
+
+function accountSecondaryBalances(account) {
+  return (account?.assets || []).filter(
+    (asset) => asset.symbol !== account.primaryAsset && asset.amount !== null && Number(asset.amount) !== 0,
+  )
+}
+
+function PortfolioAccount({ account }) {
+  const primary = accountPrimaryBalance(account)
+  const secondary = accountSecondaryBalances(account)
+  const displayStatus =
+    account.monitoringState === 'PARKED' && account.status === 'VERIFIED' ? 'PARKED' : account.status
+  return (
+    <article className={`account-card ${account.monitoringState === 'PARKED' ? 'account-card-parked' : ''}`}>
+      <div className="account-heading">
+        <div>
+          <span>{account.kind === 'WALLET' ? '钱包' : '合约'}</span>
+          <h3>{account.label}</h3>
+        </div>
+        <StatusBadge status={displayStatus}>{humanStatus(displayStatus)}</StatusBadge>
+      </div>
+      <div className="account-balance">
+        <span>{account.monitoringState === 'PARKED' ? '当前待归集' : '当前主要余额'}</span>
+        <strong>
+          {primaryNumber(primary?.amount, { digits: account.primaryAsset === 'USDG' ? 2 : 6 })}
+          <small>{account.primaryAsset}</small>
+        </strong>
+      </div>
+      {secondary.length > 0 && (
+        <p className="secondary-balance">
+          另有 {secondary.map((asset) => `${primaryNumber(asset.amount, { digits: 6 })} ${asset.symbol}`).join(' · ')}
+        </p>
+      )}
+      {Number(account.pendingTransactions || 0) > 0 && (
+        <p className="pending-callout">有 {account.pendingTransactions} 笔交易等待链上确认</p>
+      )}
+      <details className="account-details">
+        <summary>查看地址与链上记录</summary>
+        <div>
+          <code>{account.address}</code>
+          <span>身份核验：{humanStatus(account.checks?.identity)}</span>
+          <a href={account.explorerUrl} target="_blank" rel="noreferrer">
+            打开区块浏览器
+          </a>
+        </div>
+      </details>
+    </article>
+  )
+}
+
+function NetworkPortfolio({ network, accounts }) {
+  const visibleTotals = Object.entries(network.all || {}).filter(
+    ([, amount]) => amount !== null && Number(amount) !== 0,
+  )
+  return (
+    <section className="panel network-portfolio">
+      <div className="panel-heading network-heading">
+        <div>
+          <span className="eyebrow">{network.id === 'BASE' ? '低成本执行链' : 'MANGA 主策略链'}</span>
+          <h2>{network.label}</h2>
+        </div>
+        <div className="network-totals">
+          {visibleTotals.map(([symbol, amount]) => (
+            <span key={symbol}>
+              <strong>{primaryNumber(amount, { digits: symbol === 'USDG' ? 2 : 6 })}</strong> {symbol}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className={`account-grid account-grid-${accounts.length}`}>
+        {accounts.map((account) => (
+          <PortfolioAccount account={account} key={account.id} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function StrategyServices({ services = [] }) {
+  return (
+    <section className="strategy-service-grid" aria-label="双链策略运行状态">
+      {services.map((service) => (
+        <article key={service.id}>
+          <span className={`state-light state-${toneForStatus(service.status)}`} />
+          <div>
+            <span>{service.label}</span>
+            <strong>{humanStatus(service.status)}</strong>
+            {service.id === 'base-live' && (
+              <small>
+                已确认收益 {primaryNumber(service.verifiedNetEth, { digits: 6 })} ETH · 最近检查{' '}
+                {service.routesChecked ?? '—'} 条路线
+              </small>
+            )}
+          </div>
+        </article>
+      ))}
+    </section>
+  )
+}
+
+function PortfolioPage({ portfolio }) {
+  if (!portfolio) {
+    return (
+      <div className="page-stack">
+        <PageHeading
+          eyebrow="资金"
+          title="正在建立双链资金快照"
+          body="任何读取失败都会显示为待核验，不会被当作零余额。"
+        />
+        <EmptyState title="资金快照暂不可用" body="自动交易不依赖这个只读页面，系统会在下一次经营快照继续重试。" />
+      </div>
+    )
+  }
+  return (
+    <div className="page-stack">
+      <PageHeading
+        eyebrow="资金"
+        title={`一共盯 ${portfolio.summary.watchedObjects} 个对象`}
+        body="钱包负责 Gas，活跃合约负责循环本金；旧合约虽然已经停用，但只要仍有余额，就必须留在这里继续追踪。"
+        aside={
+          <div className="heading-result">
+            <span>等待归集</span>
+            <strong>{portfolio.summary.parkedObjects}</strong>
+            <small>个</small>
+          </div>
+        }
+      />
+      <StrategyServices services={portfolio.services} />
+      <div className="portfolio-rule">
+        <strong>日常重点：{portfolio.summary.activeObjects} 个</strong>
+        <span>
+          另外 {portfolio.summary.parkedObjects} 个旧合约合计还有 {primaryNumber(portfolio.summary.parkedUsdg)}{' '}
+          USDG；归集完成前不能隐藏。
+        </span>
+      </div>
+      {portfolio.networks.map((network) => (
+        <NetworkPortfolio
+          network={network}
+          accounts={portfolio.accounts.filter((account) => account.networkId === network.id)}
+          key={network.id}
+        />
+      ))}
+      <div className="read-only-note">
+        <strong>只读资金页</strong>
+        <span>这里只核对余额、合约身份和待确认交易；不会连接钱包、授权、签名或发起提现。</span>
+      </div>
     </div>
   )
 }
@@ -1046,7 +1229,9 @@ export default function App() {
   }, [closeDrawer])
 
   let content
-  if (page === 'opportunities') {
+  if (page === 'portfolio') {
+    content = <PortfolioPage portfolio={state.data.business?.portfolio} />
+  } else if (page === 'opportunities') {
     content = (
       <OpportunitiesPage
         opportunities={state.data.opportunities}

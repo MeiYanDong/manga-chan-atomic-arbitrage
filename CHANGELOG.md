@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add one Chinese-first `资金` page for two operator wallets, three active executors and two stopped-but-funded
+  executors across Base and Robinhood Chain. Read balances at one fixed block per chain, verify executor identity,
+  preserve partial/unknown states, and consume only a field-allowlisted Base runtime heartbeat.
+
 - Decouple loopback health from the last full-board projection. A successful event cycle now restores live health
   immediately even when its non-material economic snapshot is intentionally deferred; error publications, partial
   catalogs, stale cycles and unhealthy SQLite parity remain fail-closed.

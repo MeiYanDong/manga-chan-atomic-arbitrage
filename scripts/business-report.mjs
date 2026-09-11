@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +12,7 @@ import {
   readPublicBusinessSnapshot,
 } from '../src/business-operations.mjs'
 import { isSecureSystemdCredential } from '../src/journal.mjs'
+import { collectPortfolioSnapshot, createPortfolioClients, readBasePublicHeartbeat } from '../src/portfolio-monitor.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUN_DIR = path.resolve(process.env.MANGA_RUN_DIR || path.join(ROOT, 'runs'))
@@ -23,6 +25,14 @@ const DELIVERY_RECEIPTS_PATH = path.join(REPORT_DIR, 'delivery-receipts.jsonl')
 const LOCK_PATH = path.join(REPORT_DIR, 'report.lock')
 const BOARD_URL = process.env.MANGA_BUSINESS_BOARD_URL || 'http://127.0.0.1:8788'
 const WEBHOOK_FILE = process.env.MANGA_FEISHU_WEBHOOK_FILE || null
+const BASE_HEARTBEAT_PATH =
+  process.env.MANGA_BUSINESS_BASE_HEARTBEAT_PATH || '/run/atomic-cycle-portfolio/heartbeat.json'
+const ROBINHOOD_RPC_URL = process.env.MANGA_BUSINESS_ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com'
+const BASE_RPC_URL = process.env.MANGA_BUSINESS_BASE_RPC_URL || 'https://mainnet.base.org'
+const portfolioClients = createPortfolioClients({
+  robinhoodRpcUrl: ROBINHOOD_RPC_URL,
+  baseRpcUrl: BASE_RPC_URL,
+})
 const REPORT_HOUR = integer(process.env.MANGA_BUSINESS_REPORT_HOUR, 9, 0, 23)
 const REPORT_MINUTE = integer(process.env.MANGA_BUSINESS_REPORT_MINUTE, 5, 0, 59)
 
@@ -107,6 +117,25 @@ function processIsAlive(pid) {
   }
 }
 
+function serviceStatus(unit) {
+  const result = spawnSync('/usr/bin/systemctl', ['is-active', unit], {
+    encoding: 'utf8',
+    timeout: 2_000,
+  })
+  const status = String(result.stdout || '').trim()
+  if (status === 'active') return 'RUNNING'
+  if (['inactive', 'failed', 'deactivating'].includes(status)) return 'STOPPED'
+  return 'UNKNOWN'
+}
+
+function basePublicHeartbeat() {
+  try {
+    return readBasePublicHeartbeat(BASE_HEARTBEAT_PATH)
+  } catch {
+    return null
+  }
+}
+
 async function requestBoard(pathname) {
   try {
     const url = new URL(pathname, BOARD_URL)
@@ -123,12 +152,20 @@ async function requestBoard(pathname) {
 }
 
 async function currentBusinessSnapshot(delivery = deliveryState()) {
-  const [health, overview, sources] = await Promise.all([
+  const runtime = readJson(path.join(RUN_DIR, 'dual-watch-state.json'))
+  const processAlive = processIsAlive(Number(runtime?.pid))
+  const robinhoodServiceStatus = processStatusForPortfolio(runtime, processAlive)
+  const [health, overview, sources, portfolio] = await Promise.all([
     requestBoard('/healthz'),
     requestBoard('/api/v1/overview'),
     requestBoard('/api/v1/sources'),
+    collectPortfolioSnapshot({
+      clients: portfolioClients,
+      robinhoodServiceStatus,
+      baseUnitStatus: serviceStatus('atomic-cycle-live.service'),
+      baseHeartbeat: basePublicHeartbeat(),
+    }),
   ])
-  const runtime = readJson(path.join(RUN_DIR, 'dual-watch-state.json'))
   return buildBusinessSnapshot({
     now: new Date(),
     arm: readJson(path.join(RUN_DIR, 'dual-watch-arm.json')),
@@ -138,10 +175,17 @@ async function currentBusinessSnapshot(delivery = deliveryState()) {
     auditRecords: readJsonLines(path.join(RUN_DIR, 'audit.jsonl')),
     board: { health, overview, sources: sources?.summary || null },
     delivery,
-    processAlive: processIsAlive(Number(runtime?.pid)),
+    processAlive,
     reportHour: REPORT_HOUR,
     reportMinute: REPORT_MINUTE,
+    portfolio,
   })
+}
+
+function processStatusForPortfolio(runtime, processAlive) {
+  if (!runtime) return 'UNKNOWN'
+  if (!processAlive) return 'STOPPED'
+  return runtime.status === 'RUNNING' ? 'RUNNING' : runtime.status === 'HALTED_UNKNOWN' ? 'HALTED' : 'UNKNOWN'
 }
 
 function readWebhook() {

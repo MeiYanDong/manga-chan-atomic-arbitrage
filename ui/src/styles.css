@@ -1533,6 +1533,297 @@ p {
   font: 10px/1.4 var(--mono);
 }
 
+.portfolio-glance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 32px;
+  min-height: 132px;
+  padding: 24px 27px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--green);
+  border-radius: 16px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+
+.portfolio-glance-proxy {
+  border-left-color: var(--amber);
+}
+
+.portfolio-glance-danger {
+  border-left-color: var(--red);
+}
+
+.portfolio-glance h2 {
+  margin: 8px 0 7px;
+  font-family: 'Songti SC', 'STSong', Georgia, serif;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.portfolio-glance p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.parked-balance {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  min-width: 190px;
+  padding-left: 27px;
+  border-left: 1px solid var(--line);
+}
+
+.parked-balance span {
+  grid-column: 1 / -1;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.parked-balance strong {
+  color: var(--amber);
+  font:
+    600 31px/1 Georgia,
+    serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.parked-balance small {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.strategy-service-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.strategy-service-grid article {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 16px;
+  min-height: 112px;
+  padding: 20px 23px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+}
+
+.strategy-service-grid article > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 18px;
+}
+
+.strategy-service-grid article > div > span,
+.strategy-service-grid small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.strategy-service-grid strong {
+  color: var(--green-dark);
+  font-size: 13px;
+}
+
+.strategy-service-grid small {
+  grid-column: 1 / -1;
+  line-height: 1.5;
+}
+
+.portfolio-rule {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-height: 66px;
+  padding: 14px 19px;
+  border: 1px solid #e7c891;
+  border-radius: 13px;
+  background: var(--amber-soft);
+}
+
+.portfolio-rule strong {
+  color: var(--amber);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.portfolio-rule span {
+  color: #6d5a38;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.network-heading {
+  align-items: center;
+}
+
+.network-totals {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.network-totals span {
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--paper-soft);
+  font-size: 9px;
+}
+
+.network-totals strong {
+  color: var(--green-dark);
+  font:
+    600 14px/1 Georgia,
+    serif;
+}
+
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.account-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.account-grid-5 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.account-grid-5 .account-card {
+  grid-column: span 2;
+}
+
+.account-grid-5 .account-card:nth-last-child(-n + 2) {
+  grid-column: span 3;
+}
+
+.account-card {
+  display: flex;
+  min-width: 0;
+  min-height: 274px;
+  flex-direction: column;
+  padding: 21px;
+  background: var(--paper);
+}
+
+.account-card-parked {
+  background: #fffaf0;
+}
+
+.account-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.account-heading > div > span,
+.account-balance > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.account-heading h3 {
+  margin: 8px 0 0;
+  font-family: 'Songti SC', 'STSong', Georgia, serif;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.account-balance {
+  display: grid;
+  gap: 11px;
+  margin-top: 30px;
+}
+
+.account-balance strong {
+  color: var(--green-dark);
+  font:
+    600 clamp(27px, 2.5vw, 37px) / 1 Georgia,
+    serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+
+.account-card-parked .account-balance strong {
+  color: var(--amber);
+}
+
+.account-balance small {
+  margin-left: 7px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.secondary-balance,
+.pending-callout {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.pending-callout {
+  color: var(--amber);
+}
+
+.account-details {
+  margin-top: auto;
+  padding-top: 20px;
+}
+
+.account-details summary {
+  width: fit-content;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.account-details > div {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 13px;
+  border-radius: 9px;
+  background: var(--paper-soft);
+}
+
+.account-details code {
+  color: var(--ink);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.account-details span,
+.account-details a {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.account-details a {
+  width: fit-content;
+  color: var(--green);
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .notice {
   display: flex;
   align-items: center;
@@ -1853,6 +2144,23 @@ p {
   .execution-row {
     grid-template-columns: minmax(220px, 1fr) 170px 100px;
   }
+
+  .portfolio-glance {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .portfolio-glance > .button {
+    grid-column: 1 / -1;
+    width: fit-content;
+  }
+
+  .account-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-grid-5 .account-card {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1901,7 +2209,7 @@ p {
   }
 
   .nav-list {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 0;
     height: 100%;
   }
@@ -1955,6 +2263,10 @@ p {
 
   .receipt-details {
     grid-column: 1 / -1;
+  }
+
+  .strategy-service-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2056,6 +2368,41 @@ p {
   .source-counts,
   .plain-status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .portfolio-glance,
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-grid-5 .account-card {
+    grid-column: auto;
+  }
+
+  .portfolio-glance {
+    gap: 20px;
+    padding: 22px;
+  }
+
+  .parked-balance {
+    min-width: 0;
+    padding: 17px 0 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .portfolio-glance > .button {
+    width: 100%;
+  }
+
+  .portfolio-rule {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .network-totals {
+    justify-content: flex-start;
   }
 
   .funnel-flow,

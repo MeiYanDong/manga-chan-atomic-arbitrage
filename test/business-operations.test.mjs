@@ -98,6 +98,15 @@ function fixture() {
     },
     delivery: null,
     processAlive: true,
+    portfolio: {
+      schemaVersion: 1,
+      generatedAt: '2026-09-08T03:00:00.000Z',
+      status: 'VERIFIED',
+      summary: { watchedObjects: 7, activeObjects: 5, parkedObjects: 2, parkedUsdg: '15.676618' },
+      services: [],
+      networks: [],
+      accounts: [],
+    },
   }
 }
 
@@ -135,6 +144,7 @@ test('builds receipt-gated business results and compounds only authorized profit
   assert.equal(snapshot.market.sourceCounts.pairListings, 20)
   assert.equal(snapshot.market.sourceCounts.longRoutes, 30)
   assert.equal(snapshot.recentExecutions[0].baseAsset, 'WETH')
+  assert.equal(snapshot.portfolio.summary.watchedObjects, 7)
   assert.doesNotMatch(JSON.stringify(snapshot), /active-dual-authorization/)
 })
 
@@ -146,6 +156,7 @@ test('daily Feishu copy reports business outcomes without raw execution identifi
   assert.match(report, /成交：1 笔（USDG 本金 1 笔，WETH 本金 0 笔）/)
   assert.match(report, /可复投资金：11\.00 USDG；0\.0011 WETH/)
   assert.match(report, /当前机会：可以执行 0 条；接近门槛 1 条/)
+  assert.match(report, /资金监控：5 个活跃地址；2 个待归集地址（15\.68 USDG）/)
   assert.doesNotMatch(report, /扫描 863 个标的|canonical receipt/)
   assert.doesNotMatch(report, /0x[0-9a-f]{64}|authorization|webhook/i)
 })
