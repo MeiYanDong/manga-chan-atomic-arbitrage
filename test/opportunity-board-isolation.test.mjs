@@ -221,6 +221,10 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
 test('business reporter can read ledgers but cannot sign or write trading state', () => {
   const service = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-business-report.service'), 'utf8')
   const timer = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-business-report.timer'), 'utf8')
+  const basePortfolioDropIn = fs.readFileSync(
+    path.join(root, 'deploy', 'systemd', 'manga-business-report-base-portfolio.conf'),
+    'utf8',
+  )
   const source = fs.readFileSync(path.join(root, 'scripts', 'business-report.mjs'), 'utf8')
   const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
 
@@ -251,6 +255,13 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.match(timer, /^Persistent=true$/m)
   assert.match(installer, /manga-business-report\.service/)
   assert.match(installer, /manga-business-report\.timer/)
+  assert.match(basePortfolioDropIn, /^SupplementaryGroups=atomic-cycle$/m)
+  assert.match(
+    basePortfolioDropIn,
+    /^Environment=MANGA_BUSINESS_BASE_HEARTBEAT_PATH=\/run\/atomic-cycle-portfolio\/heartbeat\.json$/m,
+  )
+  assert.match(basePortfolioDropIn, /^ReadOnlyPaths=-\/run\/atomic-cycle-portfolio$/m)
+  assert.doesNotMatch(basePortfolioDropIn, /^ReadWritePaths=/m)
 })
 
 test('SSH access permits only a client-local forward to the loopback board', () => {

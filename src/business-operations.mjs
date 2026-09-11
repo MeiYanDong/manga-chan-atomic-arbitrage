@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import { formatUnits } from 'viem'
 import { dualSpendablePrincipal } from './dual-live-policy.mjs'
 
-export const BUSINESS_SNAPSHOT_SCHEMA_VERSION = 1
+export const BUSINESS_SNAPSHOT_SCHEMA_VERSION = 2
 export const BUSINESS_SNAPSHOT_MODE = 'READ_ONLY_SANITIZED_OPERATIONS'
 export const BUSINESS_TIME_ZONE = 'Asia/Shanghai'
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1_000
@@ -195,6 +195,7 @@ export function buildBusinessSnapshot({
   processAlive = false,
   reportHour = 9,
   reportMinute = 5,
+  portfolio = null,
 }) {
   const timestamp = asDate(now)
   const executions = [...(usdgState?.executions || []), ...(wethState?.executions || [])]
@@ -275,6 +276,7 @@ export function buildBusinessSnapshot({
       nextReportAt: schedule.nextReportAt,
       schedule: `${String(reportHour).padStart(2, '0')}:${String(reportMinute).padStart(2, '0')}`,
     },
+    portfolio,
   }
   assertPublicBusinessSnapshot(snapshot)
   return snapshot
@@ -297,6 +299,7 @@ export function formatFeishuDailyReport(snapshot, periodKey) {
     return `${numeric > 0 ? '+' : ''}${display(numeric, digits)}`
   }
   const active = snapshot.economics.activeStrategy
+  const portfolio = snapshot.portfolio
   const systemLabel = snapshot.strategy.status === 'RUNNING' ? '运行中' : '需要检查'
   const marketLabel = ['RUNNING', 'SCANNING', 'HEALTHY'].includes(snapshot.market.status) ? '扫描正常' : '扫描降级'
   return [
@@ -307,6 +310,9 @@ export function formatFeishuDailyReport(snapshot, periodKey) {
     `当前策略：${systemLabel}，累计净收益 ${signed(active?.verifiedExecutionNetUsdg || 0)} USDG，共 ${active?.confirmedExecutions || 0} 笔`,
     `可复投资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,
     `当前机会：可以执行 ${snapshot.market.exactReady ?? 0} 条；接近门槛 ${snapshot.market.screenedPositive ?? 0} 条`,
+    portfolio
+      ? `资金监控：${portfolio.summary.activeObjects} 个活跃地址；${portfolio.summary.parkedObjects} 个待归集地址（${display(portfolio.summary.parkedUsdg)} USDG）`
+      : '资金监控：统一快照待核验',
     `数据状态：${marketLabel}`,
     '说明：收益只计入链上已确认、余额已核对的且已扣成功交易 Gas 的成交；未成交价差不算收益。',
   ].join('\n')

@@ -18,6 +18,8 @@ test('primary dashboard copy is Chinese-first and removes the engineering-consol
     assert.doesNotMatch(app + html, new RegExp(banned, 'i'))
   }
   assert.match(app, /套利经营台/)
+  assert.match(app, /一共盯.*个对象/)
+  assert.match(app, /查看地址与链上记录/)
   assert.match(app, /businessHeadline/)
   assert.match(app, /可以执行/)
   assert.match(app, /接近门槛/)
@@ -41,5 +43,5 @@ test('route changes dismiss an open evidence drawer', () => {
 test('the default document declares a light Chinese operations product', () => {
   assert.match(html, /lang="zh-CN"/)
   assert.match(html, /name="color-scheme" content="light"/)
-  assert.match(html, /<title>MANGA 套利经营台<\/title>/)
+  assert.match(html, /<title>双链套利经营台<\/title>/)
 })
