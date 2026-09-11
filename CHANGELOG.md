@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add a public-RPC-first EarnOnHood weighted-pool research scanner and a separately guarded native-ETH one-shot lane for
+  the reviewed WETH/AI/MOO triangle. Fixed pool identity, same-block exact quote, buffered Gas, on-chain net-output floor,
+  wallet reserve, latest nonce and shared-watcher exclusion gates fail closed before the private credential is loaded.
+  Record the first canonical mainnet validation: `0.000131868227091194 ETH` wallet net after Gas, without treating one
+  receipt as opportunity-frequency or scale evidence.
 - Add one Chinese-first `资金` page for two operator wallets, three active executors and two stopped-but-funded
   executors across Base and Robinhood Chain. Read balances at one fixed block per chain, verify executor identity,
   preserve partial/unknown states, and consume only a field-allowlisted Base runtime heartbeat. Isolate its low-frequency

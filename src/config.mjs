@@ -36,6 +36,11 @@ const CONFIG_KEYS = new Set([
   'MANGA_WETH_SEED_ETH',
   'MANGA_WETH_MAX_AMOUNT_WETH',
   'MANGA_WETH_MIN_GROSS_PROFIT_WETH',
+  'EARN_LIVE_AMOUNT_CANDIDATES',
+  'EARN_LIVE_MIN_NET_WETH',
+  'EARN_LIVE_MIN_HEADROOM_WETH',
+  'EARN_LIVE_MAX_FAILED_GAS_WETH',
+  'EARN_LIVE_WALLET_RESERVE_WETH',
 ])
 
 /** @param {string} file */
@@ -117,6 +122,11 @@ export function loadRuntimeConfig(environment = process.env) {
     wethSeedEth: value('MANGA_WETH_SEED_ETH') || '0',
     wethMaxAmountWeth: value('MANGA_WETH_MAX_AMOUNT_WETH') || '1',
     wethMinGrossProfitWeth: value('MANGA_WETH_MIN_GROSS_PROFIT_WETH') || '0.000001',
+    earnLiveAmountCandidates: value('EARN_LIVE_AMOUNT_CANDIDATES') || '0.0005,0.001,0.0015,0.002',
+    earnLiveMinNetWeth: value('EARN_LIVE_MIN_NET_WETH') || '0.00002',
+    earnLiveMinHeadroomWeth: value('EARN_LIVE_MIN_HEADROOM_WETH') || '0.00001',
+    earnLiveMaxFailedGasWeth: value('EARN_LIVE_MAX_FAILED_GAS_WETH') || '0.00012',
+    earnLiveWalletReserveWeth: value('EARN_LIVE_WALLET_RESERVE_WETH') || '0.00025',
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
 }
