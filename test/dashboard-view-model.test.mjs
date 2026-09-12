@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  BASE_BOOTSTRAP_RECEIPT,
   PAGES,
   assetClassLabel,
   businessHeadline,
@@ -25,7 +24,7 @@ import {
   toneForStatus,
 } from '../ui/src/view-model.mjs'
 
-test('funds map keeps live balances separate and reconciles the Base bootstrap receipt', () => {
+test('funds map keeps live balances separate', () => {
   const portfolio = {
     networks: [
       {
@@ -51,24 +50,18 @@ test('funds map keeps live balances separate and reconciles the Base bootstrap r
       totalUsdg: '51.021011',
     },
   })
-  const accounted =
-    Number(BASE_BOOTSTRAP_RECEIPT.walletEthAfterBootstrap) +
-    Number(BASE_BOOTSTRAP_RECEIPT.executorWethAfterBootstrap) +
-    Number(BASE_BOOTSTRAP_RECEIPT.deploymentAndInitializationGasEth)
-  assert.ok(Math.abs(accounted - Number(BASE_BOOTSTRAP_RECEIPT.depositedEth)) < 1e-15)
-  assert.match(BASE_BOOTSTRAP_RECEIPT.fundingTransactionUrl, /^https:\/\/base\.blockscout\.com\/tx\/0x/)
 })
 
 test('dashboard navigation only accepts known workspaces', () => {
-  assert.equal(PAGES.length, 5)
+  assert.equal(PAGES.length, 4)
   assert.deepEqual(
     PAGES.map((page) => page.label),
-    ['总览', '资金', '机会', '账单', '更多'],
+    ['概览', '交易', '资金', '策略'],
   )
   assert.equal(currentPage('#/portfolio'), 'portfolio')
-  assert.equal(currentPage('#/radar'), 'opportunities')
-  assert.equal(currentPage('#/sources'), 'more')
-  assert.equal(currentPage('#/execution/detail'), 'execution')
+  assert.equal(currentPage('#/radar'), 'strategy')
+  assert.equal(currentPage('#/sources'), 'strategy')
+  assert.equal(currentPage('#/execution/detail'), 'activity')
   assert.equal(currentPage('#/not-a-page'), 'overview')
 })
 

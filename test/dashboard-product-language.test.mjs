@@ -4,8 +4,9 @@ import test from 'node:test'
 
 const app = fs.readFileSync(new URL('../ui/src/App.jsx', import.meta.url), 'utf8')
 const html = fs.readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8')
+const styles = fs.readFileSync(new URL('../ui/src/styles.css', import.meta.url), 'utf8')
 
-test('primary dashboard copy is Chinese-first and removes the engineering-console vocabulary', () => {
+test('primary dashboard is a Chinese-first data product without presentation copy', () => {
   for (const banned of [
     'MANGA RADAR',
     'PROVENANCE CONSOLE',
@@ -17,33 +18,35 @@ test('primary dashboard copy is Chinese-first and removes the engineering-consol
   ]) {
     assert.doesNotMatch(app + html, new RegExp(banned, 'i'))
   }
-  assert.match(app, /套利经营台/)
-  assert.match(app, /本套利项目的钱，现在分布在这里/)
-  assert.match(app, /你转入的 0\.01 ETH/)
-  assert.match(app, /公网 · 只读/)
-  assert.match(app, /查看地址与链上记录/)
-  assert.match(app, /businessHeadline/)
+  assert.match(app, /套利经营面板/)
+  assert.match(app, /经营概览/)
+  assert.match(app, /项目经营结果/)
+  assert.match(app, /交易记录/)
+  assert.match(app, /钱包与合约/)
+  assert.match(app, /只读/)
   assert.match(app, /可以执行/)
   assert.match(app, /接近门槛/)
   assert.match(app, /继续观察/)
+  assert.doesNotMatch(app, /你转入的 0\.01 ETH|Base 首笔入金|BASE_BOOTSTRAP_RECEIPT/)
 })
 
-test('addresses and technical evidence are hidden behind an explicit disclosure', () => {
-  const disclosure = app.indexOf('<details className="technical-details drawer-technical">')
-  const rawAddress = app.indexOf('{item.target.address}')
+test('addresses and technical evidence stay behind explicit disclosures', () => {
+  const disclosure = app.indexOf('<details className="technical-details">')
+  const rawAddress = app.indexOf('item.target?.address')
   assert.ok(disclosure >= 0)
   assert.ok(rawAddress > disclosure)
-  assert.equal(app.includes('compactAddress(item.target.address)'), false)
-  assert.match(app, /查看技术信息与完整证据/)
+  assert.match(app, /技术信息与完整证据/)
 })
 
-test('route changes dismiss an open evidence drawer', () => {
-  assert.match(app, /const update = \(\) => \{\s*closeDrawer\(\)\s*setPage\(currentPage\(window\.location\.hash\)\)/)
-  assert.match(app, /\}, \[closeDrawer\]\)/)
+test('route changes dismiss every open detail drawer', () => {
+  assert.match(app, /const update = \(\) => \{\s*closeDrawers\(\)\s*setPage\(currentPage\(window\.location\.hash\)\)/)
+  assert.match(app, /\}, \[closeDrawers\]\)/)
 })
 
-test('the default document declares a light Chinese operations product', () => {
+test('document and stylesheet enforce a restrained light operations interface', () => {
   assert.match(html, /lang="zh-CN"/)
   assert.match(html, /name="color-scheme" content="light"/)
-  assert.match(html, /<title>双链套利经营台<\/title>/)
+  assert.match(html, /<title>套利经营面板<\/title>/)
+  assert.match(styles, /-apple-system, BlinkMacSystemFont, ['"]PingFang SC['"], ['"]Microsoft YaHei['"]/)
+  assert.doesNotMatch(styles, /Songti|Georgia|gradient|box-shadow|animation:/i)
 })

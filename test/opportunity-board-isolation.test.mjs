@@ -221,6 +221,7 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
 test('business reporter can read ledgers but cannot sign or write trading state', () => {
   const service = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-business-report.service'), 'utf8')
   const timer = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-business-report.timer'), 'utf8')
+  const pathUnit = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-business-report.path'), 'utf8')
   const basePortfolioDropIn = fs.readFileSync(
     path.join(root, 'deploy', 'systemd', 'manga-business-report-base-portfolio.conf'),
     'utf8',
@@ -254,7 +255,11 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.match(timer, /^OnCalendar=\*-\*-\* \*:0\/5:00$/m)
   assert.match(timer, /^Persistent=true$/m)
   assert.match(installer, /manga-business-report\.service/)
+  assert.match(installer, /manga-business-report\.path/)
   assert.match(installer, /manga-business-report\.timer/)
+  assert.match(pathUnit, /^Unit=manga-business-report\.service$/m)
+  assert.match(pathUnit, /^PathChanged=\/var\/lib\/manga-chan-arbitrage\/generic-state\.json$/m)
+  assert.match(pathUnit, /^PathChanged=\/var\/lib\/manga-chan-arbitrage\/weth-state\.json$/m)
   assert.match(basePortfolioDropIn, /^SupplementaryGroups=atomic-cycle$/m)
   assert.match(
     basePortfolioDropIn,

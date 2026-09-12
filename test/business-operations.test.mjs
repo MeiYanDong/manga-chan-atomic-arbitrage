@@ -91,6 +91,22 @@ function fixture() {
     usdgState: { executions: [legacyExecution, usdgExecution] },
     wethState: { executions: [wethExecution] },
     auditRecords,
+    projectRegistry: [
+      {
+        activityId: 'fixture-deployment',
+        occurredAt: '2026-09-07T13:00:00.000Z',
+        networkId: 'ROBINHOOD',
+        type: 'DEPLOYMENT',
+        title: '测试执行合约部署',
+        status: 'CONFIRMED',
+        amounts: [{ asset: 'USDG', value: '10', direction: 'INTERNAL' }],
+        effects: [{ kind: 'COST', asset: 'ETH', value: '0.0004' }],
+        transactionHash: `0x${'4'.repeat(64)}`,
+        blockNumber: 1,
+        gas: { value: '0.0004', treatment: 'OPERATING_COST' },
+        evidence: { receipt: true, balanceEffect: true, level: 'CHAIN_ATTESTED' },
+      },
+    ],
     board: {
       health: { status: 'HEALTHY' },
       overview: { coverage: { candidateTokens: 863 }, freshCandidates: 4, screenedPositive: 1, exactReady: 0 },
@@ -144,6 +160,14 @@ test('builds receipt-gated business results and compounds only authorized profit
   assert.equal(snapshot.market.sourceCounts.pairListings, 20)
   assert.equal(snapshot.market.sourceCounts.longRoutes, 30)
   assert.equal(snapshot.recentExecutions[0].baseAsset, 'WETH')
+  assert.equal(snapshot.activities.length, 5)
+  assert.equal(snapshot.activities.at(-1).type, 'DEPLOYMENT')
+  assert.equal(snapshot.economics.project.coverage, 'PARTIAL')
+  assert.deepEqual(snapshot.economics.project.byAsset, [
+    { asset: 'ETH', profit: '0', cost: '0.00045', net: '-0.00045' },
+    { asset: 'USDG', profit: '3', cost: '0', net: '3' },
+    { asset: 'WETH', profit: '0.0001', cost: '0', net: '0.0001' },
+  ])
   assert.equal(snapshot.portfolio.summary.watchedObjects, 7)
   assert.doesNotMatch(JSON.stringify(snapshot), /active-dual-authorization/)
 })

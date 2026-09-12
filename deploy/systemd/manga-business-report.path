@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh MANGA business snapshot after a project ledger change
+
+[Path]
+PathChanged=/var/lib/manga-chan-arbitrage/generic-state.json
+PathChanged=/var/lib/manga-chan-arbitrage/weth-state.json
+PathChanged=/var/lib/manga-chan-arbitrage/legacy-collection-audit.jsonl
+PathChanged=/var/lib/manga-chan-arbitrage/earnonhood-audit.jsonl
+Unit=manga-business-report.service
+
+[Install]
+WantedBy=multi-user.target

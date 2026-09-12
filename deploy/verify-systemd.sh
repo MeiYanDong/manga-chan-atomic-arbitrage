@@ -10,4 +10,4 @@ if ! command -v systemd-analyze >/dev/null 2>&1; then
   exit 0
 fi
 
-systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer
+systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer deploy/systemd/*.path
