@@ -18,6 +18,7 @@ import {
   portfolioMoneyMap,
   relativeAge,
   runtimeBadge,
+  selectOpportunitiesForOperator,
   sortOpportunitiesForOperator,
   sourceLabel,
   sourceAdapterDescription,
@@ -166,4 +167,17 @@ test('opportunity stages explain what is still missing without exposing machine 
     /只覆盖 2\/100.*不能据此断言/,
   )
   assert.equal(humanStatus('LIMITED'), '覆盖有限')
+})
+
+test('operator opportunity selection keeps the panel focused without truncating source data', () => {
+  const items = Array.from({ length: 20 }, (_, index) => ({
+    opportunityId: `opportunity-${String(index)}`,
+    axes: { quote: index === 19 ? 'FRESH_PROXY_POSITIVE' : 'UNQUOTED' },
+    quote: { quotedAt: `2026-09-08T01:${String(index).padStart(2, '0')}:00.000Z` },
+  }))
+  const selected = selectOpportunitiesForOperator(items)
+  assert.equal(selected.length, 12)
+  assert.equal(selected[0].opportunityId, 'opportunity-19')
+  assert.equal(items.length, 20)
+  assert.throws(() => selectOpportunitiesForOperator(items, 0), /positive integer/)
 })

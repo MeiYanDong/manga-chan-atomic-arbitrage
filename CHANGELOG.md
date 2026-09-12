@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Limit the operator-facing Robinhood opportunity table to the twelve highest-priority routes while keeping the full
+  source API and background scan intact. State the hidden-row count explicitly so the operations page stays concise
+  without implying that unshown candidates disappeared.
 - Publish a receipt-gated seven-day `/api/v1/profit/daily` read model directly through Nginx. Keep USDG and ETH/WETH
   separate, mark the current Beijing day in progress, expose failed Gas, and leave consolidated business net UNKNOWN
   while shared-cost coverage is partial.

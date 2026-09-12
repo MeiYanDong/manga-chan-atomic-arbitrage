@@ -13,7 +13,7 @@ import {
   opportunityReason,
   relativeAge,
   runtimeBadge,
-  sortOpportunitiesForOperator,
+  selectOpportunitiesForOperator,
   sourceAdapterDescription,
   sourceAdapterLabel,
   sourceLabel,
@@ -579,56 +579,65 @@ function opportunityStatus(item) {
 }
 
 function OpportunityTable({ items, onOpen }) {
-  const sorted = sortOpportunitiesForOperator(items || [])
+  const sourceItems = items || []
+  const visible = selectOpportunitiesForOperator(sourceItems)
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>资产 / 路线</th>
-            <th>来源</th>
-            <th className="numeric">初筛净收益</th>
-            <th>当前结论</th>
-            <th aria-label="操作" />
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.length === 0 ? (
+    <>
+      <div className="table-wrap">
+        <table>
+          <thead>
             <tr>
-              <td colSpan={5} className="empty-cell">
-                暂无候选路线
-              </td>
+              <th>资产 / 路线</th>
+              <th>来源</th>
+              <th className="numeric">初筛净收益</th>
+              <th>当前结论</th>
+              <th aria-label="操作" />
             </tr>
-          ) : (
-            sorted.slice(0, 100).map((item) => {
-              const state = opportunityStatus(item)
-              return (
-                <tr key={item.opportunityId}>
-                  <td>
-                    <strong>{item.target?.symbol || '待核验'}</strong>
-                    <small>{item.routeLabel || '路线待核验'}</small>
-                  </td>
-                  <td>{sourceLabel(item.provenance?.platformAttribution?.platformId)}</td>
-                  <td className="numeric">
-                    {item.quote?.screenedNetUsdg === null || item.quote?.screenedNetUsdg === undefined
-                      ? '—'
-                      : `${number(item.quote.screenedNetUsdg, 2, true)} USDG`}
-                  </td>
-                  <td>
-                    <Status value={state.status} label={state.label} />
-                  </td>
-                  <td>
-                    <button className="text-button" type="button" onClick={() => onOpen(item)}>
-                      原因
-                    </button>
-                  </td>
-                </tr>
-              )
-            })
-          )}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {visible.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="empty-cell">
+                  暂无候选路线
+                </td>
+              </tr>
+            ) : (
+              visible.map((item) => {
+                const state = opportunityStatus(item)
+                return (
+                  <tr key={item.opportunityId}>
+                    <td>
+                      <strong>{item.target?.symbol || '待核验'}</strong>
+                      <small>{item.routeLabel || '路线待核验'}</small>
+                    </td>
+                    <td>{sourceLabel(item.provenance?.platformAttribution?.platformId)}</td>
+                    <td className="numeric">
+                      {item.quote?.screenedNetUsdg === null || item.quote?.screenedNetUsdg === undefined
+                        ? '—'
+                        : `${number(item.quote.screenedNetUsdg, 2, true)} USDG`}
+                    </td>
+                    <td>
+                      <Status value={state.status} label={state.label} />
+                    </td>
+                    <td>
+                      <button className="text-button" type="button" onClick={() => onOpen(item)}>
+                        原因
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      {sourceItems.length > visible.length && (
+        <p className="coverage-note">
+          仅展示最值得看的 {visible.length} 条；其余 {sourceItems.length - visible.length}{' '}
+          条仍由系统持续扫描，不占用经营面板。
+        </p>
+      )}
+    </>
   )
 }
 

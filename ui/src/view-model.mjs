@@ -166,6 +166,15 @@ export function sortOpportunitiesForOperator(items) {
   })
 }
 
+export const OPERATOR_OPPORTUNITY_LIMIT = 12
+
+export function selectOpportunitiesForOperator(items, limit = OPERATOR_OPPORTUNITY_LIMIT) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error('operator opportunity limit must be a positive integer')
+  }
+  return sortOpportunitiesForOperator(items).slice(0, limit)
+}
+
 export function noTradeReason(business, overview) {
   if (!business) return '正在读取链上回执、余额和策略状态，请稍候。'
   if (business && business.strategy?.status !== 'RUNNING') return '自动执行服务没有处于运行状态，需要检查。'
