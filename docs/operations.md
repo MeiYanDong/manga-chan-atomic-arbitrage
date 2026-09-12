@@ -79,6 +79,27 @@ a transaction. Deployment and withdrawal transactions have no comparable deadlin
 
 The command is read-only. `RUNTIME_VERIFIED_READY_FOR_ARM` is not a trade or profit receipt.
 
+## Unified Earn standing keeper
+
+The dual arm and watcher units pin the Earn policy at their systemd command boundary. Do not start a separate
+EarnOnHood service. A valid arm commits the reviewed route book, public event/recovery cadence, dynamic sizing policy,
+positive net-output floor and initial receipt-proven Gas surplus.
+
+Use the ordinary single-writer cutover. After the new arm starts, `npm run dual:watch:status` must show one live PID,
+the v3 authorization, `fixedPrincipalCap: null`, a positive `earnLifetimeGasSurplusEth`, a public event cursor and no
+unresolved mutation. `EARN_NO_NET_OPPORTUNITY` is a healthy no-trade decision; it proves no signature or broadcast,
+not that every Earn pool or future block lacks an opportunity.
+
+If an Earn broadcast becomes UNKNOWN, stop the watcher and run:
+
+```bash
+npm run dual:reconcile
+```
+
+The dual reconciler delegates only the `earnonhood-execute` mutation to the Earn receipt verifier. It verifies the
+persisted raw transaction, receipt finality, the exact committed Swap sequence, canonical Gas and exact-block wallet
+delta. It never rebuilds, reprices or replaces the signed transaction.
+
 ## Rollback
 
 1. disarm and stop the watcher;

@@ -700,6 +700,28 @@ function StrategyPage({ data, onOpenOpportunity }) {
             <dd>{decisionLabel(business?.strategy?.lastDecision)}</dd>
           </div>
           <div>
+            <dt>Earn 执行</dt>
+            <dd>{humanStatus(business?.strategy?.earnOnHood?.status)}</dd>
+          </div>
+          <div>
+            <dt>Earn 可用本金</dt>
+            <dd>
+              {business?.strategy?.earnOnHood
+                ? business.strategy.earnOnHood.lastDynamicMaximumPrincipalEth
+                  ? `${formatMetric(business.strategy.earnOnHood.lastDynamicMaximumPrincipalEth, 6)} ETH（动态）`
+                  : '按钱包余额动态计算'
+                : '未接入'}
+            </dd>
+          </div>
+          <div>
+            <dt>Earn Gas 安全垫</dt>
+            <dd>
+              {business?.strategy?.earnOnHood?.lifetimeGasSurplusEth
+                ? `${formatMetric(business.strategy.earnOnHood.lifetimeGasSurplusEth, 6)} ETH`
+                : '待核验'}
+            </dd>
+          </div>
+          <div>
             <dt>飞书日报</dt>
             <dd>{humanStatus(business?.delivery?.status)}</dd>
           </div>

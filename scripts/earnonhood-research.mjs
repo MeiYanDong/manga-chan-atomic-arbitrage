@@ -213,7 +213,12 @@ async function mapWithConcurrency(items, concurrency, task) {
 }
 
 async function main() {
-  const response = await fetch(POOLS_URL, { headers: { accept: 'application/json' } })
+  const response = await fetch(POOLS_URL, {
+    headers: {
+      accept: 'application/json',
+      'user-agent': 'manga-chan-atomic-arbitrage/0.11 (+https://github.com/MeiYanDong/manga-chan-atomic-arbitrage)',
+    },
+  })
   if (!response.ok) throw new Error(`EarnOnHood pools API returned HTTP ${response.status}`)
   const snapshot = await response.json()
   if (!snapshot.ready || !Array.isArray(snapshot.pools)) throw new Error('EarnOnHood pools API is not ready')

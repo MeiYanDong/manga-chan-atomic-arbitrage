@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Bounded MANGA atomic-arbitrage executor and read-only multi-pool opportunity board on Robinhood Chain",
   "license": "MIT",
   "private": false,
@@ -65,6 +65,7 @@
     "earnonhood:research": "node scripts/earnonhood-research.mjs",
     "earnonhood:preflight": "node scripts/earnonhood-live.mjs preflight",
     "earnonhood:execute": "node scripts/earnonhood-live.mjs execute",
+    "earnonhood:reconcile": "node scripts/earnonhood-live.mjs reconcile",
     "deployment:recover": "node scripts/manga-chan-arb.mjs recover-deployment",
     "preflight": "node scripts/manga-chan-arb.mjs preflight",
     "execute": "node scripts/manga-chan-arb.mjs execute",

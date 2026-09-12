@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Integrate the reviewed EarnOnHood WETH/AI/MOO triangle into the single until-revoked dual signer. Replace the fixed
+  `0.002 WETH` input ceiling with balance-scaled probes whose maximum is the current spendable wallet balance. Public
+  Vault events and a five-minute recovery tick wake the standing route book; the managed RPC is touched only after a
+  public screen is net-positive. A full failed-Gas charge must leave receipt-proven lifetime Earn net strictly positive,
+  and final receipt acceptance now requires the exact three Swap logs, canonical Gas and exact-block wallet delta.
+- Treat gross-positive/net-negative Earn quotes as normal `NO_SHOT` results before constructing an impossible protected
+  Gas estimate. Add unified nonce/audit accounting and UNKNOWN reconciliation for Earn mutations, plus a stable
+  application User-Agent for the Earn discovery API.
+
 - Replace the presentation-style console with a four-page, data-first operations dashboard: `概览`, `交易`, `资金` and
   `策略`. Add a schema-v3 unified project activity ledger, per-native-asset project economics, transaction filters and
   receipt drawers; move the Base funding receipt out of a special funds card. Material execution/collection ledger

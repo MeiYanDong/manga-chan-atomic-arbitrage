@@ -13,47 +13,42 @@ import {
   keccak256,
   parseAbi,
   parseEther,
+  parseTransaction,
+  recoverTransactionAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
-import { deriveEarnOnHoodExecutionBounds } from '../src/earnonhood-live-policy.mjs'
+import { decodeEarnOnHoodReceiptRoute } from '../src/earnonhood-receipt.mjs'
+import {
+  buildEarnOnHoodProbeAmounts,
+  deriveEarnOnHoodExecutionBounds,
+  earnOnHoodGasSolvency,
+  preservesEarnOnHoodLongTermProfit,
+} from '../src/earnonhood-live-policy.mjs'
+import {
+  EARN_BATCH_ROUTER as BATCH_ROUTER,
+  EARN_ROUTE_COMMITMENT,
+  EARN_ROUTES as ROUTES,
+  EARN_ROUTE_STEPS as ROUTE_STEPS,
+  EARN_VAULT as VAULT,
+  EARN_WETH as WETH,
+} from '../src/earnonhood-routes.mjs'
+import {
+  DUAL_AUTHORIZATION_POLICY_VERSION,
+  dualAuthorizationId,
+  dualAuthorizationUsage,
+  evaluateDualAuthorizationBudget,
+  validateDualSignedAttempt,
+} from '../src/dual-live-policy.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
-import { errorText } from '../src/policy.mjs'
+import { errorText, latestUnresolvedMutation } from '../src/policy.mjs'
 
 const CHAIN_ID = 4_663
+const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
 const WALLET = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
-const VAULT = getAddress('0x28082618Ba2073E602230188E4F4C46e9b2169EB')
-const BATCH_ROUTER = getAddress('0x2d6DD5A990a643A8B11CD06554FBC290a1a82bA6')
-const WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
-const AI = getAddress('0x2E8c31162b855A2ffa90F6F8634643Ad6F111e18')
-const MOO = getAddress('0xD9dB30BB0D2b8d2eae3826A1372117E058791e18')
-const HOOD_ECOSYSTEM_POOL = getAddress('0x4188656eAFdD7634d35Ca3f98ddfBf4b403A41fA')
-const STOCK_MEMES_POOL = getAddress('0x00e7B76d0C0F0370C28A07aA9d9fDF92736238A6')
-const LONG_ECO_POOL = getAddress('0xcDe242535A75F8ccB5D4b14686e312c196B28855')
-const ROUTES = [
-  {
-    id: 'WETH_AI_MOO_WETH',
-    symbols: ['WETH', 'AI', 'MOO', 'WETH'],
-    steps: [
-      { pool: HOOD_ECOSYSTEM_POOL, tokenIn: WETH, tokenOut: AI },
-      { pool: STOCK_MEMES_POOL, tokenIn: AI, tokenOut: MOO },
-      { pool: LONG_ECO_POOL, tokenIn: MOO, tokenOut: WETH },
-    ],
-  },
-  {
-    id: 'WETH_MOO_AI_WETH',
-    symbols: ['WETH', 'MOO', 'AI', 'WETH'],
-    steps: [
-      { pool: LONG_ECO_POOL, tokenIn: WETH, tokenOut: MOO },
-      { pool: STOCK_MEMES_POOL, tokenIn: MOO, tokenOut: AI },
-      { pool: HOOD_ECOSYSTEM_POOL, tokenIn: AI, tokenOut: WETH },
-    ],
-  },
-]
-const ROUTE_STEPS = [...new Map(ROUTES.flatMap((route) => route.steps).map((step) => [step.pool, step])).values()]
 const EXPECTED_STATIC_SWAP_FEE = 3_000_000_000_000_000n
 const DEADLINE_SECONDS = 45n
-const DEFAULT_CANDIDATE_AMOUNTS = ['0.0005', '0.001', '0.0015', '0.002']
+const MAX_GAS_EVALUATIONS = 8
 
 const pathComponents = [
   { name: 'tokenIn', type: 'address' },
@@ -173,31 +168,59 @@ const chain = defineChain({
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: { default: { http: [rpcUrl || 'https://rpc.mainnet.chain.robinhood.com'] } },
 })
-const publicClient = createPublicClient({
+const executionClient = createPublicClient({
   chain,
   transport: http(rpcUrl || 'https://rpc.mainnet.chain.robinhood.com', { timeout: 30_000, retryCount: 1 }),
+})
+const discoveryClient = createPublicClient({
+  chain,
+  transport: http(PUBLIC_READ_ONLY_RPC, { timeout: 30_000, retryCount: 2 }),
 })
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runDir = runtimeConfig.runDir ? path.resolve(runtimeConfig.runDir) : path.join(root, 'runs')
 const walletLockPath = path.join(runDir, 'wallet.lock')
 const dualWatchLockPath = path.join(runDir, 'dual-watch.lock')
 const auditPath = path.join(runDir, 'earnonhood-audit.jsonl')
+const sharedAuditPath = path.join(runDir, 'audit.jsonl')
+const usdgStatePath = path.join(runDir, 'generic-state.json')
+const wethStatePath = path.join(runDir, 'weth-state.json')
+const dualWatchArmPath = path.join(runDir, 'dual-watch-arm.json')
+const dualWatchRevocationPath = path.join(runDir, 'dual-watch-revocation.json')
 const signedTransactionDir = path.join(runDir, 'signed', 'earnonhood')
 
 function stringify(value) {
   return JSON.stringify(value, (_, item) => (typeof item === 'bigint' ? item.toString() : item), 2)
 }
 
-function appendAudit(event, details = {}) {
-  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 })
+function appendJsonLine(file, record) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   fs.appendFileSync(
-    auditPath,
-    `${JSON.stringify({ at: new Date().toISOString(), lane: 'earnonhood-one-shot-v1', event, ...details }, (_, item) =>
-      typeof item === 'bigint' ? item.toString() : item,
-    )}\n`,
+    file,
+    `${JSON.stringify(record, (_, item) => (typeof item === 'bigint' ? item.toString() : item))}\n`,
     { mode: 0o600 },
   )
-  fs.chmodSync(auditPath, 0o600)
+  fs.chmodSync(file, 0o600)
+}
+
+function appendAudit(event, details = {}, { mirrorShared = false } = {}) {
+  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 })
+  const record = { at: new Date().toISOString(), lane: 'earnonhood-v2', event, ...details }
+  appendJsonLine(auditPath, record)
+  if (mirrorShared) appendJsonLine(sharedAuditPath, record)
+}
+
+function readJson(file) {
+  if (!fs.existsSync(file)) return null
+  return JSON.parse(fs.readFileSync(file, 'utf8'))
+}
+
+function readJsonLines(file) {
+  if (!fs.existsSync(file)) return []
+  return fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
 }
 
 function processIsAlive(pid) {
@@ -228,7 +251,7 @@ function acquireWalletLock() {
     fs.unlinkSync(walletLockPath)
     descriptor = fs.openSync(walletLockPath, 'wx', 0o600)
   }
-  fs.writeFileSync(descriptor, `${process.pid} ${new Date().toISOString()} earnonhood-one-shot-v1\n`)
+  fs.writeFileSync(descriptor, `${process.pid} ${new Date().toISOString()} earnonhood-v2\n`)
   return () => {
     try {
       fs.closeSync(descriptor)
@@ -237,6 +260,55 @@ function acquireWalletLock() {
       fs.unlinkSync(walletLockPath)
     } catch {}
   }
+}
+
+function sharedExecutionContext() {
+  const authorizationId = process.env.EARN_SHARED_AUTHORIZATION_ID || null
+  const parentPid = Number(process.env.EARN_SHARED_WATCH_PID || 0)
+  if (!authorizationId && !parentPid) return null
+  if (!authorizationId || !Number.isSafeInteger(parentPid) || parentPid <= 0 || process.ppid !== parentPid) {
+    throw new Error('invalid shared EarnOnHood watcher process identity')
+  }
+  const lockPid = activeLock(dualWatchLockPath)
+  if (lockPid !== parentPid) throw new Error('shared EarnOnHood parent does not own the dual watcher lock')
+  return { authorizationId, parentPid }
+}
+
+function assertSharedAuthorization(context, { maximumGasCostWei = null, currentSignedAttempt = null } = {}) {
+  if (!context) throw new Error('shared EarnOnHood execution context is required')
+  const arm = readJson(dualWatchArmPath)
+  const revocation = readJson(dualWatchRevocationPath)
+  if (
+    !arm ||
+    arm.status !== 'ARMED' ||
+    arm.authorizationId !== context.authorizationId ||
+    arm.policyVersion !== DUAL_AUTHORIZATION_POLICY_VERSION ||
+    revocation?.authorizationId === context.authorizationId ||
+    dualAuthorizationId(arm) !== arm.authorizationId
+  ) {
+    throw new Error('shared EarnOnHood authorization is absent, changed, invalid, or revoked')
+  }
+  if (
+    arm.earnOnHood?.enabled !== true ||
+    arm.earnOnHood.routeCommitment !== EARN_ROUTE_COMMITMENT ||
+    arm.earnOnHood.vault?.toLowerCase() !== VAULT.toLowerCase() ||
+    arm.earnOnHood.batchRouter?.toLowerCase() !== BATCH_ROUTER.toLowerCase() ||
+    arm.earnOnHood.principalPolicy !== 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP'
+  ) {
+    throw new Error('shared EarnOnHood route or principal authorization mismatch')
+  }
+  const records = readJsonLines(sharedAuditPath)
+  const usage = dualAuthorizationUsage(arm, readJson(usdgStatePath), readJson(wethStatePath), records)
+  const budget = evaluateDualAuthorizationBudget(arm, usage)
+  if (!budget.allowed) throw new Error(`shared EarnOnHood authorization budget failed: ${budget.reason}`)
+  if (maximumGasCostWei !== null && !preservesEarnOnHoodLongTermProfit(usage.earnGasSurplusWei, maximumGasCostWei)) {
+    throw new Error('worst-case EarnOnHood Gas would break lifetime positive net profit')
+  }
+  if (currentSignedAttempt) {
+    const reservation = validateDualSignedAttempt(arm, records, currentSignedAttempt, latestUnresolvedMutation(records))
+    if (!reservation.allowed) throw new Error(reservation.reason)
+  }
+  return { arm, usage }
 }
 
 function loadAccount() {
@@ -269,61 +341,47 @@ function routePath(route, amountIn, minimumAmountOut) {
   }
 }
 
-function candidateAmounts() {
-  const configured = (runtimeConfig.earnLiveAmountCandidates || DEFAULT_CANDIDATE_AMOUNTS.join(','))
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-  if (configured.length === 0 || configured.length > 8)
-    throw new Error('EARN_LIVE_AMOUNT_CANDIDATES must contain 1..8 values')
-  const values = [...new Set(configured.map((value) => parseEther(value)))]
-  if (values.some((value) => value <= 0n || value > parseEther('0.002'))) {
-    throw new Error('each EarnOnHood live candidate must be within (0, 0.002] WETH')
-  }
-  return values
-}
-
-async function assertProtocolIdentity(blockNumber) {
+async function assertProtocolIdentity(client, blockNumber) {
   const codeTargets = [VAULT, BATCH_ROUTER, WETH, ...ROUTE_STEPS.map((step) => step.pool)]
   const [chainId, codes, routerVault, routerWeth, wethSymbol, wethDecimals, poolChecks] = await Promise.all([
-    publicClient.getChainId(),
-    Promise.all(codeTargets.map((address) => publicClient.getCode({ address, blockNumber }))),
-    publicClient.readContract({ address: BATCH_ROUTER, abi: batchRouterAbi, functionName: 'getVault', blockNumber }),
-    publicClient.readContract({ address: BATCH_ROUTER, abi: batchRouterAbi, functionName: 'getWeth', blockNumber }),
-    publicClient.readContract({ address: WETH, abi: wethAbi, functionName: 'symbol', blockNumber }),
-    publicClient.readContract({ address: WETH, abi: wethAbi, functionName: 'decimals', blockNumber }),
+    client.getChainId(),
+    Promise.all(codeTargets.map((address) => client.getCode({ address, blockNumber }))),
+    client.readContract({ address: BATCH_ROUTER, abi: batchRouterAbi, functionName: 'getVault', blockNumber }),
+    client.readContract({ address: BATCH_ROUTER, abi: batchRouterAbi, functionName: 'getWeth', blockNumber }),
+    client.readContract({ address: WETH, abi: wethAbi, functionName: 'symbol', blockNumber }),
+    client.readContract({ address: WETH, abi: wethAbi, functionName: 'decimals', blockNumber }),
     Promise.all(
       ROUTE_STEPS.map(async (step) => {
         const [initialized, paused, recoveryMode, tokens, staticSwapFee] = await Promise.all([
-          publicClient.readContract({
+          client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'isPoolInitialized',
             args: [step.pool],
             blockNumber,
           }),
-          publicClient.readContract({
+          client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'isPoolPaused',
             args: [step.pool],
             blockNumber,
           }),
-          publicClient.readContract({
+          client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'isPoolInRecoveryMode',
             args: [step.pool],
             blockNumber,
           }),
-          publicClient.readContract({
+          client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'getPoolTokens',
             args: [step.pool],
             blockNumber,
           }),
-          publicClient.readContract({
+          client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'getStaticSwapFeePercentage',
@@ -358,133 +416,236 @@ async function assertProtocolIdentity(blockNumber) {
   }
 }
 
-async function exactQuote(route, amountIn, blockNumber) {
-  const result = await publicClient.readContract({
+async function exactQuote(client, route, amountIn, blockNumber) {
+  const result = await client.readContract({
     address: BATCH_ROUTER,
     abi: batchRouterAbi,
     functionName: 'querySwapExactIn',
     args: [[routePath(route, amountIn, 0n)], WALLET, '0x'],
     blockNumber,
   })
-  return result[0][0]
+  return BigInt(result[0][0])
 }
 
-async function preflight({ print = true } = {}) {
-  assertLiveTransport(runtimeConfig)
-  const watcherPid = activeLock(dualWatchLockPath)
-  const blockNumber = await publicClient.getBlockNumber()
-  const block = await publicClient.getBlock({ blockNumber })
-  await assertProtocolIdentity(blockNumber)
+function minimum(left, right) {
+  return left < right ? left : right
+}
+
+async function mapWithConcurrency(items, concurrency, task) {
+  const output = new Array(items.length)
+  let cursor = 0
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      for (;;) {
+        const index = cursor++
+        if (index >= items.length) return
+        output[index] = await task(items[index], index)
+      }
+    }),
+  )
+  return output
+}
+
+function currentGasSolvency(sharedContext) {
+  if (sharedContext) return assertSharedAuthorization(sharedContext).usage
+  return earnOnHoodGasSolvency(readJsonLines(auditPath))
+}
+
+async function prepareOnClient(client, gasSolvency, rpcRole) {
+  const blockNumber = await client.getBlockNumber()
+  const block = await client.getBlock({ blockNumber })
+  await assertProtocolIdentity(client, blockNumber)
   const [walletBalance, nonceLatest, noncePending, gasPrice, fees] = await Promise.all([
-    publicClient.getBalance({ address: WALLET, blockNumber }),
-    publicClient.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
-    publicClient.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
-    publicClient.getGasPrice(),
-    publicClient.estimateFeesPerGas(),
+    client.getBalance({ address: WALLET, blockNumber }),
+    client.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
+    client.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
+    client.getGasPrice(),
+    client.estimateFeesPerGas(),
   ])
   if (nonceLatest !== noncePending) throw new Error('wallet latest and pending nonce differ')
-  const amounts = candidateAmounts()
-  const quotes = await Promise.all(
-    ROUTES.flatMap((route) =>
-      amounts.map(async (amountIn) => ({
-        route,
-        amountIn,
-        amountOut: await exactQuote(route, amountIn, blockNumber),
-      })),
-    ),
-  )
+  const perAttemptGasCeilingWei = parseEther(runtimeConfig.earnLiveMaxFailedGasWeth)
+  const retainedWalletReserveWei = parseEther(runtimeConfig.earnLiveWalletReserveWeth)
+  if (perAttemptGasCeilingWei <= 0n) throw new Error('EarnOnHood per-attempt Gas ceiling must be positive')
+  const lifetimeGasAllowanceWei = (gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei) - 1n
+  const gasRiskAllowanceWei = minimum(perAttemptGasCeilingWei, lifetimeGasAllowanceWei)
+  const sizing =
+    gasRiskAllowanceWei > 0n
+      ? buildEarnOnHoodProbeAmounts({
+          walletBalanceWei: walletBalance,
+          walletReserveWei: retainedWalletReserveWei,
+          gasRiskAllowanceWei,
+          probePoints: runtimeConfig.earnLiveProbePoints,
+        })
+      : { spendableWei: 0n, amounts: [] }
+  if (sizing.amounts.length === 0) {
+    return {
+      report: {
+        status: 'NO_SHOT',
+        evidence: `${rpcRole}_SAME_BLOCK_NO_SIGNATURE_NO_BROADCAST`,
+        reasons: ['NO_GAS_SOLVENT_SPENDABLE_BALANCE'],
+        blockNumber,
+        blockTimestamp: block.timestamp,
+        wallet: WALLET,
+        walletBalanceEth: formatEther(walletBalance),
+        lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
+        retainedWalletReserveEth: formatEther(retainedWalletReserveWei),
+        principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+      },
+    }
+  }
+  const quoteInputs = ROUTES.flatMap((route) => sizing.amounts.map((amountIn) => ({ route, amountIn })))
+  const quotes = await mapWithConcurrency(quoteInputs, 4, async ({ route, amountIn }) => {
+    try {
+      return { route, amountIn, amountOut: await exactQuote(client, route, amountIn, blockNumber), error: null }
+    } catch (error) {
+      return { route, amountIn, amountOut: 0n, error: errorText(error) }
+    }
+  })
   quotes.sort((left, right) => {
     const leftGross = left.amountOut - left.amountIn
     const rightGross = right.amountOut - right.amountIn
     return rightGross === leftGross ? 0 : rightGross > leftGross ? 1 : -1
   })
-  const candidate = quotes.find((quote) => quote.amountOut > quote.amountIn)
-  if (!candidate) {
+  const positiveGross = quotes.filter((quote) => !quote.error && quote.amountOut > quote.amountIn)
+  if (positiveGross.length === 0) {
     const best = quotes[0]
-    const report = {
-      status: 'NO_SHOT',
-      evidence: 'SAME_BLOCK_IDENTITY_AND_EXACT_QUOTES_NO_SIGNATURE_NO_BROADCAST',
-      reasons: [watcherPid ? `DUAL_WATCHER_ACTIVE_PID_${watcherPid}` : null, 'NO_POSITIVE_GROSS_QUOTE'].filter(Boolean),
-      blockNumber,
-      blockTimestamp: block.timestamp,
-      wallet: WALLET,
-      walletBalanceEth: formatEther(walletBalance),
-      nonceLatest,
-      noncePending,
-      route: best.route.symbols.join(' -> '),
-      pools: best.route.steps.map((step) => step.pool),
-      bestAmountInEth: formatEther(best.amountIn),
-      bestAmountOutEth: formatEther(best.amountOut),
-      bestGrossEth: formatEther(best.amountOut - best.amountIn),
+    return {
+      report: {
+        status: 'NO_SHOT',
+        evidence: `${rpcRole}_SAME_BLOCK_IDENTITY_AND_EXACT_QUOTES_NO_SIGNATURE_NO_BROADCAST`,
+        reasons: ['NO_POSITIVE_GROSS_QUOTE'],
+        blockNumber,
+        blockTimestamp: block.timestamp,
+        wallet: WALLET,
+        walletBalanceEth: formatEther(walletBalance),
+        nonceLatest,
+        noncePending,
+        route: best.route.symbols.join(' -> '),
+        pools: best.route.steps.map((step) => step.pool),
+        bestAmountInEth: formatEther(best.amountIn),
+        bestAmountOutEth: formatEther(best.amountOut),
+        bestGrossEth: formatEther(best.amountOut - best.amountIn),
+        dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
+        principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+        lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
+      },
     }
-    appendAudit('preflight', report)
-    if (print) console.log(stringify(report))
-    return { report }
   }
   const deadline = block.timestamp + DEADLINE_SECONDS
   const observedFeePerGas = [gasPrice, fees.maxFeePerGas || 0n].reduce((left, right) => (left > right ? left : right))
-  const provisionalPath = routePath(candidate.route, candidate.amountIn, candidate.amountIn + 1n)
-  const provisionalGas = await publicClient.estimateContractGas({
-    account: WALLET,
-    address: BATCH_ROUTER,
-    abi: batchRouterAbi,
-    functionName: 'swapExactIn',
-    args: [[provisionalPath], deadline, true, '0x'],
-    value: candidate.amountIn,
-    blockNumber,
-  })
   const minimumNetProfitWei = parseEther(runtimeConfig.earnLiveMinNetWeth)
   const minimumQuoteHeadroomWei = parseEther(runtimeConfig.earnLiveMinHeadroomWeth)
-  let bounds = deriveEarnOnHoodExecutionBounds({
-    amountInWei: candidate.amountIn,
-    quotedAmountOutWei: candidate.amountOut,
-    estimatedGas: provisionalGas,
-    observedFeePerGasWei: observedFeePerGas,
-    minimumNetProfitWei,
-    minimumQuoteHeadroomWei,
-  })
-  let transactionPath = routePath(candidate.route, candidate.amountIn, bounds.minimumAmountOutWei)
-  const finalGasEstimate = await publicClient.estimateContractGas({
-    account: WALLET,
-    address: BATCH_ROUTER,
-    abi: batchRouterAbi,
-    functionName: 'swapExactIn',
-    args: [[transactionPath], deadline, true, '0x'],
-    value: candidate.amountIn,
-    blockNumber,
-  })
-  bounds = deriveEarnOnHoodExecutionBounds({
-    amountInWei: candidate.amountIn,
-    quotedAmountOutWei: candidate.amountOut,
-    estimatedGas: finalGasEstimate,
-    observedFeePerGasWei: observedFeePerGas,
-    minimumNetProfitWei,
-    minimumQuoteHeadroomWei,
-  })
-  transactionPath = routePath(candidate.route, candidate.amountIn, bounds.minimumAmountOutWei)
-  const maximumFailedGasWei = parseEther(runtimeConfig.earnLiveMaxFailedGasWeth)
-  const retainedWalletReserveWei = parseEther(runtimeConfig.earnLiveWalletReserveWeth)
-  const executable =
-    bounds.executable &&
-    bounds.maximumGasCostWei <= maximumFailedGasWei &&
-    walletBalance >= candidate.amountIn + bounds.maximumGasCostWei + retainedWalletReserveWei
-  const reasons = []
-  if (watcherPid) reasons.push(`DUAL_WATCHER_ACTIVE_PID_${watcherPid}`)
-  if (!bounds.executable) reasons.push(bounds.reason)
-  if (bounds.maximumGasCostWei > maximumFailedGasWei) reasons.push('FAILED_GAS_CAP_EXCEEDED')
-  if (walletBalance < candidate.amountIn + bounds.maximumGasCostWei + retainedWalletReserveWei) {
-    reasons.push('INSUFFICIENT_WALLET_BALANCE_AND_RESERVE')
+  const evaluations = []
+  for (const candidate of positiveGross.slice(0, MAX_GAS_EVALUATIONS)) {
+    try {
+      const provisionalPath = routePath(candidate.route, candidate.amountIn, candidate.amountIn + 1n)
+      const provisionalGas = await client.estimateContractGas({
+        account: WALLET,
+        address: BATCH_ROUTER,
+        abi: batchRouterAbi,
+        functionName: 'swapExactIn',
+        args: [[provisionalPath], deadline, true, '0x'],
+        value: candidate.amountIn,
+        blockNumber,
+      })
+      let bounds = deriveEarnOnHoodExecutionBounds({
+        amountInWei: candidate.amountIn,
+        quotedAmountOutWei: candidate.amountOut,
+        estimatedGas: provisionalGas,
+        observedFeePerGasWei: observedFeePerGas,
+        minimumNetProfitWei,
+        minimumQuoteHeadroomWei,
+      })
+      // P0 fail-closed rule: an impossible protected minOut is never sent to
+      // estimateGas. A gross-positive/net-negative quote is a normal NO_SHOT.
+      if (!bounds.executable) {
+        evaluations.push({ candidate, bounds, reason: bounds.reason })
+        continue
+      }
+      let transactionPath = routePath(candidate.route, candidate.amountIn, bounds.minimumAmountOutWei)
+      const finalGasEstimate = await client.estimateContractGas({
+        account: WALLET,
+        address: BATCH_ROUTER,
+        abi: batchRouterAbi,
+        functionName: 'swapExactIn',
+        args: [[transactionPath], deadline, true, '0x'],
+        value: candidate.amountIn,
+        blockNumber,
+      })
+      bounds = deriveEarnOnHoodExecutionBounds({
+        amountInWei: candidate.amountIn,
+        quotedAmountOutWei: candidate.amountOut,
+        estimatedGas: finalGasEstimate,
+        observedFeePerGasWei: observedFeePerGas,
+        minimumNetProfitWei,
+        minimumQuoteHeadroomWei,
+      })
+      transactionPath = routePath(candidate.route, candidate.amountIn, bounds.minimumAmountOutWei)
+      let reason = null
+      if (!bounds.executable) reason = bounds.reason
+      else if (bounds.maximumGasCostWei > perAttemptGasCeilingWei) reason = 'PER_ATTEMPT_GAS_CEILING_EXCEEDED'
+      else if (
+        !preservesEarnOnHoodLongTermProfit(
+          gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei,
+          bounds.maximumGasCostWei,
+        )
+      ) {
+        reason = 'LIFETIME_GAS_SOLVENCY_WOULD_BREAK'
+      } else if (walletBalance < candidate.amountIn + bounds.maximumGasCostWei + retainedWalletReserveWei) {
+        reason = 'INSUFFICIENT_WALLET_BALANCE_AND_RESERVE'
+      }
+      if (reason) {
+        evaluations.push({ candidate, bounds, finalGasEstimate, reason })
+        continue
+      }
+      const data = encodeFunctionData({
+        abi: batchRouterAbi,
+        functionName: 'swapExactIn',
+        args: [[transactionPath], deadline, true, '0x'],
+      })
+      await client.call({ account: WALLET, to: BATCH_ROUTER, data, value: candidate.amountIn, blockNumber })
+      evaluations.push({ candidate, bounds, transactionPath, finalGasEstimate, data, reason: null })
+    } catch (error) {
+      evaluations.push({ candidate, reason: errorText(error) })
+    }
   }
-  const data = encodeFunctionData({
-    abi: batchRouterAbi,
-    functionName: 'swapExactIn',
-    args: [[transactionPath], deadline, true, '0x'],
+  const executableEvaluations = evaluations.filter((item) => item.reason === null)
+  executableEvaluations.sort((left, right) => {
+    if (left.bounds.quotedNetAtGasCapWei !== right.bounds.quotedNetAtGasCapWei) {
+      return left.bounds.quotedNetAtGasCapWei > right.bounds.quotedNetAtGasCapWei ? -1 : 1
+    }
+    return left.bounds.maximumGasCostWei < right.bounds.maximumGasCostWei ? -1 : 1
   })
-  await publicClient.call({ account: WALLET, to: BATCH_ROUTER, data, value: candidate.amountIn, blockNumber })
+  const selected = executableEvaluations[0]
+  if (!selected) {
+    const best = evaluations[0]
+    return {
+      report: {
+        status: 'NO_SHOT',
+        evidence: `${rpcRole}_SAME_BLOCK_GROSS_POSITIVE_BUT_NET_REJECTED_NO_SIGNATURE_NO_BROADCAST`,
+        reasons: [...new Set(evaluations.map((item) => item.reason).filter(Boolean))],
+        blockNumber,
+        blockTimestamp: block.timestamp,
+        wallet: WALLET,
+        walletBalanceEth: formatEther(walletBalance),
+        nonceLatest,
+        noncePending,
+        route: best.candidate.route.symbols.join(' -> '),
+        bestAmountInEth: formatEther(best.candidate.amountIn),
+        bestAmountOutEth: formatEther(best.candidate.amountOut),
+        bestGrossEth: formatEther(best.candidate.amountOut - best.candidate.amountIn),
+        bestQuotedNetAtGasCapEth: best.bounds ? formatEther(best.bounds.quotedNetAtGasCapWei) : null,
+        dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
+        principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+        lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
+      },
+    }
+  }
+  const { candidate, bounds, transactionPath, finalGasEstimate, data } = selected
   const report = {
-    status: executable && !watcherPid ? 'SHOT_READY' : 'NO_SHOT',
-    evidence: 'SAME_BLOCK_IDENTITY_QUOTE_FINAL_CALL_AND_GAS_ESTIMATE_NO_SIGNATURE_NO_BROADCAST',
-    reasons,
+    status: 'SHOT_READY',
+    evidence: `${rpcRole}_SAME_BLOCK_IDENTITY_QUOTE_FINAL_CALL_AND_GAS_ESTIMATE_NO_SIGNATURE_NO_BROADCAST`,
+    reasons: [],
     blockNumber,
     blockTimestamp: block.timestamp,
     wallet: WALLET,
@@ -505,10 +666,11 @@ async function preflight({ print = true } = {}) {
     quoteHeadroomEth: formatEther(bounds.quoteHeadroomWei),
     quotedNetAtGasCapEth: formatEther(bounds.quotedNetAtGasCapWei),
     retainedWalletReserveEth: formatEther(retainedWalletReserveWei),
+    dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
+    principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+    lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
     deadline,
   }
-  appendAudit('preflight', report)
-  if (print) console.log(stringify(report))
   return {
     report,
     candidate,
@@ -522,26 +684,64 @@ async function preflight({ print = true } = {}) {
   }
 }
 
+async function preflight({ print = true } = {}) {
+  const sharedContext = sharedExecutionContext()
+  const watcherPid = activeLock(dualWatchLockPath)
+  const gasSolvency = currentGasSolvency(sharedContext)
+  const screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN')
+  if (screened.report.status !== 'SHOT_READY') {
+    appendAudit('preflight', screened.report)
+    if (print) console.log(stringify(screened.report))
+    return screened
+  }
+  assertLiveTransport(runtimeConfig)
+  if (sharedContext) assertSharedAuthorization(sharedContext, { maximumGasCostWei: screened.bounds.maximumGasCostWei })
+  if (sharedContext) {
+    appendAudit(
+      'earn_watch_exact_preflight_started',
+      {
+        authorizationId: sharedContext.authorizationId,
+        publicScreenBlockNumber: screened.report.blockNumber,
+        route: screened.report.route,
+        amountInWei: screened.candidate.amountIn,
+        quotedNetAtGasCapWei: screened.bounds.quotedNetAtGasCapWei,
+      },
+      { mirrorShared: true },
+    )
+  }
+  const exactGasSolvency = currentGasSolvency(sharedContext)
+  const prepared = await prepareOnClient(executionClient, exactGasSolvency, 'MANAGED_RPC_EXACT')
+  if (!sharedContext && watcherPid) {
+    prepared.report.status = 'NO_SHOT'
+    prepared.report.reasons = [...prepared.report.reasons, `DUAL_WATCHER_ACTIVE_PID_${watcherPid}`]
+  }
+  appendAudit('preflight', prepared.report)
+  if (print) console.log(stringify(prepared.report))
+  return prepared
+}
+
 async function execute() {
   if (process.env.EARN_LIVE_ARM !== '1') throw new Error('execution requires EARN_LIVE_ARM=1')
+  const sharedContext = sharedExecutionContext()
   const release = acquireWalletLock()
   try {
-    if (activeLock(dualWatchLockPath))
+    if (activeLock(dualWatchLockPath) && !sharedContext)
       throw new Error('dual watcher is active; disarm and stop it before EarnOnHood execution')
+    if (sharedContext) assertSharedAuthorization(sharedContext)
     const prepared = await preflight({ print: false })
     if (prepared.report.status !== 'SHOT_READY') {
       appendAudit('execution_skipped', { reasons: prepared.report.reasons })
       console.log(stringify({ ...prepared.report, status: 'NO_SHOT_NO_SIGNATURE_NO_BROADCAST' }))
       return
     }
-    const latestBlockNumber = await publicClient.getBlockNumber()
-    const latestBlock = await publicClient.getBlock({ blockNumber: latestBlockNumber })
+    const latestBlockNumber = await executionClient.getBlockNumber()
+    const latestBlock = await executionClient.getBlock({ blockNumber: latestBlockNumber })
     const [latestNonce, pendingNonce, latestWalletBalance, latestGasPrice, latestFees] = await Promise.all([
-      publicClient.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
-      publicClient.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
-      publicClient.getBalance({ address: WALLET, blockNumber: latestBlockNumber }),
-      publicClient.getGasPrice(),
-      publicClient.estimateFeesPerGas(),
+      executionClient.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
+      executionClient.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
+      executionClient.getBalance({ address: WALLET, blockNumber: latestBlockNumber }),
+      executionClient.getGasPrice(),
+      executionClient.estimateFeesPerGas(),
     ])
     if (latestNonce !== prepared.nonceLatest || pendingNonce !== latestNonce) {
       throw new Error('nonce changed after preflight')
@@ -558,7 +758,21 @@ async function execute() {
     ) {
       throw new Error('wallet balance fell below the protected principal, gas and reserve requirement')
     }
-    const latestQuote = await exactQuote(prepared.candidate.route, prepared.candidate.amountIn, latestBlockNumber)
+    const sharedAuthorization = sharedContext
+      ? assertSharedAuthorization(sharedContext, { maximumGasCostWei: prepared.bounds.maximumGasCostWei })
+      : null
+    if (
+      sharedAuthorization &&
+      latestNonce !== Number(sharedAuthorization.arm.baselineNonce) + sharedAuthorization.usage.confirmedExecutions
+    ) {
+      throw new Error('shared EarnOnHood nonce differs from the authorization ledger')
+    }
+    const latestQuote = await exactQuote(
+      executionClient,
+      prepared.candidate.route,
+      prepared.candidate.amountIn,
+      latestBlockNumber,
+    )
     if (latestQuote < prepared.bounds.minimumAmountOutWei)
       throw new Error('quote fell below the protected output floor')
     const latestDeadline = latestBlock.timestamp + DEADLINE_SECONDS
@@ -567,14 +781,14 @@ async function execute() {
       functionName: 'swapExactIn',
       args: [[prepared.transactionPath], latestDeadline, true, '0x'],
     })
-    await publicClient.call({
+    await executionClient.call({
       account: WALLET,
       to: BATCH_ROUTER,
       data: latestData,
       value: prepared.candidate.amountIn,
       blockNumber: latestBlockNumber,
     })
-    const latestGasEstimate = await publicClient.estimateGas({
+    const latestGasEstimate = await executionClient.estimateGas({
       account: WALLET,
       to: BATCH_ROUTER,
       data: latestData,
@@ -585,9 +799,10 @@ async function execute() {
       throw new Error('latest gas estimate exceeds the protected gas limit')
     }
 
-    const plan = buildMutationPlan('earnonhood-one-shot', {
+    const plan = buildMutationPlan('earnonhood-execute', {
       chainId: CHAIN_ID,
       wallet: WALLET,
+      authorizationId: sharedContext?.authorizationId || null,
       nonce: latestNonce,
       to: BATCH_ROUTER,
       value: prepared.candidate.amountIn,
@@ -601,8 +816,13 @@ async function execute() {
       minimumAmountOutWei: prepared.bounds.minimumAmountOutWei,
       protectedMinimumNetProfitWei: parseEther(runtimeConfig.earnLiveMinNetWeth),
       walletBalanceBeforeWei: latestWalletBalance,
+      lifetimeGasSurplusBeforeWei: sharedAuthorization?.usage.earnGasSurplusWei || null,
+      principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+      routeCommitment: EARN_ROUTE_COMMITMENT,
     })
-    appendAudit('mutation_plan', plan)
+    appendAudit('mutation_plan', plan, { mirrorShared: Boolean(sharedContext) })
+    if (sharedContext)
+      assertSharedAuthorization(sharedContext, { maximumGasCostWei: prepared.bounds.maximumGasCostWei })
     const account = loadAccount()
     const serializedTransaction = await account.signTransaction({
       chainId: CHAIN_ID,
@@ -617,13 +837,22 @@ async function execute() {
     })
     const hash = keccak256(serializedTransaction)
     const rawPrivateRef = persistSignedRaw(signedTransactionDir, hash, serializedTransaction)
-    appendAudit('mutation_signed', {
+    const signedAttempt = {
+      kind: plan.kind,
+      authorizationId: sharedContext?.authorizationId || null,
       intentId: plan.intentId,
       planHash: plan.planHash,
       hash,
       nonce: latestNonce,
       rawPrivateRef,
-    })
+    }
+    appendAudit('mutation_signed', signedAttempt, { mirrorShared: Boolean(sharedContext) })
+    if (sharedContext) {
+      assertSharedAuthorization(sharedContext, {
+        maximumGasCostWei: prepared.bounds.maximumGasCostWei,
+        currentSignedAttempt: { event: 'mutation_signed', ...signedAttempt },
+      })
+    }
     const walletClient = createWalletClient({
       account,
       chain,
@@ -633,21 +862,60 @@ async function execute() {
       const acceptedHash = await walletClient.sendRawTransaction({ serializedTransaction })
       if (acceptedHash.toLowerCase() !== hash.toLowerCase())
         throw new Error('RPC returned a different transaction hash')
-      appendAudit('broadcast_accepted', { hash })
+      appendAudit(
+        'broadcast_accepted',
+        { kind: plan.kind, authorizationId: sharedContext?.authorizationId || null, hash },
+        { mirrorShared: Boolean(sharedContext) },
+      )
     } catch (error) {
-      appendAudit('broadcast_unknown', { hash, reason: errorText(error) })
+      appendAudit(
+        'broadcast_unknown',
+        { kind: plan.kind, authorizationId: sharedContext?.authorizationId || null, hash, reason: errorText(error) },
+        { mirrorShared: Boolean(sharedContext) },
+      )
     }
     let receipt
     try {
-      receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 3, timeout: 120_000 })
+      receipt = await executionClient.waitForTransactionReceipt({
+        hash,
+        confirmations: runtimeConfig.finalityConfirmations,
+        timeout: 120_000,
+      })
     } catch (error) {
-      appendAudit('receipt_unknown', { hash, reason: errorText(error) })
+      appendAudit(
+        'receipt_unknown',
+        { kind: plan.kind, authorizationId: sharedContext?.authorizationId || null, hash, reason: errorText(error) },
+        { mirrorShared: Boolean(sharedContext) },
+      )
       throw new Error(`EarnOnHood receipt is UNKNOWN; do not reuse nonce ${latestNonce}: ${hash}`)
     }
-    const walletBalanceAfter = await publicClient.getBalance({ address: WALLET })
+    const [walletBalanceBeforeBlock, walletBalanceAfterBlock] = await Promise.all([
+      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber - 1n }),
+      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber }),
+    ])
     const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
-    const realizedNetWei = walletBalanceAfter - latestWalletBalance
-    const inferredGrossProfitWei = realizedNetWei + gasSpentWei
+    if (receipt.status !== 'success') {
+      appendAudit(
+        'mutation_reverted',
+        {
+          kind: plan.kind,
+          authorizationId: sharedContext?.authorizationId || null,
+          hash,
+          intentId: plan.intentId,
+          planHash: plan.planHash,
+          gasSpentWei,
+        },
+        { mirrorShared: Boolean(sharedContext) },
+      )
+      throw new Error(`EarnOnHood transaction reverted: ${hash}`)
+    }
+    const realizedNetWei = walletBalanceAfterBlock - walletBalanceBeforeBlock
+    const receiptRoute = decodeEarnOnHoodReceiptRoute(receipt, prepared.candidate.route, prepared.candidate.amountIn)
+    const inferredGrossProfitWei = receiptRoute.finalAmountOutWei - prepared.candidate.amountIn
+    const receiptDerivedNetWei = inferredGrossProfitWei - gasSpentWei
+    if (receiptDerivedNetWei !== realizedNetWei) {
+      throw new Error('EarnOnHood receipt swaps, canonical Gas, and native wallet balance delta disagree')
+    }
     const result = {
       status: receipt.status === 'success' && realizedNetWei > 0n ? 'CONFIRMED_NET_PROFIT' : 'CONFIRMED_NO_PROFIT',
       evidence: 'CANONICAL_RECEIPT_AND_NATIVE_BALANCE_DELTA',
@@ -661,12 +929,30 @@ async function execute() {
       gasSpentEth: formatEther(gasSpentWei),
       inferredGrossProfitEth: formatEther(inferredGrossProfitWei),
       realizedNetProfitEth: formatEther(realizedNetWei),
-      walletBalanceBeforeEth: formatEther(latestWalletBalance),
-      walletBalanceAfterEth: formatEther(walletBalanceAfter),
+      walletBalanceBeforeEth: formatEther(walletBalanceBeforeBlock),
+      walletBalanceAfterEth: formatEther(walletBalanceAfterBlock),
+      dynamicMaximumPrincipalEth: prepared.report.dynamicMaximumPrincipalEth,
+      principalPolicy: prepared.report.principalPolicy,
+      lifetimeEarnGasSurplusBeforeEth: prepared.report.lifetimeEarnGasSurplusEth,
     }
-    appendAudit('mutation_effect', { ...result, intentId: plan.intentId, planHash: plan.planHash })
+    appendAudit(
+      'mutation_effect',
+      {
+        ...result,
+        result: realizedNetWei > 0n ? 'CONFIRMED_SUCCESS' : 'CONFIRMED_POLICY_VIOLATION',
+        kind: plan.kind,
+        authorizationId: sharedContext?.authorizationId || null,
+        hash,
+        intentId: plan.intentId,
+        planHash: plan.planHash,
+        gasSpentWei,
+        inferredGrossProfitWei,
+        receiptFinalAmountOutWei: receiptRoute.finalAmountOutWei,
+        realizedNetProfitWei: realizedNetWei,
+      },
+      { mirrorShared: Boolean(sharedContext) },
+    )
     console.log(stringify(result))
-    if (receipt.status !== 'success') throw new Error(`EarnOnHood transaction reverted: ${hash}`)
     if (realizedNetWei <= 0n) throw new Error(`receipt succeeded but native wallet net did not increase: ${hash}`)
     return result
   } finally {
@@ -674,12 +960,180 @@ async function execute() {
   }
 }
 
-const command = process.argv[2] || 'preflight'
-try {
-  if (command === 'preflight') await preflight()
-  else if (command === 'execute') await execute()
-  else throw new Error(`unknown command: ${command}`)
-} catch (error) {
-  console.error(stringify({ status: 'FAILED_CLOSED', error: errorText(error) }))
-  process.exitCode = 1
+function routeForPlan(plan) {
+  const pools = Array.isArray(plan.pools) ? plan.pools.map((value) => String(value).toLowerCase()) : []
+  return ROUTES.find(
+    (route) =>
+      route.steps.length === pools.length &&
+      route.steps.every((step, index) => step.pool.toLowerCase() === pools[index]),
+  )
+}
+
+async function optionalTransaction(method) {
+  try {
+    return await method()
+  } catch (error) {
+    if (/not found|could not be found|unknown transaction/i.test(errorText(error))) return null
+    throw error
+  }
+}
+
+async function reconcile() {
+  assertLiveTransport(runtimeConfig)
+  if (activeLock(dualWatchLockPath)) throw new Error('stop the dual watcher before EarnOnHood reconciliation')
+  const release = acquireWalletLock()
+  try {
+    const sharedRecords = readJsonLines(sharedAuditPath)
+    const localRecords = readJsonLines(auditPath)
+    const unresolved = /** @type {Record<string, any> | null} */ (
+      latestUnresolvedMutation(sharedRecords) || latestUnresolvedMutation(localRecords)
+    )
+    if (!unresolved) {
+      const result = { status: 'CLEAN', unresolvedMutation: null }
+      console.log(stringify(result))
+      return result
+    }
+    if (unresolved.kind !== 'earnonhood-execute') {
+      throw new Error(`latest unresolved mutation is not EarnOnHood: ${unresolved.kind}`)
+    }
+    const records = unresolved.authorizationId ? sharedRecords : localRecords
+    const plan = records.findLast(
+      (record) => record.event === 'mutation_plan' && record.planHash === unresolved.planHash,
+    )
+    if (!plan) throw new Error('EarnOnHood mutation plan is missing')
+    const route = routeForPlan(plan)
+    if (!route || plan.routeCommitment !== EARN_ROUTE_COMMITMENT) {
+      throw new Error('EarnOnHood mutation plan route is outside the reviewed commitment')
+    }
+    const rawPrivateRef = path.resolve(unresolved.rawPrivateRef || '')
+    const signedRoot = `${path.resolve(signedTransactionDir)}${path.sep}`
+    if (!rawPrivateRef.startsWith(signedRoot) || !fs.existsSync(rawPrivateRef)) {
+      throw new Error('persisted EarnOnHood raw is missing or misplaced')
+    }
+    assertPrivateFile(rawPrivateRef)
+    const serializedTransaction = /** @type {`0x${string}`} */ (fs.readFileSync(rawPrivateRef, 'utf8').trim())
+    if (keccak256(serializedTransaction).toLowerCase() !== unresolved.hash.toLowerCase()) {
+      throw new Error('persisted EarnOnHood raw transaction hash mismatch')
+    }
+    const parsed = parseTransaction(serializedTransaction)
+    const sender = await recoverTransactionAddress({ serializedTransaction })
+    if (
+      sender.toLowerCase() !== WALLET.toLowerCase() ||
+      Number(parsed.chainId) !== Number(plan.chainId) ||
+      parsed.to?.toLowerCase() !== BATCH_ROUTER.toLowerCase() ||
+      Number(parsed.nonce) !== Number(plan.nonce) ||
+      BigInt(parsed.value || 0) !== BigInt(plan.value) ||
+      BigInt(parsed.gas || 0) !== BigInt(plan.gasLimit) ||
+      BigInt(parsed.maxFeePerGas || 0) !== BigInt(plan.maxFeePerGas) ||
+      BigInt(parsed.maxPriorityFeePerGas || 0) !== BigInt(plan.maxPriorityFeePerGas) ||
+      keccak256(parsed.data || '0x').toLowerCase() !== String(plan.dataCommitment).toLowerCase()
+    ) {
+      throw new Error('persisted EarnOnHood raw transaction differs from its immutable plan')
+    }
+    const [receipt, transaction, head, nonceLatest, noncePending] = await Promise.all([
+      optionalTransaction(() => executionClient.getTransactionReceipt({ hash: unresolved.hash })),
+      optionalTransaction(() => executionClient.getTransaction({ hash: unresolved.hash })),
+      executionClient.getBlockNumber(),
+      executionClient.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
+      executionClient.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
+    ])
+    if (!receipt) {
+      const result = {
+        status: transaction ? 'RECONCILE_PENDING' : 'RECONCILE_UNKNOWN',
+        evidence: 'TRANSACTION_OR_RECEIPT_NOT_FINAL_NO_NONCE_REUSE',
+        transaction: unresolved.hash,
+        nonceLatest,
+        noncePending,
+      }
+      console.log(stringify(result))
+      return result
+    }
+    if (head - receipt.blockNumber + 1n < BigInt(runtimeConfig.finalityConfirmations)) {
+      const result = {
+        status: 'RECONCILE_PROVISIONAL_RECEIPT',
+        transaction: unresolved.hash,
+        blockNumber: receipt.blockNumber,
+      }
+      console.log(stringify(result))
+      return result
+    }
+    const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
+    const mirrorShared = Boolean(unresolved.authorizationId)
+    if (receipt.status !== 'success') {
+      appendAudit(
+        'mutation_reverted',
+        {
+          kind: unresolved.kind,
+          authorizationId: unresolved.authorizationId || null,
+          hash: unresolved.hash,
+          intentId: unresolved.intentId,
+          planHash: unresolved.planHash,
+          gasSpentWei,
+          reconciled: true,
+        },
+        { mirrorShared },
+      )
+      const result = { status: 'RECONCILED_REVERTED', transaction: unresolved.hash, gasSpentWei }
+      console.log(stringify(result))
+      return result
+    }
+    const routeEvidence = decodeEarnOnHoodReceiptRoute(receipt, route, BigInt(plan.value))
+    const inferredGrossProfitWei = routeEvidence.finalAmountOutWei - BigInt(plan.value)
+    const realizedNetProfitWei = inferredGrossProfitWei - gasSpentWei
+    const [balanceBeforeBlock, balanceAfterBlock] = await Promise.all([
+      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber - 1n }),
+      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber }),
+    ])
+    if (balanceAfterBlock - balanceBeforeBlock !== realizedNetProfitWei || realizedNetProfitWei <= 0n) {
+      throw new Error('reconciled Earn receipt, Gas, and exact-block wallet balance delta disagree')
+    }
+    appendAudit(
+      'mutation_effect',
+      {
+        status: 'CONFIRMED_NET_PROFIT',
+        result: 'CONFIRMED_SUCCESS',
+        evidence: 'CANONICAL_RECEIPT_SWAP_LOGS_AND_EXACT_BLOCK_NATIVE_BALANCE_DELTA',
+        kind: unresolved.kind,
+        authorizationId: unresolved.authorizationId || null,
+        hash: unresolved.hash,
+        transaction: unresolved.hash,
+        intentId: unresolved.intentId,
+        planHash: unresolved.planHash,
+        blockNumber: receipt.blockNumber,
+        route: route.symbols.join(' -> '),
+        amountInEth: formatEther(BigInt(plan.value)),
+        gasSpentWei,
+        gasSpentEth: formatEther(gasSpentWei),
+        inferredGrossProfitWei,
+        inferredGrossProfitEth: formatEther(inferredGrossProfitWei),
+        realizedNetProfitWei,
+        realizedNetProfitEth: formatEther(realizedNetProfitWei),
+        receiptFinalAmountOutWei: routeEvidence.finalAmountOutWei,
+        reconciled: true,
+      },
+      { mirrorShared },
+    )
+    const result = {
+      status: 'RECONCILED_SUCCESS',
+      transaction: unresolved.hash,
+      realizedNetProfitEth: formatEther(realizedNetProfitWei),
+    }
+    console.log(stringify(result))
+    return result
+  } finally {
+    release()
+  }
+}
+
+if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
+  const command = process.argv[2] || 'preflight'
+  try {
+    if (command === 'preflight') await preflight()
+    else if (command === 'execute') await execute()
+    else if (command === 'reconcile') await reconcile()
+    else throw new Error(`unknown command: ${command}`)
+  } catch (error) {
+    console.error(stringify({ status: 'FAILED_CLOSED', error: errorText(error) }))
+    process.exitCode = 1
+  }
 }

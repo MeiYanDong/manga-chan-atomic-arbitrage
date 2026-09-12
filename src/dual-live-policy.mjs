@@ -3,8 +3,9 @@ import { stableStringify } from './journal.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v2'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v3'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v1'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2 = 'dual-base-loopback-escalation-v2'
 
 /**
  * The cheap board screen may be more permissive than the exact execution
@@ -181,6 +182,7 @@ export function dualAuthorizationCommitment(arm) {
     idleRpcBehavior: arm.idleRpcBehavior,
     escalationRpcBehavior: arm.escalationRpcBehavior,
     rpcSource: arm.rpcSource,
+    earnOnHood: arm.earnOnHood,
   }
 }
 
@@ -219,28 +221,55 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
     (record) =>
       record.event === 'mutation_signed' &&
       record.authorizationId === arm.authorizationId &&
-      ['generic-execute', 'weth-execute'].includes(record.kind),
+      ['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(record.kind),
   ).length
   const exactPreflights = records.filter(
-    (record) => record.event === 'dual_watch_exact_preflight_started' && record.authorizationId === arm.authorizationId,
+    (record) =>
+      ['dual_watch_exact_preflight_started', 'earn_watch_exact_preflight_started'].includes(record.event) &&
+      record.authorizationId === arm.authorizationId,
   ).length
   const failedGasWei = records
     .filter(
       (record) =>
         record.event === 'mutation_reverted' &&
         record.authorizationId === arm.authorizationId &&
-        ['generic-execute', 'weth-execute'].includes(record.kind),
+        ['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(record.kind),
     )
     .reduce((total, record) => total + BigInt(record.gasSpentWei || 0), 0n)
+  const earnEffects = records.filter(
+    (record) =>
+      record.event === 'mutation_effect' &&
+      record.authorizationId === arm.authorizationId &&
+      record.kind === 'earnonhood-execute',
+  )
+  const earnConfirmed = new Set(earnEffects.map((record) => record.hash).filter(Boolean)).size
+  const earnRealizedNetProfitWei = earnEffects.reduce(
+    (total, record) => total + BigInt(record.realizedNetProfitWei || 0),
+    0n,
+  )
+  const earnFailedGasWei = records
+    .filter(
+      (record) =>
+        record.event === 'mutation_reverted' &&
+        record.authorizationId === arm.authorizationId &&
+        record.kind === 'earnonhood-execute',
+    )
+    .reduce((total, record) => total + BigInt(record.gasSpentWei || 0), 0n)
+  const earnInitialGasSurplusWei = BigInt(arm.earnOnHood?.initialGasSurplusWei || 0)
+  const earnGasSurplusWei = earnInitialGasSurplusWei + earnRealizedNetProfitWei - earnFailedGasWei
   const usdgConfirmed = usdgExecutions.length - baselineUsdg
   const wethConfirmed = wethExecutions.length - baselineWeth
   return {
     usdgConfirmed,
     wethConfirmed,
-    confirmedExecutions: usdgConfirmed + wethConfirmed,
+    earnConfirmed,
+    confirmedExecutions: usdgConfirmed + wethConfirmed + earnConfirmed,
     signedAttempts,
     exactPreflights,
     failedGasWei,
+    earnRealizedNetProfitWei,
+    earnFailedGasWei,
+    earnGasSurplusWei,
   }
 }
 
@@ -249,13 +278,17 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
  * policy. Failed transaction gas remains a finite breaker.
  *
  * @param {Record<string, any>} arm
- * @param {{failedGasWei: bigint}} usage
+ * @param {{failedGasWei: bigint, earnGasSurplusWei?: bigint}} usage
  */
 export function evaluateDualAuthorizationBudget(arm, usage) {
   if (
     arm.schemaVersion !== 1 ||
     arm.mode !== 'AUTO_POLICY' ||
-    ![DUAL_AUTHORIZATION_POLICY_VERSION, LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION].includes(arm.policyVersion) ||
+    ![
+      DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION,
+    ].includes(arm.policyVersion) ||
     arm.authorizationLifetime !== DUAL_AUTHORIZATION_LIFETIME ||
     arm.principalPolicy !== DUAL_PRINCIPAL_POLICY ||
     arm.expiresAt !== undefined
@@ -279,6 +312,30 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     return { allowed: false, reason: 'invalid-profit-floors' }
   }
   if (usage.failedGasWei >= maxFailedGas) return { allowed: false, reason: 'failed-gas-limit' }
+  if (arm.policyVersion === DUAL_AUTHORIZATION_POLICY_VERSION) {
+    let initialGasSurplusWei
+    let perAttemptGasCeilingWei
+    let walletReserveWei
+    try {
+      initialGasSurplusWei = BigInt(arm.earnOnHood?.initialGasSurplusWei)
+      perAttemptGasCeilingWei = BigInt(arm.earnOnHood?.perAttemptGasCeilingWei)
+      walletReserveWei = BigInt(arm.earnOnHood?.walletReserveWei)
+    } catch {
+      return { allowed: false, reason: 'invalid-earnonhood-economics' }
+    }
+    if (
+      arm.earnOnHood?.enabled !== true ||
+      arm.earnOnHood?.principalPolicy !== 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP' ||
+      !arm.earnOnHood?.routeCommitment ||
+      initialGasSurplusWei <= 0n ||
+      perAttemptGasCeilingWei <= 0n ||
+      walletReserveWei < 0n ||
+      typeof usage.earnGasSurplusWei !== 'bigint' ||
+      usage.earnGasSurplusWei <= 0n
+    ) {
+      return { allowed: false, reason: 'invalid-earnonhood-economics' }
+    }
+  }
   return { allowed: true, reason: null }
 }
 
@@ -304,9 +361,9 @@ export function validateDualSignedAttempt(arm, records, currentAttempt, unresolv
     (record) =>
       record.event === 'mutation_signed' &&
       record.authorizationId === arm.authorizationId &&
-      ['generic-execute', 'weth-execute'].includes(record.kind),
+      ['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(record.kind),
   )
-  if (!currentAttempt || !['generic-execute', 'weth-execute'].includes(currentAttempt.kind)) {
+  if (!currentAttempt || !['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(currentAttempt.kind)) {
     return { allowed: false, reason: 'signed-attempt-reservation-mismatch' }
   }
   if (

@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -43,6 +43,15 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
+import { earnOnHoodGasSolvency } from '../src/earnonhood-live-policy.mjs'
+import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
+import {
+  EARN_BATCH_ROUTER,
+  EARN_POOL_ADDRESSES,
+  EARN_ROUTE_COMMITMENT,
+  EARN_VAULT,
+  isEarnOnHoodRouteSwap,
+} from '../src/earnonhood-routes.mjs'
 import { retryReadOnly } from '../src/event-driven-shadow.mjs'
 import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/generic-plan.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
@@ -96,6 +105,7 @@ const DUAL_WATCH_LOCK_PATH = path.join(RUN_DIR, 'dual-watch.lock')
 const DUAL_WATCH_ARM_PATH = path.join(RUN_DIR, 'dual-watch-arm.json')
 const DUAL_WATCH_REVOCATION_PATH = path.join(RUN_DIR, 'dual-watch-revocation.json')
 const DUAL_WATCH_STATE_PATH = path.join(RUN_DIR, 'dual-watch-state.json')
+const EARN_AUDIT_PATH = path.join(RUN_DIR, 'earnonhood-audit.jsonl')
 const SIGNED_TX_DIR = path.join(RUN_DIR, 'signed')
 
 const chain = defineChain({
@@ -109,6 +119,10 @@ const publicClient = createPublicClient({ chain, transport: http(RPC_URL, { time
 const secondaryClient = RUNTIME_CONFIG.readRpcUrl
   ? createPublicClient({ chain, transport: http(RUNTIME_CONFIG.readRpcUrl, { timeout: 30_000, retryCount: 1 }) })
   : null
+const earnEventClient = createPublicClient({
+  chain,
+  transport: http(PUBLIC_READ_ONLY_RPC, { timeout: 30_000, retryCount: 2 }),
+})
 
 const ERC20_ABI = parseAbi([
   'function symbol() view returns (string)',
@@ -154,10 +168,10 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
 }
 
-function readAuditRecords() {
-  if (!fs.existsSync(AUDIT_PATH)) return []
+function readAuditRecords(file = AUDIT_PATH) {
+  if (!fs.existsSync(file)) return []
   return fs
-    .readFileSync(AUDIT_PATH, 'utf8')
+    .readFileSync(file, 'utf8')
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line))
@@ -896,6 +910,26 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
   const configuredMinimumNet = parseNonNegativeUnits(RUNTIME_CONFIG.genericMinNetUsdg, 6, 'minimum net USDG')
   const configuredScreenedNet = minimumScreenedNetUsdg()
   const configuredReserve = parseNonNegativeUnits(RUNTIME_CONFIG.genericMinEthReserve, 18, 'minimum ETH reserve')
+  const configuredEarnMinimumNet = parseNonNegativeUnits(
+    RUNTIME_CONFIG.earnLiveMinNetWeth,
+    18,
+    'EarnOnHood minimum net WETH',
+  )
+  const configuredEarnHeadroom = parseNonNegativeUnits(
+    RUNTIME_CONFIG.earnLiveMinHeadroomWeth,
+    18,
+    'EarnOnHood quote headroom WETH',
+  )
+  const configuredEarnGasCeiling = parseNonNegativeUnits(
+    RUNTIME_CONFIG.earnLiveMaxFailedGasWeth,
+    18,
+    'EarnOnHood per-attempt Gas ceiling',
+  )
+  const configuredEarnReserve = parseNonNegativeUnits(
+    RUNTIME_CONFIG.earnLiveWalletReserveWeth,
+    18,
+    'EarnOnHood wallet reserve',
+  )
   if (
     !RUNTIME_CONFIG.genericWatchUntilRevoked ||
     RUNTIME_CONFIG.genericWatchAutoRenew ||
@@ -907,7 +941,20 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     BigInt(arm.walletEthReserveWei) !== configuredReserve ||
     Number(arm.profitRetentionBps) !== RUNTIME_CONFIG.genericProfitRetentionBps ||
     Number(arm.pollIntervalMs) !== RUNTIME_CONFIG.genericWatchPollMs ||
-    BigInt(arm.maxFailedGasWei) !== RUNTIME_CONFIG.maxFailedGasWei
+    BigInt(arm.maxFailedGasWei) !== RUNTIME_CONFIG.maxFailedGasWei ||
+    !RUNTIME_CONFIG.earnWatchEnabled ||
+    arm.earnOnHood?.enabled !== true ||
+    arm.earnOnHood.routeCommitment !== EARN_ROUTE_COMMITMENT ||
+    arm.earnOnHood.vault?.toLowerCase() !== EARN_VAULT.toLowerCase() ||
+    arm.earnOnHood.batchRouter?.toLowerCase() !== EARN_BATCH_ROUTER.toLowerCase() ||
+    JSON.stringify(arm.earnOnHood.pools) !== JSON.stringify(EARN_POOL_ADDRESSES) ||
+    BigInt(arm.earnOnHood.minimumNetProfitWei) !== configuredEarnMinimumNet ||
+    BigInt(arm.earnOnHood.minimumQuoteHeadroomWei) !== configuredEarnHeadroom ||
+    BigInt(arm.earnOnHood.perAttemptGasCeilingWei) !== configuredEarnGasCeiling ||
+    BigInt(arm.earnOnHood.walletReserveWei) !== configuredEarnReserve ||
+    Number(arm.earnOnHood.eventPollMs) !== RUNTIME_CONFIG.earnWatchEventPollMs ||
+    Number(arm.earnOnHood.periodicMs) !== RUNTIME_CONFIG.earnWatchPeriodicMs ||
+    Number(arm.earnOnHood.probePoints) !== RUNTIME_CONFIG.earnLiveProbePoints
   ) {
     throw new Error('dual watcher runtime economics differ from the authorization scope')
   }
@@ -1650,6 +1697,12 @@ async function reconcile() {
   assertLiveTransport(RUNTIME_CONFIG)
   assertDualWatcherInactive()
   assertLegacySignersInactive()
+  const unresolvedBeforeLock = latestUnresolvedMutation(readAuditRecords())
+  if (unresolvedBeforeLock?.kind === 'earnonhood-execute') {
+    const result = await runEarnOnHoodChild('reconcile')
+    console.log(stringify(result))
+    return result
+  }
   const release = acquireLock(WALLET_LOCK_PATH, 'dual-v3-wallet')
   try {
     const records = readAuditRecords()
@@ -1827,6 +1880,9 @@ async function armDualWatcher() {
     ) {
       throw new Error('dual watcher requires execution, attempt, and exact-preflight count limits set to unlimited')
     }
+    if (!RUNTIME_CONFIG.earnWatchEnabled) {
+      throw new Error('unified dual watcher requires EARN_WATCH_ENABLED=1')
+    }
     const existing = readJson(DUAL_WATCH_ARM_PATH)
     if (existing?.status === 'ARMED' && !readDualRevocation(existing.authorizationId)) {
       throw new Error('an active dual watcher authorization already exists; disarm it before replacing it')
@@ -1864,6 +1920,35 @@ async function armDualWatcher() {
     const minimumScreenedNetProfitUsdg = minimumScreenedNetUsdg()
     validateDualProfitFloors(minimumScreenedNetProfitUsdg, minimumNetProfitUsdg)
     if (RUNTIME_CONFIG.maxFailedGasWei <= 0n) throw new Error('dual watcher requires a positive failed-Gas breaker')
+    const historicalEarnGas = earnOnHoodGasSolvency(readAuditRecords(EARN_AUDIT_PATH))
+    const earnMinimumNetProfitWei = parseNonNegativeUnits(
+      RUNTIME_CONFIG.earnLiveMinNetWeth,
+      18,
+      'EarnOnHood minimum net WETH',
+    )
+    const earnMinimumHeadroomWei = parseNonNegativeUnits(
+      RUNTIME_CONFIG.earnLiveMinHeadroomWeth,
+      18,
+      'EarnOnHood minimum quote headroom WETH',
+    )
+    const earnPerAttemptGasCeilingWei = parseNonNegativeUnits(
+      RUNTIME_CONFIG.earnLiveMaxFailedGasWeth,
+      18,
+      'EarnOnHood per-attempt Gas ceiling',
+    )
+    const earnWalletReserveWei = parseNonNegativeUnits(
+      RUNTIME_CONFIG.earnLiveWalletReserveWeth,
+      18,
+      'EarnOnHood wallet reserve',
+    )
+    if (
+      historicalEarnGas.surplusWei <= 0n ||
+      earnMinimumNetProfitWei <= 0n ||
+      earnPerAttemptGasCeilingWei <= 0n ||
+      historicalEarnGas.surplusWei <= 1n
+    ) {
+      throw new Error('EarnOnHood requires positive receipt-proven lifetime net and positive per-transaction economics')
+    }
     const issuedAt = new Date().toISOString()
     const authorization = {
       schemaVersion: 1,
@@ -1893,15 +1978,34 @@ async function armDualWatcher() {
       usdgPrincipalWeiAtArm: usdgPrincipal.toString(),
       wethPrincipalWeiAtArm: wethPrincipal.toString(),
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
-      idleRpcBehavior: 'LOOPBACK_BOARD_ONLY',
-      escalationRpcBehavior: 'SAME_BLOCK_DUAL_EXACT_PREFLIGHT_THEN_ONE_SIGNATURE',
+      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_SWAP_EVENTS',
+      escalationRpcBehavior: 'MANAGED_EXACT_PREFLIGHT_ONLY_AFTER_POSITIVE_SCREEN_THEN_ONE_SIGNATURE',
       rpcSource: RUNTIME_CONFIG.rpcSource,
+      earnOnHood: {
+        enabled: true,
+        lane: 'earnonhood-v2',
+        principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+        routeCommitment: EARN_ROUTE_COMMITMENT,
+        vault: EARN_VAULT,
+        batchRouter: EARN_BATCH_ROUTER,
+        pools: EARN_POOL_ADDRESSES,
+        minimumNetProfitWei: earnMinimumNetProfitWei.toString(),
+        minimumQuoteHeadroomWei: earnMinimumHeadroomWei.toString(),
+        walletReserveWei: earnWalletReserveWei.toString(),
+        perAttemptGasCeilingWei: earnPerAttemptGasCeilingWei.toString(),
+        initialGasSurplusWei: historicalEarnGas.surplusWei.toString(),
+        eventPollMs: RUNTIME_CONFIG.earnWatchEventPollMs,
+        periodicMs: RUNTIME_CONFIG.earnWatchPeriodicMs,
+        probePoints: RUNTIME_CONFIG.earnLiveProbePoints,
+        discoveryRpc: 'ROBINHOOD_OFFICIAL_PUBLIC',
+        escalationRpc: 'MANGA_RPC_URL_ONLY_AFTER_PUBLIC_NET_POSITIVE',
+      },
     }
     const arm = {
       ...authorization,
       authorizationId: dualAuthorizationId(authorization),
       status: 'ARMED',
-      reason: 'user explicitly approved until-revoked dual-base live execution in the current Codex task',
+      reason: 'user explicitly approved until-revoked unified dual-base and EarnOnHood live execution',
     }
     if (readDualRevocation(arm.authorizationId)) throw new Error('refusing to reuse a revoked dual authorization ID')
     writeProtectedJson(DUAL_WATCH_ARM_PATH, arm)
@@ -1923,6 +2027,7 @@ async function armDualWatcher() {
       wethPrincipalWeiAtArm: arm.wethPrincipalWeiAtArm,
       minimumNetProfitUsdgWei: arm.minimumNetProfitUsdgWei,
       minimumScreenedNetProfitUsdgWei: arm.minimumScreenedNetProfitUsdgWei,
+      earnOnHood: arm.earnOnHood,
       maxConfirmedExecutions: null,
       maxAttempts: null,
       maxExactPreflights: null,
@@ -1948,6 +2053,13 @@ async function armDualWatcher() {
       countLimits: 'UNLIMITED',
       failedGasBreakerEth: formatEther(BigInt(arm.maxFailedGasWei)),
       idleRpcBehavior: arm.idleRpcBehavior,
+      earnOnHood: {
+        principalPolicy: arm.earnOnHood.principalPolicy,
+        fixedPrincipalCap: null,
+        initialGasSurplusEth: formatEther(BigInt(arm.earnOnHood.initialGasSurplusWei)),
+        perAttemptGasCeilingEth: formatEther(BigInt(arm.earnOnHood.perAttemptGasCeilingWei)),
+        periodicMs: arm.earnOnHood.periodicMs,
+      },
     }
     console.log(stringify(output))
     return arm
@@ -1973,11 +2085,148 @@ function sleep(ms) {
 function watcherUsageView(usage) {
   return {
     confirmedExecutions: usage.confirmedExecutions,
-    confirmedByBase: { USDG: usage.usdgConfirmed, WETH: usage.wethConfirmed },
+    confirmedByBase: { USDG: usage.usdgConfirmed, WETH: usage.wethConfirmed, EARN_ETH: usage.earnConfirmed },
     signedAttempts: usage.signedAttempts,
     exactPreflights: usage.exactPreflights,
     failedGasEth: formatEther(usage.failedGasWei),
+    earnLifetimeGasSurplusEth: formatEther(usage.earnGasSurplusWei),
+    earnCurrentAuthorizationNetEth: formatEther(usage.earnRealizedNetProfitWei),
+    earnCurrentAuthorizationFailedGasEth: formatEther(usage.earnFailedGasWei),
   }
+}
+
+async function pollEarnOnHoodWake(cursor) {
+  const head = await earnEventClient.getBlockNumber()
+  if (cursor === null) return { cursor: head, event: false, head, scannedFrom: null }
+  if (head <= cursor) return { cursor, event: false, head, scannedFrom: null }
+  const scannedFrom = head - cursor > 200n ? head - 199n : cursor + 1n
+  const logs = await earnEventClient.getLogs({
+    address: EARN_VAULT,
+    event: EARN_SWAP_ABI[0],
+    args: { pool: EARN_POOL_ADDRESSES },
+    fromBlock: scannedFrom,
+    toBlock: head,
+  })
+  return {
+    cursor: head,
+    event: logs.some(isEarnOnHoodRouteSwap),
+    head,
+    scannedFrom,
+    skippedBlocks: scannedFrom > cursor + 1n ? scannedFrom - cursor - 1n : 0n,
+  }
+}
+
+function parseEarnChildOutput(stdout) {
+  const output = stdout.trim()
+  if (!output) throw new Error('EarnOnHood child returned no structured result')
+  try {
+    return JSON.parse(output)
+  } catch {
+    throw new Error('EarnOnHood child returned malformed structured output')
+  }
+}
+
+function runEarnOnHoodChild(command, extraEnvironment = {}) {
+  return new Promise((resolve, reject) => {
+    const childEnvironment = { ...process.env, ...extraEnvironment }
+    if (!extraEnvironment.EARN_SHARED_AUTHORIZATION_ID) delete childEnvironment.EARN_SHARED_AUTHORIZATION_ID
+    if (!extraEnvironment.EARN_SHARED_WATCH_PID) delete childEnvironment.EARN_SHARED_WATCH_PID
+    const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'earnonhood-live.mjs'), command], {
+      cwd: ROOT,
+      env: childEnvironment,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    const appendBounded = (current, chunk) => `${current}${chunk}`.slice(-1_000_000)
+    child.stdout.on('data', (chunk) => {
+      stdout = appendBounded(stdout, chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr = appendBounded(stderr, chunk)
+    })
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 180_000)
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.once('close', (code, signal) => {
+      clearTimeout(timeout)
+      if (code !== 0) {
+        reject(new Error(`EarnOnHood live child failed (${code ?? signal}): ${stderr.trim() || stdout.trim()}`))
+        return
+      }
+      try {
+        resolve(parseEarnChildOutput(stdout))
+      } catch (error) {
+        reject(error)
+      }
+    })
+  })
+}
+
+function runEarnOnHoodShared(arm) {
+  return runEarnOnHoodChild('execute', {
+    EARN_LIVE_ARM: '1',
+    EARN_SHARED_AUTHORIZATION_ID: arm.authorizationId,
+    EARN_SHARED_WATCH_PID: String(process.pid),
+  })
+}
+
+async function executeEarnWatcherWake({ arm, watchState, deployments, wakeReason, eventCursor, nextPeriodicAt }) {
+  appendAudit('earn_watch_wake', {
+    authorizationId: arm.authorizationId,
+    wakeReason,
+    publicEventCursor: eventCursor,
+  })
+  let nextState = {
+    ...watchState,
+    status: 'EXECUTING',
+    updatedAt: new Date().toISOString(),
+    lastDecision: 'EARN_PUBLIC_NET_PREFLIGHT_RUNNING',
+    earnOnHood: {
+      ...watchState.earnOnHood,
+      status: 'PREFLIGHT_RUNNING',
+      lastWakeReason: wakeReason,
+      lastPreflightAt: new Date().toISOString(),
+      nextPeriodicAt: new Date(nextPeriodicAt).toISOString(),
+    },
+  }
+  writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
+  const earnResult = await runEarnOnHoodShared(arm)
+  const nextDeployments = refreshDeploymentLedgers(deployments)
+  const earnUsage = assertDualAuthorization(arm, nextDeployments)
+  const confirmed = earnResult.status === 'CONFIRMED_NET_PROFIT'
+  nextState = {
+    ...nextState,
+    status: 'RUNNING',
+    updatedAt: new Date().toISOString(),
+    usage: watcherUsageView(earnUsage),
+    consecutiveEarnErrors: 0,
+    lastDecision: confirmed ? 'EARN_CONFIRMED_EXECUTION' : 'EARN_NO_NET_OPPORTUNITY',
+    reason: null,
+    lastTransaction: confirmed ? earnResult.transaction : nextState.lastTransaction,
+    lastExecutionBaseAsset: confirmed ? 'EARN_ETH' : nextState.lastExecutionBaseAsset,
+    earnOnHood: {
+      ...nextState.earnOnHood,
+      status: 'WATCHING',
+      lastResult: earnResult.status,
+      lastTransaction: earnResult.transaction || nextState.earnOnHood.lastTransaction,
+      lastRealizedNetProfitEth: earnResult.realizedNetProfitEth || null,
+      lastDynamicMaximumPrincipalEth: earnResult.dynamicMaximumPrincipalEth || null,
+      lastQuotedNetAtGasCapEth: earnResult.quotedNetAtGasCapEth || earnResult.bestQuotedNetAtGasCapEth || null,
+      lastReasons: earnResult.reasons || [],
+    },
+  }
+  writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
+  appendAudit('earn_watch_result', {
+    authorizationId: arm.authorizationId,
+    wakeReason,
+    status: earnResult.status,
+    transaction: earnResult.transaction || null,
+    realizedNetProfitEth: earnResult.realizedNetProfitEth || null,
+  })
+  return { watchState: nextState, deployments: nextDeployments }
 }
 
 async function watchDual() {
@@ -2095,8 +2344,8 @@ async function watchDual() {
       executors: { USDG: deployments.usdg.executor, WETH: deployments.weth.executor },
       startedAt,
       updatedAt: startedAt,
-      triggerMode: 'LOOPBACK_FROZEN_TRIGGER_THEN_SAME_BLOCK_DUAL_EXACT_PREFLIGHT',
-      idleRpcBehavior: 'NONE',
+      triggerMode: 'LOOPBACK_FROZEN_TRIGGER_OR_PUBLIC_EARN_SWAP_EVENT_THEN_EXACT_PREFLIGHT',
+      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_EVENT_POLL',
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
       authorizationLifetime: arm.authorizationLifetime,
       principalPolicy: arm.principalPolicy,
@@ -2105,11 +2354,25 @@ async function watchDual() {
       nextStartupRetryDelayMs: null,
       consecutiveBoardErrors: 0,
       consecutiveExecutionRpcErrors: 0,
+      consecutiveEarnErrors: 0,
       processedBoardGenerations: 0,
       screenedPositiveBoardGenerations: 0,
       lastBoardGeneratedAt: null,
       lastBoardCandidateCount: 0,
       lastDecision: 'STARTING',
+      earnOnHood: {
+        status: 'STARTING',
+        triggerMode: 'PUBLIC_SWAP_EVENT_OR_PERIODIC_RECOVERY',
+        principalPolicy: arm.earnOnHood.principalPolicy,
+        fixedPrincipalCap: null,
+        routeCommitment: arm.earnOnHood.routeCommitment,
+        publicEventCursor: null,
+        nextPeriodicAt: new Date().toISOString(),
+        lastWakeReason: null,
+        lastPreflightAt: null,
+        lastResult: null,
+        lastTransaction: null,
+      },
     }
     writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
     appendAudit('dual_watch_started', {
@@ -2132,6 +2395,10 @@ async function watchDual() {
 
     let lastGeneration = null
     let attemptedHashes = new Set()
+    let earnEventCursor = null
+    let lastEarnEventPollAt = 0
+    let nextEarnPeriodicAt = Date.now()
+    let pendingEarnWake = 'STARTUP'
     while (!stopRequested) {
       const loopStartedAt = Date.now()
       let phase = 'BOARD'
@@ -2141,6 +2408,36 @@ async function watchDual() {
         const currentUsage = assertDualAuthorization(currentArm, deployments)
         const unresolvedNow = latestUnresolved()
         if (unresolvedNow) throw new Error(`unresolved ${unresolvedNow.kind} mutation ${unresolvedNow.hash}`)
+        if (Date.now() - lastEarnEventPollAt >= RUNTIME_CONFIG.earnWatchEventPollMs) {
+          lastEarnEventPollAt = Date.now()
+          try {
+            const wake = await pollEarnOnHoodWake(earnEventCursor)
+            earnEventCursor = wake.cursor
+            if (wake.event) pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'
+            watchState = {
+              ...watchState,
+              earnOnHood: {
+                ...watchState.earnOnHood,
+                status: 'WATCHING',
+                publicEventCursor: String(wake.cursor),
+                lastEventPollAt: new Date().toISOString(),
+                skippedBlocks: String(wake.skippedBlocks || 0n),
+                eventError: null,
+              },
+            }
+          } catch (error) {
+            watchState = {
+              ...watchState,
+              earnOnHood: {
+                ...watchState.earnOnHood,
+                status: 'DEGRADED_PUBLIC_EVENT_RPC',
+                lastEventPollAt: new Date().toISOString(),
+                eventError: errorText(error),
+              },
+            }
+          }
+        }
+        if (Date.now() >= nextEarnPeriodicAt && !pendingEarnWake) pendingEarnWake = 'PERIODIC_RECOVERY'
         const board = await screenedBoardCandidates(32)
         if (!board.snapshot?.generatedAt || !Number.isFinite(Date.parse(board.snapshot.generatedAt))) {
           throw new Error('loopback board snapshot has no valid generation timestamp')
@@ -2158,6 +2455,24 @@ async function watchDual() {
           }
         }
         if (board.candidates.length === 0) {
+          if (pendingEarnWake) {
+            const wakeReason = pendingEarnWake
+            pendingEarnWake = null
+            nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
+            phase = 'EARN'
+            const earnRun = await executeEarnWatcherWake({
+              arm: currentArm,
+              watchState,
+              deployments,
+              wakeReason,
+              eventCursor: earnEventCursor,
+              nextPeriodicAt: nextEarnPeriodicAt,
+            })
+            watchState = earnRun.watchState
+            deployments = earnRun.deployments
+            await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+            continue
+          }
           watchState = {
             ...watchState,
             status: 'RUNNING',
@@ -2181,6 +2496,24 @@ async function watchDual() {
           }
         })
         if (!candidate) {
+          if (pendingEarnWake) {
+            const wakeReason = pendingEarnWake
+            pendingEarnWake = null
+            nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
+            phase = 'EARN'
+            const earnRun = await executeEarnWatcherWake({
+              arm: currentArm,
+              watchState,
+              deployments,
+              wakeReason,
+              eventCursor: earnEventCursor,
+              nextPeriodicAt: nextEarnPeriodicAt,
+            })
+            watchState = earnRun.watchState
+            deployments = earnRun.deployments
+            await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+            continue
+          }
           watchState = {
             ...watchState,
             status: 'RUNNING',
@@ -2306,6 +2639,29 @@ async function watchDual() {
             authorizationId: watchState.authorizationId,
             reason: errorText(error),
           })
+        } else if (phase === 'EARN' && isTransientRpcError(error)) {
+          const consecutiveErrors = Number(watchState.consecutiveEarnErrors || 0) + 1
+          watchState = {
+            ...watchState,
+            status: 'DEGRADED_EARN',
+            updatedAt: new Date().toISOString(),
+            usage: currentUsage ? watcherUsageView(currentUsage) : watchState?.usage,
+            consecutiveEarnErrors: consecutiveErrors,
+            lastDecision: 'EARN_RPC_RETRY_SCHEDULED',
+            reason: errorText(error),
+            earnOnHood: {
+              ...watchState.earnOnHood,
+              status: 'DEGRADED_RPC',
+              lastResult: 'RPC_ERROR_NO_SIGNATURE_OR_UNRESOLVED_MUTATION',
+            },
+          }
+          writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+          appendAudit('earn_watch_rpc_error', {
+            authorizationId: watchState.authorizationId,
+            consecutiveErrors,
+            reason: errorText(error),
+          })
+          await sleep(Math.min(30_000, RUNTIME_CONFIG.earnWatchEventPollMs * consecutiveErrors))
         } else if (isBoardSnapshotTransportFailure(error)) {
           const counter = phase === 'BOARD' ? 'consecutiveBoardErrors' : 'consecutiveExecutionRpcErrors'
           const consecutiveErrors = Number(watchState[counter] || 0) + 1
@@ -2448,6 +2804,17 @@ async function dualWatchStatus() {
         minimumScreenedNetProfitUsdg: formatUnits(BigInt(arm.minimumScreenedNetProfitUsdgWei), 6),
         countLimits: 'UNLIMITED',
         failedGasBreakerEth: formatEther(BigInt(arm.maxFailedGasWei)),
+        earnOnHood: arm.earnOnHood
+          ? {
+              principalPolicy: arm.earnOnHood.principalPolicy,
+              fixedPrincipalCap: null,
+              initialGasSurplusEth: formatEther(BigInt(arm.earnOnHood.initialGasSurplusWei)),
+              perAttemptGasCeilingEth: formatEther(BigInt(arm.earnOnHood.perAttemptGasCeilingWei)),
+              minimumNetProfitEth: formatEther(BigInt(arm.earnOnHood.minimumNetProfitWei)),
+              eventPollMs: arm.earnOnHood.eventPollMs,
+              periodicMs: arm.earnOnHood.periodicMs,
+            }
+          : null,
       }
     } catch (error) {
       authorization = {
