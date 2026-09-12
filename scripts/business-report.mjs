@@ -13,6 +13,7 @@ import {
   readPublicBusinessSnapshot,
 } from '../src/business-operations.mjs'
 import { isSecureSystemdCredential } from '../src/journal.mjs'
+import { requestLoopbackJson } from '../src/loopback-json-client.mjs'
 import { collectPortfolioSnapshot, createPortfolioClients, readBasePublicHeartbeat } from '../src/portfolio-monitor.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -147,18 +148,7 @@ function basePublicHeartbeat() {
 }
 
 async function requestBoard(pathname) {
-  try {
-    const url = new URL(pathname, BOARD_URL)
-    if (!['127.0.0.1', '::1', 'localhost'].includes(url.hostname)) throw new Error('board must remain loopback-only')
-    const response = await fetch(url, {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(5_000),
-    })
-    if (!response.ok) return null
-    return response.json()
-  } catch {
-    return null
-  }
+  return requestLoopbackJson(pathname, { baseUrl: BOARD_URL })
 }
 
 async function currentBusinessSnapshot(delivery = deliveryState()) {

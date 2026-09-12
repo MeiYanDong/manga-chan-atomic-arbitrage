@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Retry a busy loopback board read once before publishing an `UNKNOWN` market section in the business snapshot. Keep
+  both attempts local, bounded to eight seconds each, and fail closed after the second failure without reusing stale
+  market values or touching any RPC/signing path.
 - Move the full unit and deterministic contract suites out of the 2 GB production install path and keep them in the
   mandatory GitHub quality gate. Production now rebuilds types, UI, contract artifacts and the secret scan only. Raise
   the measured board boundary to a 320 MiB V8 heap inside 512/576 MiB cgroup thresholds after the growing compact index
