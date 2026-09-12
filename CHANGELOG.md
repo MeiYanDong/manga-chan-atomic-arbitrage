@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Publish the sanitized Chinese operations console through a port-80 Nginx read-only proxy while keeping the Node board
+  bound to loopback. Add a current two-chain funds map and a receipt-linked reconciliation of the user's initial
+  `0.01 Base ETH` into retained Gas, WETH execution principal and deployment/initialization Gas. Raw board catalogs,
+  mutation methods, signer material, RPC credentials and the Feishu webhook remain outside the public surface.
 - Add a public-RPC-first EarnOnHood weighted-pool research scanner and a separately guarded native-ETH one-shot lane for
   the reviewed WETH/AI/MOO triangle. Fixed pool identity, same-block exact quote, buffered Gas, on-chain net-output floor,
   wallet reserve, latest nonce and shared-watcher exclusion gates fail closed before the private credential is loaded.

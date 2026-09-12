@@ -6,6 +6,41 @@ export const PAGES = Object.freeze([
   { id: 'more', label: '更多', description: '来源与系统', index: '05' },
 ])
 
+export const BASE_BOOTSTRAP_RECEIPT = Object.freeze({
+  depositedEth: '0.01',
+  walletEthAfterBootstrap: '0.006987074636027231',
+  executorWethAfterBootstrap: '0.003',
+  deploymentAndInitializationGasEth: '0.000012925363972769',
+  fundingTransactionHash: '0xc4c99ecc632d5ae39f75e8416ee335dd923b782fe25c3e5714f1dbf5ea286b77',
+  fundingTransactionUrl:
+    'https://base.blockscout.com/tx/0xc4c99ecc632d5ae39f75e8416ee335dd923b782fe25c3e5714f1dbf5ea286b77',
+  deploymentTransactionUrl:
+    'https://base.blockscout.com/tx/0x6786c4a542a89e9896312b97931a076efa92b41e50de800c02c2c668289d1435',
+})
+
+function accountAssetAmount(accounts, accountId, symbol) {
+  const account = (accounts || []).find((item) => item.id === accountId)
+  return account?.assets?.find((asset) => asset.symbol === symbol)?.amount ?? null
+}
+
+export function portfolioMoneyMap(portfolio) {
+  const accounts = portfolio?.accounts || []
+  const robinhood = portfolio?.networks?.find((network) => network.id === 'ROBINHOOD')
+  return {
+    base: {
+      walletEth: accountAssetAmount(accounts, 'base-operator', 'ETH'),
+      executorWeth: accountAssetAmount(accounts, 'base-executor', 'WETH'),
+    },
+    robinhood: {
+      walletEth: accountAssetAmount(accounts, 'robinhood-operator', 'ETH'),
+      activeUsdg: robinhood?.active?.USDG ?? null,
+      activeWeth: robinhood?.active?.WETH ?? null,
+      parkedUsdg: robinhood?.parked?.USDG ?? null,
+      totalUsdg: robinhood?.all?.USDG ?? null,
+    },
+  }
+}
+
 export function currentPage(hash) {
   const candidate = String(hash || '')
     .replace(/^#\/?/, '')

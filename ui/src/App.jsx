@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  BASE_BOOTSTRAP_RECEIPT,
   PAGES,
   assetClassLabel,
   businessHeadline,
@@ -12,6 +13,7 @@ import {
   noTradeReason,
   opportunityLane,
   opportunityReason,
+  portfolioMoneyMap,
   relativeAge,
   sortOpportunitiesForOperator,
   sourceAdapterDescription,
@@ -158,8 +160,8 @@ function GlobalHeader({ overview, business, refreshedAt, loading, error }) {
         <small>{loading ? '请稍候' : relativeAge(overview?.generatedAt || refreshedAt)}</small>
       </div>
       <div className="privacy-note">
-        <strong>私人 · 只读</strong>
-        <span>这里不能发起交易</span>
+        <strong>公网 · 只读</strong>
+        <span>只展示链上公开数据</span>
       </div>
     </header>
   )
@@ -634,6 +636,127 @@ function StrategyServices({ services = [] }) {
   )
 }
 
+function CurrentFundsOverview({ portfolio }) {
+  const money = portfolioMoneyMap(portfolio)
+  const baseStatus = portfolio.networks.find((network) => network.id === 'BASE')?.status
+  const robinhoodStatus = portfolio.networks.find((network) => network.id === 'ROBINHOOD')?.status
+  return (
+    <section className="funds-overview" aria-label="当前资金全景">
+      <div className="funds-overview-heading">
+        <div>
+          <span className="eyebrow">当前资金全景</span>
+          <h2>钱分在两条链，不再靠记地址</h2>
+          <p>ETH、WETH 和 USDG 分开显示，不用临时价格拼成一个容易误导的总数。</p>
+        </div>
+        <div className="funds-count">
+          <strong>{portfolio.summary.watchedObjects}</strong>
+          <span>处已纳入追踪</span>
+        </div>
+      </div>
+      <div className="funds-chain-grid">
+        <article className="funds-chain funds-chain-base">
+          <header>
+            <div>
+              <span>BASE</span>
+              <h3>低成本执行资金</h3>
+            </div>
+            <StatusBadge status={baseStatus}>{humanStatus(baseStatus)}</StatusBadge>
+          </header>
+          <div className="funds-chain-assets">
+            <div>
+              <span>Gas 钱包</span>
+              <strong>{primaryNumber(money.base.walletEth, { digits: 6 })}</strong>
+              <small>ETH</small>
+            </div>
+            <div>
+              <span>执行合约</span>
+              <strong>{primaryNumber(money.base.executorWeth, { digits: 6 })}</strong>
+              <small>WETH</small>
+            </div>
+          </div>
+          <p>前者支付交易手续费，后者才是循环套利的本金。</p>
+        </article>
+        <article className="funds-chain funds-chain-robinhood">
+          <header>
+            <div>
+              <span>ROBINHOOD CHAIN</span>
+              <h3>主策略与历史资金</h3>
+            </div>
+            <StatusBadge status={robinhoodStatus}>{humanStatus(robinhoodStatus)}</StatusBadge>
+          </header>
+          <div className="funds-chain-assets funds-chain-assets-three">
+            <div>
+              <span>Gas 钱包</span>
+              <strong>{primaryNumber(money.robinhood.walletEth, { digits: 6 })}</strong>
+              <small>ETH</small>
+            </div>
+            <div>
+              <span>运行中本金</span>
+              <strong>{primaryNumber(money.robinhood.activeUsdg)}</strong>
+              <small>USDG</small>
+            </div>
+            <div>
+              <span>运行中本金</span>
+              <strong>{primaryNumber(money.robinhood.activeWeth, { digits: 6 })}</strong>
+              <small>WETH</small>
+            </div>
+          </div>
+          <p>
+            USDG 合计 {primaryNumber(money.robinhood.totalUsdg)}；其中 {primaryNumber(money.robinhood.parkedUsdg)} USDG
+            仍在旧合约等待归集。
+          </p>
+        </article>
+      </div>
+    </section>
+  )
+}
+
+function BaseBootstrapReceipt() {
+  return (
+    <section className="bootstrap-receipt">
+      <div className="bootstrap-receipt-heading">
+        <div>
+          <span className="eyebrow">Base 首笔入金 · 已完整对账</span>
+          <h2>你转入的 0.01 ETH，部署完成后去了这三处</h2>
+          <p>这是历史入金凭证；上方资金全景显示的是当前链上余额。</p>
+        </div>
+        <a
+          className="button button-secondary"
+          href={BASE_BOOTSTRAP_RECEIPT.fundingTransactionUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          核对入金交易
+        </a>
+      </div>
+      <div className="bootstrap-flow" aria-label="0.01 Base ETH 资金去向">
+        <article>
+          <span>留在 Gas 钱包</span>
+          <strong>{BASE_BOOTSTRAP_RECEIPT.walletEthAfterBootstrap}</strong>
+          <small>ETH · 随时支付执行手续费</small>
+        </article>
+        <article>
+          <span>进入执行合约</span>
+          <strong>{BASE_BOOTSTRAP_RECEIPT.executorWethAfterBootstrap}</strong>
+          <small>WETH · 实盘循环本金</small>
+        </article>
+        <article className="bootstrap-gas">
+          <span>部署与初始化</span>
+          <strong>{BASE_BOOTSTRAP_RECEIPT.deploymentAndInitializationGasEth}</strong>
+          <small>ETH · 已消耗 Gas</small>
+        </article>
+      </div>
+      <div className="bootstrap-proof">
+        <strong>三部分合计 = {BASE_BOOTSTRAP_RECEIPT.depositedEth} ETH</strong>
+        <span>部署完成时没有未解释差额；后续变化以上方当前余额为准。</span>
+        <a href={BASE_BOOTSTRAP_RECEIPT.deploymentTransactionUrl} target="_blank" rel="noreferrer">
+          查看部署凭证
+        </a>
+      </div>
+    </section>
+  )
+}
+
 function PortfolioPage({ portfolio }) {
   if (!portfolio) {
     return (
@@ -651,8 +774,8 @@ function PortfolioPage({ portfolio }) {
     <div className="page-stack">
       <PageHeading
         eyebrow="资金"
-        title={`一共盯 ${portfolio.summary.watchedObjects} 个对象`}
-        body="钱包负责 Gas，活跃合约负责循环本金；旧合约虽然已经停用，但只要仍有余额，就必须留在这里继续追踪。"
+        title="本套利项目的钱，现在分布在这里"
+        body={`覆盖 Base 与 Robinhood Chain 共 ${portfolio.summary.watchedObjects} 个钱包或合约。钱包负责 Gas，活跃合约负责循环本金，旧合约保留到资金归集完成。`}
         aside={
           <div className="heading-result">
             <span>等待归集</span>
@@ -661,7 +784,8 @@ function PortfolioPage({ portfolio }) {
           </div>
         }
       />
-      <StrategyServices services={portfolio.services} />
+      <CurrentFundsOverview portfolio={portfolio} />
+      <BaseBootstrapReceipt />
       <div className="portfolio-rule">
         <strong>日常重点：{portfolio.summary.activeObjects} 个</strong>
         <span>
@@ -676,9 +800,10 @@ function PortfolioPage({ portfolio }) {
           key={network.id}
         />
       ))}
+      <StrategyServices services={portfolio.services} />
       <div className="read-only-note">
-        <strong>只读资金页</strong>
-        <span>这里只核对余额、合约身份和待确认交易；不会连接钱包、授权、签名或发起提现。</span>
+        <strong>公网只读资金页</strong>
+        <span>这里只展示公开地址、余额、合约身份和待确认交易；不会连接钱包、授权、签名或发起提现。</span>
       </div>
     </div>
   )

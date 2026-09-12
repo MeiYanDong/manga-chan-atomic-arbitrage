@@ -285,6 +285,22 @@ test('SSH access permits only a client-local forward to the loopback board', () 
   assert.doesNotMatch(socket, /8788/)
 })
 
+test('public dashboard proxy exposes only the read-only presentation surface', () => {
+  const nginx = fs.readFileSync(path.join(root, 'deploy', 'nginx', 'manga-public-dashboard.conf'), 'utf8')
+  const installer = fs.readFileSync(path.join(root, 'deploy', 'install-public-dashboard.sh'), 'utf8')
+  assert.match(nginx, /^\s*listen 80;$/m)
+  assert.match(nginx, /^\s*server_name 47\.251\.185\.146;$/m)
+  assert.match(nginx, /^\s*proxy_pass http:\/\/127\.0\.0\.1:8788;$/m)
+  assert.match(nginx, /^\s*location \^~ \/api\/v1\/ \{$/m)
+  assert.match(nginx, /^\s*location \^~ \/api\/ \{$[\s\S]*?^\s*return 404;$/m)
+  assert.match(nginx, /limit_except GET HEAD \{ deny all; \}/)
+  assert.match(nginx, /Content-Security-Policy/)
+  assert.match(nginx, /X-Robots-Tag "noindex, nofollow"/)
+  assert.doesNotMatch(nginx + installer, /MANGA_PRIVATE_KEY|LoadCredential|eth_sendRawTransaction/)
+  assert.match(installer, /nginx -t/)
+  assert.match(installer, /systemctl reload nginx|systemctl start nginx/)
+})
+
 test('generic signer keeps the board read-only and uses a bounded loopback-escalation watcher', () => {
   const source = fs.readFileSync(path.join(root, 'scripts', 'generic-arb.mjs'), 'utf8')
   const plannerSource = fs.readFileSync(path.join(root, 'src', 'generic-plan.mjs'), 'utf8')

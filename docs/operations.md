@@ -141,8 +141,9 @@ sudo systemctl start manga-business-report.timer
 Keep the timer disabled if the release identity or health readback disagrees. A board-only promotion must not restart,
 re-arm or otherwise mutate the trading watcher.
 
-The HTTP service deliberately listens only on loopback. View it through an SSH tunnel instead of opening a public
-dashboard port. The supplied SSH drop-in permits only client-local forwarding to `127.0.0.1:8788`; validate it with
+The Node HTTP service deliberately listens only on loopback. Public presentation access terminates at the reviewed
+Nginx port-80 proxy; never bind the Node process itself to a public address and never open port 8788 in the cloud
+firewall. The supplied SSH drop-in continues to permit client-local forwarding to `127.0.0.1:8788`; validate it with
 `sshd -t`, reload SSH, and prove a fresh key-only session before relying on the tunnel. Runtime evidence is stored in
 `/var/lib/manga-opportunity-board/snapshot.json`, `events.jsonl`, `state.json`, `chain-catalog.json`,
 `source-catalog.json`, `board.sqlite`, `evidence.jsonl` and `pool-mirror.json`; none belongs in Git. Chain/source catalogs
@@ -170,6 +171,19 @@ sudo systemctl start ssh.service
 
 Keep the cloud recovery channel available while changing the listener. Verify key-only authentication on 2222 before
 starting `ssh -N -L 127.0.0.1:18788:127.0.0.1:8788 -p 2222 <production-host>`. Never open 8788 in the cloud firewall.
+
+For the public, read-only presentation surface, install Nginx and the reviewed server block from the exact release:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nginx
+sudo ./deploy/install-public-dashboard.sh deploy/nginx/manga-public-dashboard.conf
+curl --fail --silent --show-error http://127.0.0.1/healthz
+```
+
+Open only TCP port 80 in the SWAS firewall. The proxy allows GET/HEAD for `/healthz`, `/api/v1/*` and the static UI.
+It returns 404 for raw `/api/*` endpoints and rejects mutation methods. Verify the public IP from a separate client,
+including security headers, a current business snapshot, a rejected POST and an inaccessible `/api/event-metrics`.
 
 The exact current source catalog is the private atomically replaced `source-catalog.json` projection. It is written as
 canonical JSON through a bounded buffer and linked from economic checkpoints by SHA-256; routine snapshot commits do

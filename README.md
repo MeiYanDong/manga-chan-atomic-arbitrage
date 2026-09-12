@@ -397,7 +397,8 @@ refresh slots and bounded eight-route V3 bootstrap. Events only choose what to r
 price calculation for the fixed-block Quoter result. Runtime evidence is available at `/api/event-metrics` and
 `/api/chain-catalog` through the same loopback-only SSH tunnel.
 
-The private source-aware console and read-only API are served on the same loopback listener. The console uses four
+The public, read-only source-aware console and its presentation API are served through Nginx while the Node service stays
+on the same loopback listener. The console uses five
 operator tasks: 总览, 资金, 机会, 账单 and 更多. It starts with the current strategy result, keeps all funded wallets and
 contracts visible, separates account-wide history,
 and divides candidates into 可以执行, 接近门槛 and 全部观察. Exact values, Gas, hashes, addresses and claim evidence
@@ -421,7 +422,9 @@ GET /api/v1/system
 GET /api/v1/business
 ```
 
-The dashboard remains private. Forward the host's loopback port and then open `http://127.0.0.1:18788/`:
+The production dashboard is publicly readable at `http://47.251.185.146/`. Nginx exposes only `/healthz`, the
+`/api/v1/*` presentation API and static UI assets; raw catalogs, event metrics and mutation paths are not public. The
+board itself remains on loopback. The SSH tunnel remains available for private operational inspection:
 
 ```bash
 ssh -N -L 18788:127.0.0.1:8788 <production-host>
@@ -444,14 +447,16 @@ rollback. NINECAT is rendered as LONG route / Doppler / Uniswap v4 / NINECAT-AI;
 quote or execution claim.
 
 Use a dedicated protected configuration based on [`deploy/opportunity-board.env.example`](deploy/opportunity-board.env.example).
-The supported service binds to `127.0.0.1:8788`; open it privately with:
+The supported service binds to `127.0.0.1:8788`. Production exposes its sanitized presentation surface through the
+reviewed Nginx proxy; operators can still open the loopback service privately with:
 
 ```bash
 ssh -N -L 18788:127.0.0.1:8788 root@YOUR_SERVER
 ```
 
 Then visit `http://127.0.0.1:18788/`. See [ADR 0004](docs/decisions/0004-isolated-read-only-opportunity-board.md)
-for the isolation boundary.
+for the signer/board isolation boundary and
+[ADR 0044](docs/decisions/0044-public-read-only-funds-dashboard.md) for the superseding presentation-access boundary.
 
 ## Deployment
 
