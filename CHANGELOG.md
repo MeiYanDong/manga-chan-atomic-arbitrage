@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Publish a tiny allowlisted market-operations snapshot atomically beside the signer feed and make the business
+  reporter consume that file before its bounded HTTP fallback. This removes the five-minute report from the scanner's
+  busy event loop while preserving a three-minute freshness limit, systemd liveness check and explicit observation
+  time; wallet, signing, quote and RPC behavior are unchanged.
 - Treat a final pre-sign fee increase or quote drop as one exact candidate miss after the unresolved-mutation gate,
   rather than terminating the until-revoked watcher as an invariant. Receipt, balance, nonce and identity conflicts
   remain terminal, and no signing or economic threshold is relaxed.

@@ -91,6 +91,8 @@ test('opportunity board stays signer-free while isolating the bounded managed ev
   assert.match(source, /respondJsonFile\(response, this\.sourceCatalogPath\)/)
   assert.match(source, /sourceCatalog: null,[\s\S]*sourceCatalogHash: this\.latestSourceCatalogHash/)
   assert.match(source, /writeStableJsonAtomic\(this\.snapshotPath, reconciled\.snapshot\)/)
+  assert.match(source, /buildBusinessBoardSnapshot\(/)
+  assert.match(source, /writeJsonAtomic\(this\.config\.operationsSnapshotPath, projection\)/)
   assert.match(source, /initializeIngestNeedsCatalogRefresh\(initializeResult\)/)
   assert.match(source, /catalogMaintenancePolicy\(\{/)
   assert.match(source, /this\.sourceTargetIndex = sourceTargetAddresses\(\{/)
@@ -183,6 +185,10 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   )
   assert.match(
     unit,
+    /^Environment=MANGA_BOARD_OPERATIONS_SNAPSHOT=\/run\/manga-opportunity-board-feed\/operations-snapshot\.json$/m,
+  )
+  assert.match(
+    unit,
     /^Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=\/var\/lib\/manga-business-report\/business-snapshot\.json$/m,
   )
   assert.match(
@@ -256,6 +262,10 @@ test('business reporter can read ledgers but cannot sign or write trading state'
     service,
     /^Environment=MANGA_BUSINESS_DAILY_PROFIT_PATH=\/var\/lib\/manga-business-report\/daily-profit\.json$/m,
   )
+  assert.match(
+    service,
+    /^Environment=MANGA_BUSINESS_BOARD_SNAPSHOT=\/run\/manga-opportunity-board-feed\/operations-snapshot\.json$/m,
+  )
   assert.match(service, /^ProtectSystem=strict$/m)
   assert.match(service, /^ReadWritePaths=\/var\/lib\/manga-business-report$/m)
   assert.match(
@@ -272,6 +282,8 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.match(source, /status: 'DELIVERED'/)
   assert.match(source, /receipt\?\.periodKey === schedule\.periodKey/)
   assert.match(source, /deriveDeliveryState/)
+  assert.match(source, /resolveBusinessBoardProjection/)
+  assert.match(source, /readBusinessBoardSnapshot/)
   assert.match(source, /fs\.fsyncSync\(descriptor\)/)
   assert.match(timer, /^OnBootSec=2min$/m)
   assert.match(timer, /^OnCalendar=\*-\*-\* \*:0\/5:00$/m)
