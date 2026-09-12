@@ -17,6 +17,7 @@ import {
   opportunityReason,
   portfolioMoneyMap,
   relativeAge,
+  runtimeBadge,
   sortOpportunitiesForOperator,
   sourceLabel,
   sourceAdapterDescription,
@@ -112,6 +113,21 @@ test('business labels are human-facing while preserving degraded and unknown sta
   assert.equal(evidenceClaimLabel('EXECUTION'), '执行证据')
   assert.equal(decisionLabel('NO_SCREENED_OPPORTUNITY'), '当前没有达到门槛的机会')
   assert.match(formatBeijingTime('2026-09-08T01:05:00.000Z'), /09:05/)
+})
+
+test('runtime badge reports the execution process independently from market-data coverage', () => {
+  assert.deepEqual(runtimeBadge({ strategy: { status: 'RUNNING' }, market: { status: 'UNKNOWN' } }), {
+    status: 'RUNNING',
+    label: '实盘运行中',
+  })
+  assert.deepEqual(runtimeBadge({ strategy: { status: 'STOPPED' } }), {
+    status: 'STOPPED',
+    label: '执行已停止',
+  })
+  assert.deepEqual(runtimeBadge(null, { error: true }), {
+    status: 'ERROR',
+    label: '运行状态待核验',
+  })
 })
 
 test('opportunity stages explain what is still missing without exposing machine states', () => {

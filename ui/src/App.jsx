@@ -12,6 +12,7 @@ import {
   opportunityLane,
   opportunityReason,
   relativeAge,
+  runtimeBadge,
   sortOpportunitiesForOperator,
   sourceAdapterDescription,
   sourceAdapterLabel,
@@ -127,16 +128,7 @@ function Status({ value, label = humanStatus(value) }) {
 }
 
 function Header({ page, business, overview, loading, error }) {
-  const strategyRunning = business?.strategy?.status === 'RUNNING'
-  const marketHealthy = ['HEALTHY', 'RUNNING', 'SCANNING'].includes(business?.market?.status)
-  const status = error ? 'ERROR' : strategyRunning && marketHealthy ? 'RUNNING' : loading ? 'PENDING' : 'DEGRADED'
-  const statusText = error
-    ? '数据异常'
-    : loading
-      ? '正在更新'
-      : strategyRunning && marketHealthy
-        ? '实盘运行中'
-        : '需要检查'
+  const runtime = runtimeBadge(business, { loading, error: Boolean(error) })
   return (
     <header className="app-header">
       <div className="header-row">
@@ -144,7 +136,7 @@ function Header({ page, business, overview, loading, error }) {
           套利经营面板
         </a>
         <div className="header-state">
-          <Status value={status} label={statusText} />
+          <Status value={runtime.status} label={runtime.label} />
           <span>{relativeAge(business?.generatedAt || overview?.generatedAt)}</span>
           <span className="readonly">只读</span>
         </div>
@@ -404,14 +396,16 @@ function ActivityTable({ activities = [], limit = null, onOpen }) {
 
 function OverviewPage({ data, onOpenActivity }) {
   const business = data.business
-  const unhealthy =
-    business &&
-    (business.strategy?.status !== 'RUNNING' || !['RUNNING', 'SCANNING', 'HEALTHY'].includes(business.market?.status))
+  const strategyUnhealthy = business && business.strategy?.status !== 'RUNNING'
+  const marketUnhealthy = business && !['RUNNING', 'SCANNING', 'HEALTHY'].includes(business.market?.status)
   return (
     <div className="page-stack">
       <PageTitle title="经营概览" note="先看真实结果、可用资金和是否存在可执行机会。" />
       {!business && <Notice>经营快照尚未生成，未知数据不会显示为零。</Notice>}
-      {unhealthy && <Notice tone="danger">执行服务或市场数据需要检查，系统仍保持失败关闭。</Notice>}
+      {strategyUnhealthy && <Notice tone="danger">实盘执行服务需要检查，新的交易不会被发起。</Notice>}
+      {!strategyUnhealthy && marketUnhealthy && (
+        <Notice>市场数据暂时不完整，策略会拒绝不完整报价；这不代表实盘执行进程已经停止。</Notice>
+      )}
       <MetricStrip business={business} overview={data.overview} />
       <ProjectEconomics project={business?.economics?.project} />
       <FundsSnapshot portfolio={business?.portfolio} compact />
