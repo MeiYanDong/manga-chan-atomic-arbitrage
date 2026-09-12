@@ -63,6 +63,9 @@ function fixture() {
     wethPrincipalWeiAtArm: '1000000000000000',
     wethHardCapWei: '1000000000000000000',
     walletEthReserveWei: '2000000000000000',
+    earnOnHood: {
+      initialGasSurplusWei: '131868227091194',
+    },
   }
   const auditRecords = [
     {
@@ -86,7 +89,18 @@ function fixture() {
       startedAt: '2026-09-08T00:00:00.000Z',
       lastDecision: 'NO_SCREENED_OPPORTUNITY',
       processedBoardGenerations: 42,
-      usage: { exactPreflights: 2, signedAttempts: 2, confirmedExecutions: 2 },
+      usage: {
+        exactPreflights: 2,
+        signedAttempts: 2,
+        confirmedExecutions: 2,
+        earnLifetimeGasSurplusEth: '0.000131868227091194',
+      },
+      earnOnHood: {
+        status: 'WATCHING',
+        lastResult: 'NO_SHOT_NO_SIGNATURE_NO_BROADCAST',
+        lastDynamicMaximumPrincipalEth: '0.002378210095727194',
+        nextPeriodicAt: '2026-09-08T03:05:00.000Z',
+      },
     },
     usdgState: { executions: [legacyExecution, usdgExecution] },
     wethState: { executions: [wethExecution] },
@@ -146,6 +160,9 @@ test('builds receipt-gated business results and compounds only authorized profit
   const snapshot = buildBusinessSnapshot(fixture())
 
   assert.equal(snapshot.strategy.status, 'RUNNING')
+  assert.equal(snapshot.strategy.earnOnHood.status, 'WATCHING')
+  assert.equal(snapshot.strategy.earnOnHood.fixedPrincipalCap, null)
+  assert.equal(snapshot.strategy.earnOnHood.lastDynamicMaximumPrincipalEth, '0.002378210095727194')
   assert.equal(snapshot.economics.today.verifiedExecutionNetUsdg, '1.3')
   assert.equal(snapshot.economics.today.confirmedExecutions, 2)
   assert.deepEqual(snapshot.economics.today.confirmedByBase, { USDG: 1, WETH: 1 })

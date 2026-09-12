@@ -235,6 +235,18 @@ export function buildBusinessSnapshot({
       signedAttempts: Number(runtime?.usage?.signedAttempts || 0),
       confirmedExecutions: Number(runtime?.usage?.confirmedExecutions || 0),
       unresolvedMutation: runtime?.status === 'HALTED_UNKNOWN',
+      earnOnHood: arm?.earnOnHood
+        ? {
+            status: runtime?.earnOnHood?.status || 'UNKNOWN',
+            sizing: 'BALANCE_SCALED',
+            fixedPrincipalCap: null,
+            lifetimeGasSurplusEth:
+              runtime?.usage?.earnLifetimeGasSurplusEth || decimal(arm.earnOnHood.initialGasSurplusWei, 18),
+            lastResult: runtime?.earnOnHood?.lastResult || null,
+            lastDynamicMaximumPrincipalEth: runtime?.earnOnHood?.lastDynamicMaximumPrincipalEth || null,
+            nextPeriodicAt: runtime?.earnOnHood?.nextPeriodicAt || null,
+          }
+        : null,
     },
     capital: {
       spendableUsdg: spendablePrincipal(arm, usdgState, 'USDG'),
@@ -244,6 +256,7 @@ export function buildBusinessSnapshot({
       gasReserveEth: arm?.walletEthReserveWei ? decimal(arm.walletEthReserveWei, 18) : null,
       walletGasLastVerifiedEth: verifiedWallet?.walletEth || null,
       walletGasVerifiedAt: verifiedWallet?.at || null,
+      earnPrincipalMode: arm?.earnOnHood ? 'BALANCE_SCALED_NO_FIXED_CAP' : null,
     },
     economics: {
       project: summarizeProjectEconomics(activities),

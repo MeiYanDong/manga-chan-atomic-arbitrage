@@ -12,11 +12,13 @@ The repository retains three deployed execution generations:
 - dual-v3, which retains generic-v2 and adds a separately bounded WETH-principal executor behind one shared signer and
   nonce lane. Dual-v3 is the active production signer under an explicit until-revoked authorization.
 
-It also contains a guarded EarnOnHood research/one-shot path. The scanner explores weighted Omnipools without signing;
-the live command is limited to the reviewed WETH/AI/MOO triangle, refuses to run beside the dual watcher and must be
-explicitly armed for one invocation. It is not a second autonomous signer. See
+It also contains an EarnOnHood standing keeper inside the same dual signer. The scanner explores weighted Omnipools
+without signing; live execution remains limited to the reviewed WETH/AI/MOO triangle. Public Vault events plus a
+five-minute recovery tick wake balance-scaled probes with no fixed principal cap. The managed endpoint is used only
+after a public screen is net-positive, and worst-case failed Gas must leave lifetime receipt-proven Earn net positive.
+It is not a second autonomous signer. See
 [the mechanism and live validation](docs/research/2026-09-12-earnonhood-mechanism-arbitrage-live-validation.md) and
-[ADR 0043](docs/decisions/0043-earnonhood-one-shot-shared-signer-lane.md).
+[ADR 0046](docs/decisions/0046-unified-earnonhood-standing-keeper.md).
 
 The generic economic unit is:
 
@@ -93,7 +95,8 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   [`0x27ed…a2028`](https://robinhoodchain.blockscout.com/tx/0x27ed9bab2e6d78b82a1b0790de6c33c44359f7134d86f03d71936b61ed1a2028)
   atomically settled `0.002 ETH -> MOO -> AI -> ETH`, used `0.000047463672072 ETH` Gas and increased the operator
   wallet by **`0.000131868227091194 ETH` net**. This proves feasibility only; opportunity frequency, race-win rate and
-  scalable capacity remain unmeasured. The Earn path is not yet part of the continuous board/watcher.
+  scalable capacity remain unmeasured. Release v0.11 integrates that reviewed route into the continuous signer; a new
+  receipt is still required before claiming any post-integration profit.
 - Dual-v3 is active on the production host. Its WETH executor is
   `0xeC6BB0511Eb7a348ad1879535F66320a51a3eDfc`, deployed and seeded with `0.0032 WETH` by
   [`0xee0c…f880`](https://robinhoodchain.blockscout.com/tx/0xee0cee4e11b383ff869be571db44f5fbebbe88c1793daf011f4fcb03ae78f880).

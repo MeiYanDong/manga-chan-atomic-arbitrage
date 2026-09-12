@@ -196,6 +196,8 @@ export function humanStatus(status) {
     PENDING: '有待确认交易',
     PARKED: '等待归集',
     SCANNING: '扫描中',
+    WATCHING: '持续监听',
+    PREFLIGHT_RUNNING: '正在核验',
     HEALTHY: '正常',
     DEGRADED: '数据降级',
     DEGRADED_BOARD: '看板数据降级',
@@ -305,6 +307,10 @@ export function decisionLabel(decision) {
     SAME_BLOCK_DUAL_EXACT_PREFLIGHT_RUNNING: '正在做同区块精确核验',
     NO_FRESH_BOARD_GENERATION: '等待下一轮市场数据',
     EXACT_PREFLIGHT_REJECTED: '精确核验未达到收益门槛',
+    EARN_PUBLIC_NET_PREFLIGHT_RUNNING: '正在核验 Earn 路线',
+    EARN_CONFIRMED_EXECUTION: 'Earn 最近一笔已确认盈利',
+    EARN_NO_NET_OPPORTUNITY: 'Earn 当前价差不足以覆盖 Gas',
+    EARN_RPC_RETRY_SCHEDULED: 'Earn 数据源正在自动恢复',
   }
   return labels[decision] || '持续监听机会'
 }

@@ -47,6 +47,14 @@ function arm(overrides = {}) {
     idleRpcBehavior: 'LOOPBACK_BOARD_ONLY',
     escalationRpcBehavior: 'SAME_BLOCK_DUAL_EXACT_PREFLIGHT_THEN_ONE_SIGNATURE',
     rpcSource: 'strategy_config',
+    earnOnHood: {
+      enabled: true,
+      principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+      routeCommitment: '0xearn',
+      initialGasSurplusWei: '5000',
+      perAttemptGasCeilingWei: '500',
+      walletReserveWei: '250',
+    },
     ...overrides,
   }
   return { ...value, authorizationId: dualAuthorizationId(value) }
@@ -70,14 +78,14 @@ test('screen floor can trigger exact preflight without lowering the signed execu
     policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION,
     minimumScreenedNetProfitUsdgWei: '50000',
   })
-  assert.deepEqual(evaluateDualAuthorizationBudget(authorization, { failedGasWei: 0n }), {
+  assert.deepEqual(evaluateDualAuthorizationBudget(authorization, { failedGasWei: 0n, earnGasSurplusWei: 5000n }), {
     allowed: true,
     reason: null,
   })
   assert.deepEqual(
     evaluateDualAuthorizationBudget(
       arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION, minimumScreenedNetProfitUsdgWei: '100001' }),
-      { failedGasWei: 0n },
+      { failedGasWei: 0n, earnGasSurplusWei: 5000n },
     ),
     { allowed: false, reason: 'invalid-profit-floors' },
   )
@@ -209,6 +217,22 @@ test('usage comes from both ledgers and the append-only audit', () => {
       kind: 'weth-execute',
       gasSpentWei: '40',
     },
+    {
+      event: 'mutation_signed',
+      authorizationId: authorization.authorizationId,
+      kind: 'earnonhood-execute',
+    },
+    {
+      event: 'earn_watch_exact_preflight_started',
+      authorizationId: authorization.authorizationId,
+    },
+    {
+      event: 'mutation_effect',
+      authorizationId: authorization.authorizationId,
+      kind: 'earnonhood-execute',
+      hash: '0xearn',
+      realizedNetProfitWei: '250',
+    },
   ]
   const usage = dualAuthorizationUsage(
     authorization,
@@ -219,10 +243,14 @@ test('usage comes from both ledgers and the append-only audit', () => {
   assert.deepEqual(usage, {
     usdgConfirmed: 1,
     wethConfirmed: 2,
-    confirmedExecutions: 3,
-    signedAttempts: 2,
-    exactPreflights: 1,
+    earnConfirmed: 1,
+    confirmedExecutions: 4,
+    signedAttempts: 3,
+    exactPreflights: 2,
     failedGasWei: 40n,
+    earnRealizedNetProfitWei: 250n,
+    earnFailedGasWei: 0n,
+    earnGasSurplusWei: 5250n,
   })
   assert.equal(evaluateDualAuthorizationBudget(authorization, usage).allowed, true)
   assert.equal(
@@ -246,5 +274,27 @@ test('broadcast reservation accepts only the unique latest unresolved signed raw
   assert.equal(
     validateDualSignedAttempt(authorization, [attempt], { ...attempt, hash: 'other' }, attempt).allowed,
     false,
+  )
+})
+
+test('v3 authorization counts Earn receipts in the single wallet nonce lane', () => {
+  const authorization = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
+  const attempt = {
+    event: 'mutation_signed',
+    authorizationId: authorization.authorizationId,
+    kind: 'earnonhood-execute',
+    intentId: 'earn-intent',
+    planHash: 'earn-plan',
+    hash: 'earn-hash',
+    nonce: 12,
+  }
+  assert.equal(validateDualSignedAttempt(authorization, [attempt], attempt, attempt).allowed, true)
+  assert.deepEqual(evaluateDualAuthorizationBudget(authorization, { failedGasWei: 0n, earnGasSurplusWei: 5000n }), {
+    allowed: true,
+    reason: null,
+  })
+  assert.equal(
+    evaluateDualAuthorizationBudget(authorization, { failedGasWei: 0n, earnGasSurplusWei: 0n }).reason,
+    'invalid-earnonhood-economics',
   )
 })

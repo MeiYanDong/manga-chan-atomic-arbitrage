@@ -41,6 +41,10 @@ const CONFIG_KEYS = new Set([
   'EARN_LIVE_MIN_HEADROOM_WETH',
   'EARN_LIVE_MAX_FAILED_GAS_WETH',
   'EARN_LIVE_WALLET_RESERVE_WETH',
+  'EARN_LIVE_PROBE_POINTS',
+  'EARN_WATCH_ENABLED',
+  'EARN_WATCH_EVENT_POLL_MS',
+  'EARN_WATCH_PERIODIC_MS',
 ])
 
 /** @param {string} file */
@@ -123,10 +127,14 @@ export function loadRuntimeConfig(environment = process.env) {
     wethMaxAmountWeth: value('MANGA_WETH_MAX_AMOUNT_WETH') || '1',
     wethMinGrossProfitWeth: value('MANGA_WETH_MIN_GROSS_PROFIT_WETH') || '0.000001',
     earnLiveAmountCandidates: value('EARN_LIVE_AMOUNT_CANDIDATES') || '0.0005,0.001,0.0015,0.002',
-    earnLiveMinNetWeth: value('EARN_LIVE_MIN_NET_WETH') || '0.00002',
-    earnLiveMinHeadroomWeth: value('EARN_LIVE_MIN_HEADROOM_WETH') || '0.00001',
+    earnLiveMinNetWeth: value('EARN_LIVE_MIN_NET_WETH') || '0.000000000000000001',
+    earnLiveMinHeadroomWeth: value('EARN_LIVE_MIN_HEADROOM_WETH') || '0',
     earnLiveMaxFailedGasWeth: value('EARN_LIVE_MAX_FAILED_GAS_WETH') || '0.00012',
     earnLiveWalletReserveWeth: value('EARN_LIVE_WALLET_RESERVE_WETH') || '0.00025',
+    earnLiveProbePoints: boundedInteger(value('EARN_LIVE_PROBE_POINTS'), 24, 4, 64),
+    earnWatchEnabled: strictBoolean(value('EARN_WATCH_ENABLED'), false),
+    earnWatchEventPollMs: boundedInteger(value('EARN_WATCH_EVENT_POLL_MS'), 4_000, 1_000, 60_000),
+    earnWatchPeriodicMs: boundedInteger(value('EARN_WATCH_PERIODIC_MS'), 300_000, 30_000, 3_600_000),
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
 }

@@ -1,5 +1,8 @@
 # Story: validate one EarnOnHood atomic triangle without opening a second signer
 
+> Historical validation story. The one-shot operating model was superseded by the accepted continuous criteria in
+> `earnonhood-unified-standing-keeper.md`; the receipt evidence below remains canonical.
+
 ## Outcome
 
 As the operator, I want to discover EarnOnHood weighted-pool cycles cheaply and execute only a currently protected

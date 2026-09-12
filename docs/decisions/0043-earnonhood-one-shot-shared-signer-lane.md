@@ -1,6 +1,6 @@
 # ADR 0043: guarded EarnOnHood one-shot behind the shared signer lane
 
-- Status: Accepted
+- Status: Superseded by ADR 0046 for continuous execution; retained as historical validation evidence
 - Date: 2026-09-12
 
 ## Context

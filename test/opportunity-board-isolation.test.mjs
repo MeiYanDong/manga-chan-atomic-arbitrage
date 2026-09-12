@@ -379,14 +379,23 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   )
   assert.match(dualWatcher, /^SupplementaryGroups=manga-board$/m)
   assert.match(dualWatcher, /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service/m)
+  for (const unit of [dualWatcher, dualArm]) {
+    assert.match(unit, /^Environment=EARN_WATCH_ENABLED=1$/m)
+    assert.match(unit, /^Environment=EARN_LIVE_PROBE_POINTS=24$/m)
+    assert.match(unit, /^Environment=EARN_LIVE_MIN_NET_WETH=0\.000000000000000001$/m)
+    assert.match(unit, /^Environment=EARN_LIVE_MIN_HEADROOM_WETH=0$/m)
+    assert.match(unit, /^Environment=EARN_LIVE_MAX_FAILED_GAS_WETH=0\.00012$/m)
+    assert.match(unit, /^Environment=EARN_LIVE_WALLET_RESERVE_WETH=0\.00025$/m)
+    assert.doesNotMatch(unit, /^Environment=EARN_LIVE_(?:MAX_)?(?:AMOUNT|PRINCIPAL)/m)
+  }
   assert.match(
     dualWatcher,
-    /^ExecStart=\/usr\/bin\/env MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0\.05 npm run dual:watch$/m,
+    /^ExecStart=\/usr\/bin\/env .*EARN_WATCH_ENABLED=1 .*EARN_LIVE_MIN_NET_WETH=0\.000000000000000001 .*MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0\.05 npm run dual:watch$/m,
   )
   assert.match(dualArm, /^Type=oneshot$/m)
   assert.match(
     dualArm,
-    /^ExecStart=\/usr\/bin\/env MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0\.05 npm run dual:watch:arm$/m,
+    /^ExecStart=\/usr\/bin\/env .*EARN_WATCH_ENABLED=1 .*EARN_LIVE_MIN_NET_WETH=0\.000000000000000001 .*MANGA_GENERIC_WATCH_MIN_SCREENED_NET_USDG=0\.05 npm run dual:watch:arm$/m,
   )
   assert.match(wethDeploy, /^Type=oneshot$/m)
   assert.match(wethDeploy, /^ExecStart=\/usr\/bin\/env npm run dual:weth:deploy$/m)
@@ -402,6 +411,7 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.ok(signerLoad > startupRetry, 'dual watcher must not load the signer before startup readback converges')
   assert.match(dualWatchSource, /isTransientRpcError/)
   assert.match(dualWatchSource, /DUAL_WATCH_STARTUP_RPC_RETRY/)
+  assert.match(dualSource, /event: EARN_SWAP_ABI\[0\],[\s\S]*args: \{ pool: EARN_POOL_ADDRESSES \}/)
   assert.match(dualWatchSource, /freezeDualExecutionTrigger\(board\.snapshot, candidate/)
   assert.match(dualWatchSource, /frozenTrigger,/)
   const executeStart = dualSource.indexOf('async function execute(')
