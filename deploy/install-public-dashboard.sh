@@ -54,4 +54,10 @@ else
   systemctl start nginx
 fi
 
-curl --fail --silent --show-error --max-time 35 http://127.0.0.1/healthz >/dev/null
+curl \
+  --fail \
+  --silent \
+  --show-error \
+  --max-time 35 \
+  --header 'Host: 47.251.185.146' \
+  http://127.0.0.1/healthz >/dev/null
