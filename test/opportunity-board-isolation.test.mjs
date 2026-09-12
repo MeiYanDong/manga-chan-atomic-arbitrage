@@ -404,3 +404,25 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const executeSource = dualSource.slice(executeStart, executeEnd)
   assert.doesNotMatch(executeSource, /currentBoard = await boardCandidates/)
 })
+
+test('legacy collection is a one-shot allowlisted signer with a shared wallet lane', () => {
+  const unit = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-legacy-collect.service'), 'utf8')
+  const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
+  const source = fs.readFileSync(path.join(root, 'scripts', 'legacy-funds-collector.mjs'), 'utf8')
+
+  assert.match(unit, /^Type=oneshot$/m)
+  assert.match(unit, /^User=manga-chan-arb$/m)
+  assert.match(unit, /^LoadCredentialEncrypted=manga-private-key:/m)
+  assert.match(unit, /^ExecStart=\/usr\/bin\/env npm run legacy:collect$/m)
+  assert.match(
+    unit,
+    /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service.*manga-dual-watcher\.service/m,
+  )
+  assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-chan-arbitrage \/var\/lib\/spx-arbitrage$/m)
+  assert.match(installer, /manga-legacy-collect\.service/)
+  assert.match(source, /legacy-usdg-collection/)
+  assert.match(source, /assertSignerLanesInactive\(\)/)
+  assert.match(source, /persistSignedRaw/)
+  assert.match(source, /waitForTransactionReceipt/)
+  assert.match(source, /EXECUTOR_ZERO_AND_OPERATOR_USDG_DELTA_CONFIRMED/)
+})

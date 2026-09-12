@@ -548,3 +548,45 @@ sudo systemctl disable --now manga-dual-watcher.service
 Use `npm run dual:reconcile` for a dual-v3 UNKNOWN. `--rebroadcast-same-raw` may reuse only the exact persisted raw;
 `--abandon-expired` is available only for an expired execution after two independent readers prove the transaction and
 nonce absent. Never create a replacement nonce while the result is `PENDING`, `PROVISIONAL`, `CONFLICT`, or `UNKNOWN`.
+
+## One-shot legacy USDG collection
+
+`legacy-funds-collector.mjs` is a maintenance-only exit for the exact historical MANGA and SPX executors checked into
+the repository. It cannot accept an arbitrary executor, token, destination or reserve override. Before any signature it
+requires both deployment receipts, manifest/state identity, runtime code hashes, `operator()`, full-balance withdrawal
+simulations, a clean latest/pending nonce, clean mutation ledgers and inactive signer locks. The aggregate plan retains
+at least `0.0025 ETH` after the maximum Gas envelope for both transactions.
+
+The two withdrawals advance the shared operator nonce, so an existing dual authorization must be disarmed and replaced
+after the canonical receipts settle. Do not restart the old authorization: its committed baseline nonce will no longer
+match.
+
+```bash
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  MANGA_SPX_RUN_DIR=/var/lib/spx-arbitrage \
+  npm run legacy:collect:preflight
+
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run dual:watch:disarm
+sudo systemctl stop manga-dual-watcher.service
+sudo systemctl start manga-legacy-collect.service
+sudo systemctl --no-pager --full status manga-legacy-collect.service
+```
+
+Require `npm run legacy:collect:status` to report `COLLECTED`, both executor balances to be zero, both canonical
+receipts to contain the exact `Withdrawn` event, the operator USDG delta to equal the collected total, Gas to reconcile
+to the operator ETH delta and latest/pending nonce to converge. If the service reports an unknown receipt, leave every
+signer stopped and run `npm run legacy:collect:reconcile`; never re-sign the withdrawal.
+
+Only after collection or reconciliation is terminal may a new dual arm be issued and the watcher restarted:
+
+```bash
+sudo systemctl start manga-dual-arm.service
+sudo systemctl enable --now manga-dual-watcher.service
+sudo systemctl show manga-dual-watcher.service --property=ActiveState,SubState,MainPID,NRestarts
+```

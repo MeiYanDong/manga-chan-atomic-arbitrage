@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a one-shot, exact-allowlist collector for the funded historical MANGA and SPX executors. It freezes both full
+  USDG withdrawals under one aggregate Gas envelope, retains at least `0.0025 ETH`, shares the production wallet lock,
+  excludes every signer generation, persists each signed raw transaction privately and requires final receipt, exact
+  `Withdrawn` event, USDG/ETH balance deltas and nonce convergence before updating either legacy state file.
 - Publish the sanitized Chinese operations console through a port-80 Nginx read-only proxy while keeping the Node board
   bound to loopback. Add a current two-chain funds map and a receipt-linked reconciliation of the user's initial
   `0.01 Base ETH` into retained Gas, WETH execution principal and deployment/initialization Gas. Raw board catalogs,
