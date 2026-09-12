@@ -426,9 +426,12 @@ GET /api/v1/system
 GET /api/v1/business
 ```
 
-The production dashboard is publicly readable at `http://47.251.185.146/`. Nginx exposes only `/healthz`, the
-`/api/v1/*` presentation API and static UI assets; raw catalogs, event metrics and mutation paths are not public. The
-board itself remains on loopback. The SSH tunnel remains available for private operational inspection:
+The production dashboard is publicly readable at `http://47.251.185.146/`. Port 80 is the catch-all virtual host, so
+presentation access does not depend on a literal Host header. Nginx serves the built UI itself and shields the
+`/api/v1/*` presentation API with a short, warmed read cache while `/healthz` stays uncached. Raw catalogs, event
+metrics and mutation paths are not public, and the board itself remains on loopback. See
+[ADR 0047](docs/decisions/0047-public-dashboard-read-path-isolation.md). The SSH tunnel remains available for private
+operational inspection:
 
 ```bash
 ssh -N -L 18788:127.0.0.1:8788 <production-host>
