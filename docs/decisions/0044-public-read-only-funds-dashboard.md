@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-12
 - Supersedes: ADR 0042 decision 5 only for presentation access
+- Partially superseded by: ADR 0045 decision 5 for the Base bootstrap presentation
 
 ## Context
 

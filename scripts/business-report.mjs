@@ -35,6 +35,7 @@ const portfolioClients = createPortfolioClients({
 })
 const REPORT_HOUR = integer(process.env.MANGA_BUSINESS_REPORT_HOUR, 9, 0, 23)
 const REPORT_MINUTE = integer(process.env.MANGA_BUSINESS_REPORT_MINUTE, 5, 0, 59)
+const PROJECT_HISTORY_PATH = path.join(ROOT, 'deployments', 'project-history-mainnet.json')
 
 function integer(value, fallback, minimum, maximum) {
   if (value === undefined || value === '') return fallback
@@ -173,6 +174,9 @@ async function currentBusinessSnapshot(delivery = deliveryState()) {
     usdgState: readJson(path.join(RUN_DIR, 'generic-state.json')),
     wethState: readJson(path.join(RUN_DIR, 'weth-state.json')),
     auditRecords: readJsonLines(path.join(RUN_DIR, 'audit.jsonl')),
+    collectionRecords: readJsonLines(path.join(RUN_DIR, 'legacy-collection-audit.jsonl')),
+    earnOnHoodRecords: readJsonLines(path.join(RUN_DIR, 'earnonhood-audit.jsonl')),
+    projectRegistry: readJson(PROJECT_HISTORY_PATH)?.entries || [],
     board: { health, overview, sources: sources?.summary || null },
     delivery,
     processAlive,

@@ -398,13 +398,13 @@ price calculation for the fixed-block Quoter result. Runtime evidence is availab
 `/api/chain-catalog` through the same loopback-only SSH tunnel.
 
 The public, read-only source-aware console and its presentation API are served through Nginx while the Node service stays
-on the same loopback listener. The console uses five
-operator tasks: 总览, 资金, 机会, 账单 and 更多. It starts with the current strategy result, keeps all funded wallets and
-contracts visible, separates account-wide history,
-and divides candidates into 可以执行, 接近门槛 and 全部观察. Exact values, Gas, hashes, addresses and claim evidence
-remain available through deliberate disclosure instead of appearing in the primary reading path. See
-[ADR 0025](docs/decisions/0025-user-first-progressive-disclosure.md) and the
-[user-first console story](docs/stories/user-first-operations-console.md).
+on the same loopback listener. The dashboard uses four operator tasks: 概览, 交易, 资金 and 策略. It leads with business
+results, keeps all project wallets and contracts visible, and separates PAIR, LONG, Doppler and other on-chain sources.
+The unified transaction ledger includes capital transfers, deployments, authorizations, arbitrage, collections and
+failed Gas. Project economics stay separated by native asset; exact values, hashes, addresses and claim evidence remain
+behind deliberate disclosure. See
+[ADR 0045](docs/decisions/0045-data-first-operations-dashboard-and-native-asset-ledger.md) and the
+[data-first dashboard story](docs/stories/data-first-operations-dashboard.md).
 
 Control-plane endpoints do not construct an opportunity table. The opportunity view contains only candidates admitted
 to the current quote board, uses a semantic summary projection, and loads full claim evidence for one ID only when a
@@ -435,6 +435,7 @@ On Linux, enter the Feishu webhook through standard input so it never becomes a 
 ```bash
 sudo systemd-creds encrypt --name=manga-feishu-webhook - /etc/credstore.encrypted/manga-feishu-webhook
 sudo systemctl enable --now manga-business-report.timer
+sudo systemctl enable --now manga-business-report.path
 ```
 
 The reporter accepts only the exact `https://open.feishu.cn/open-apis/bot/v2/hook/...` boundary. The encrypted

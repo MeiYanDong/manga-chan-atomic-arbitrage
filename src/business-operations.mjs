@@ -1,8 +1,9 @@
 import fs from 'node:fs'
 import { formatUnits } from 'viem'
+import { buildBusinessActivities, summarizeProjectEconomics } from './business-activity.mjs'
 import { dualSpendablePrincipal } from './dual-live-policy.mjs'
 
-export const BUSINESS_SNAPSHOT_SCHEMA_VERSION = 2
+export const BUSINESS_SNAPSHOT_SCHEMA_VERSION = 3
 export const BUSINESS_SNAPSHOT_MODE = 'READ_ONLY_SANITIZED_OPERATIONS'
 export const BUSINESS_TIME_ZONE = 'Asia/Shanghai'
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1_000
@@ -196,6 +197,9 @@ export function buildBusinessSnapshot({
   reportHour = 9,
   reportMinute = 5,
   portfolio = null,
+  projectRegistry = [],
+  collectionRecords = [],
+  earnOnHoodRecords = [],
 }) {
   const timestamp = asDate(now)
   const executions = [...(usdgState?.executions || []), ...(wethState?.executions || [])]
@@ -208,12 +212,19 @@ export function buildBusinessSnapshot({
     .sort((left, right) => Date.parse(right.confirmedAt || 0) - Date.parse(left.confirmedAt || 0))
     .slice(0, 12)
     .map(recentExecution)
+  const activities = buildBusinessActivities({
+    registry: projectRegistry,
+    executions,
+    auditRecords,
+    collectionRecords,
+    earnOnHoodRecords,
+  })
   const snapshot = {
     schemaVersion: BUSINESS_SNAPSHOT_SCHEMA_VERSION,
     mode: BUSINESS_SNAPSHOT_MODE,
     generatedAt: timestamp.toISOString(),
     timeZone: BUSINESS_TIME_ZONE,
-    accountingScope: 'CANONICAL_RECEIPT_BALANCE_EFFECT_AND_MARKED_EXECUTION_GAS_ONLY',
+    accountingScope: 'NATIVE_ASSET_PROJECT_LEDGER_WITH_MARKED_STRATEGY_RESULT',
     strategy: {
       status: processStatus(runtime, processAlive),
       authorizationLifetime: arm?.authorizationLifetime || null,
@@ -235,6 +246,7 @@ export function buildBusinessSnapshot({
       walletGasVerifiedAt: verifiedWallet?.at || null,
     },
     economics: {
+      project: summarizeProjectEconomics(activities),
       today: {
         ...executionSummary(executions, { periodKey: today }),
         ...failedGasSummary(auditRecords, today),
@@ -269,6 +281,7 @@ export function buildBusinessSnapshot({
       },
     },
     recentExecutions,
+    activities,
     delivery: {
       status: delivery?.lastSuccessAt ? 'CONNECTED' : 'PENDING_FIRST_DELIVERY',
       lastSuccessAt: delivery?.lastSuccessAt || null,

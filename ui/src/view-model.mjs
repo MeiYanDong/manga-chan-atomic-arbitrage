@@ -1,22 +1,9 @@
 export const PAGES = Object.freeze([
-  { id: 'overview', label: '总览', description: '先看结果', index: '01' },
-  { id: 'portfolio', label: '资金', description: '钱包与合约', index: '02' },
-  { id: 'opportunities', label: '机会', description: '再看原因', index: '03' },
-  { id: 'execution', label: '账单', description: '核对每一笔', index: '04' },
-  { id: 'more', label: '更多', description: '来源与系统', index: '05' },
+  { id: 'overview', label: '概览' },
+  { id: 'activity', label: '交易' },
+  { id: 'portfolio', label: '资金' },
+  { id: 'strategy', label: '策略' },
 ])
-
-export const BASE_BOOTSTRAP_RECEIPT = Object.freeze({
-  depositedEth: '0.01',
-  walletEthAfterBootstrap: '0.006987074636027231',
-  executorWethAfterBootstrap: '0.003',
-  deploymentAndInitializationGasEth: '0.000012925363972769',
-  fundingTransactionHash: '0xc4c99ecc632d5ae39f75e8416ee335dd923b782fe25c3e5714f1dbf5ea286b77',
-  fundingTransactionUrl:
-    'https://base.blockscout.com/tx/0xc4c99ecc632d5ae39f75e8416ee335dd923b782fe25c3e5714f1dbf5ea286b77',
-  deploymentTransactionUrl:
-    'https://base.blockscout.com/tx/0x6786c4a542a89e9896312b97931a076efa92b41e50de800c02c2c668289d1435',
-})
 
 function accountAssetAmount(accounts, accountId, symbol) {
   const account = (accounts || []).find((item) => item.id === accountId)
@@ -46,10 +33,14 @@ export function currentPage(hash) {
     .replace(/^#\/?/, '')
     .split('/')[0]
   const aliases = {
-    radar: 'opportunities',
-    episodes: 'opportunities',
-    sources: 'more',
-    system: 'more',
+    execution: 'activity',
+    ledger: 'activity',
+    opportunities: 'strategy',
+    radar: 'strategy',
+    episodes: 'strategy',
+    more: 'strategy',
+    sources: 'strategy',
+    system: 'strategy',
   }
   const normalized = aliases[candidate] || candidate
   return PAGES.some((page) => page.id === normalized) ? normalized : 'overview'
@@ -203,6 +194,8 @@ export function humanStatus(status) {
     HALTED: '已熔断',
     ARMED: '已授权',
     CONNECTED: '已连接',
+    CONFIRMED: '已确认',
+    REVERTED: '已回滚',
     CURRENT: '正常',
     LIMITED: '覆盖有限',
     PASSED: '已通过',
@@ -212,6 +205,10 @@ export function humanStatus(status) {
     OPEN: '持续观察',
     CLOSED: '已经结束',
     PENDING_FIRST_DELIVERY: '等待首次送达',
+    NOT_APPLICABLE: '不计收益',
+    EXTERNAL: '外部支付',
+    OPERATING_COST: '经营成本',
+    INCLUDED_IN_RESULT: '已计入净结果',
     FRESH_PROXY_POSITIVE: '新鲜价差',
     FRESH_NO_EDGE: '无有效价差',
     UNQUOTED: '尚未报价',

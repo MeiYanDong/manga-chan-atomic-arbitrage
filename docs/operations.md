@@ -120,15 +120,17 @@ curl --fail --silent --show-error http://127.0.0.1:8788/healthz
 sudo -u manga-board env MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board npm run board:status
 ```
 
-For a board-only rolling promotion on a host where `manga-business-report.timer` is already enabled, stop that timer
-before intentionally stopping the board. The report unit declares `Wants=manga-opportunity-board.service`; a timer tick
-during the install gate can otherwise start the old symlink target, making a later `systemctl start` a no-op. After the
+For a board-only rolling promotion on a host where `manga-business-report.timer` or
+`manga-business-report.path` is already enabled, stop both triggers before intentionally stopping the board. The report
+unit declares `Wants=manga-opportunity-board.service`; a trigger during the install gate can otherwise start the old
+symlink target, making a later `systemctl start` a no-op. After the
 installer moves `current`, use an explicit board restart, verify both the process working directory and
 `MANGA_RELEASE_SHA`, wait for `/healthz` to become healthy, refresh the sanitized snapshot, and only then restore the
 timer:
 
 ```bash
 sudo systemctl stop manga-business-report.timer
+sudo systemctl stop manga-business-report.path
 sudo systemctl stop manga-opportunity-board.service
 sudo ./deploy/install-release.sh /path/to/release.tar.gz <40-char-commit-sha>
 sudo systemctl restart manga-opportunity-board.service
@@ -136,6 +138,7 @@ sudo systemctl restart manga-opportunity-board.service
 curl --fail --silent --show-error http://127.0.0.1:8788/healthz
 sudo systemctl start manga-business-report.service
 sudo systemctl start manga-business-report.timer
+sudo systemctl start manga-business-report.path
 ```
 
 Keep the timer disabled if the release identity or health readback disagrees. A board-only promotion must not restart,
@@ -257,6 +260,7 @@ Run one controlled delivery before enabling the timer:
 sudo systemctl start manga-business-report.service
 sudo systemctl show manga-business-report.service --property=Result,ExecMainStatus
 sudo systemctl enable --now manga-business-report.timer
+sudo systemctl enable --now manga-business-report.path
 sudo systemctl list-timers manga-business-report.timer
 curl --fail --silent --show-error http://127.0.0.1:8788/api/v1/business | jq \
   '{generatedAt,accountingScope,strategy,capital,economics,market,portfolio,delivery}'
