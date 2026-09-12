@@ -300,6 +300,8 @@ test('public dashboard proxy exposes only the read-only presentation surface', (
   assert.match(installer, /nginx -t/)
   assert.match(installer, /systemctl reload nginx|systemctl start nginx/)
   assert.match(installer, /--header 'Host: 47\.251\.185\.146'/)
+  assert.match(installer, /for attempt in \{1\.\.10\}/)
+  assert.match(installer, /if \(\(health_ready != 1\)\); then\s+rollback/)
 })
 
 test('generic signer keeps the board read-only and uses a bounded loopback-escalation watcher', () => {
