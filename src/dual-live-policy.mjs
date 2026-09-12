@@ -1,11 +1,14 @@
 import { keccak256, toHex } from 'viem'
+import { EARN_SIZING_ALGORITHM } from './earnonhood-live-policy.mjs'
+import { EARN_ROUTES } from './earnonhood-routes.mjs'
 import { stableStringify } from './journal.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v3'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v4'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v1'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2 = 'dual-base-loopback-escalation-v2'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3 = 'dual-base-loopback-escalation-v3'
 
 /**
  * The cheap board screen may be more permissive than the exact execution
@@ -286,6 +289,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION,
     ].includes(arm.policyVersion) ||
@@ -312,7 +316,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     return { allowed: false, reason: 'invalid-profit-floors' }
   }
   if (usage.failedGasWei >= maxFailedGas) return { allowed: false, reason: 'failed-gas-limit' }
-  if (arm.policyVersion === DUAL_AUTHORIZATION_POLICY_VERSION) {
+  if ([DUAL_AUTHORIZATION_POLICY_VERSION, LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3].includes(arm.policyVersion)) {
     let initialGasSurplusWei
     let perAttemptGasCeilingWei
     let walletReserveWei
@@ -334,6 +338,21 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       usage.earnGasSurplusWei <= 0n
     ) {
       return { allowed: false, reason: 'invalid-earnonhood-economics' }
+    }
+    if (
+      arm.policyVersion === DUAL_AUTHORIZATION_POLICY_VERSION &&
+      (arm.earnOnHood?.sizingAlgorithm !== EARN_SIZING_ALGORITHM ||
+        !Number.isSafeInteger(Number(arm.earnOnHood?.coarseProbePoints)) ||
+        Number(arm.earnOnHood.coarseProbePoints) < 4 ||
+        Number(arm.earnOnHood.coarseProbePoints) > 16 ||
+        !Number.isSafeInteger(Number(arm.earnOnHood?.refinementPoints)) ||
+        Number(arm.earnOnHood.refinementPoints) < 2 ||
+        Number(arm.earnOnHood.refinementPoints) > 16 ||
+        Number(arm.earnOnHood?.publicMaximumExactQuotesPerWake) !==
+          EARN_ROUTES.length * (Number(arm.earnOnHood.coarseProbePoints) + Number(arm.earnOnHood.refinementPoints)) ||
+        Number(arm.earnOnHood?.managedMaximumExactQuotesPerWake) !== Number(arm.earnOnHood.refinementPoints) + 3)
+    ) {
+      return { allowed: false, reason: 'invalid-earnonhood-sizing-policy' }
     }
   }
   return { allowed: true, reason: null }

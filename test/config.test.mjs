@@ -37,6 +37,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'EARN_LIVE_MIN_HEADROOM_WETH=0.00002',
       'EARN_LIVE_MAX_FAILED_GAS_WETH=0.0001',
       'EARN_LIVE_WALLET_RESERVE_WETH=0.0003',
+      'EARN_LIVE_COARSE_PROBE_POINTS=10',
+      'EARN_LIVE_REFINEMENT_POINTS=8',
+      'EARN_WATCH_EVENT_POLL_MS=1500',
     ].join('\n'),
     { mode: 0o600 },
   )
@@ -67,6 +70,9 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.earnLiveMinHeadroomWeth, '0.00002')
   assert.equal(config.earnLiveMaxFailedGasWeth, '0.0001')
   assert.equal(config.earnLiveWalletReserveWeth, '0.0003')
+  assert.equal(config.earnLiveCoarseProbePoints, 10)
+  assert.equal(config.earnLiveRefinementPoints, 8)
+  assert.equal(config.earnWatchEventPollMs, 1_500)
   assert.doesNotThrow(() => assertLiveTransport(config, { requireWss: true }))
 })
 
@@ -106,6 +112,9 @@ test('generic exact-preflight candidate count is bounded at configuration load',
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_EXECUTIONS: '21' }), /1\.\.20/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_ATTEMPTS: '0' }), /正整数/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_MAX_PREFLIGHTS: '0' }), /正整数/)
+  assert.throws(() => loadRuntimeConfig({ EARN_LIVE_COARSE_PROBE_POINTS: '17' }), /4\.\.16/)
+  assert.throws(() => loadRuntimeConfig({ EARN_LIVE_REFINEMENT_POINTS: '1' }), /2\.\.16/)
+  assert.throws(() => loadRuntimeConfig({ EARN_WATCH_EVENT_POLL_MS: '999' }), /1000\.\.60000/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_AUTO_RENEW: 'yes' }), /0 或 1/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_UNTIL_REVOKED: 'yes' }), /0 或 1/)
   assert.throws(

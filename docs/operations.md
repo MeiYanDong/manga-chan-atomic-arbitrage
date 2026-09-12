@@ -86,9 +86,11 @@ EarnOnHood service. A valid arm commits the reviewed route book, public event/re
 positive net-output floor and initial receipt-proven Gas surplus.
 
 Use the ordinary single-writer cutover. After the new arm starts, `npm run dual:watch:status` must show one live PID,
-the v3 authorization, `fixedPrincipalCap: null`, a positive `earnLifetimeGasSurplusEth`, a public event cursor and no
-unresolved mutation. `EARN_NO_NET_OPPORTUNITY` is a healthy no-trade decision; it proves no signature or broadcast,
-not that every Earn pool or future block lacks an opportunity.
+the current authorization policy, `fixedPrincipalCap: null`, a positive `earnLifetimeGasSurplusEth`, a public event
+cursor and no unresolved mutation. For v4 it must also report `BALANCE_SCALED_BRACKET_REFINEMENT_V1`, the committed
+`8 + 6` probe counts, public/managed quote ceilings `56/9`, and a one-second public event interval.
+`EARN_NO_NET_OPPORTUNITY` is a healthy no-trade decision; it proves no signature or broadcast, not that every Earn pool
+or future block lacks an opportunity.
 
 If an Earn broadcast becomes UNKNOWN, stop the watcher and run:
 

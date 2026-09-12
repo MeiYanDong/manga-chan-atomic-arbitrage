@@ -3,8 +3,12 @@ import test from 'node:test'
 import { encodeAbiParameters } from 'viem'
 import { decodeEarnOnHoodReceiptRoute } from '../src/earnonhood-receipt.mjs'
 import {
+  EARN_SIZING_ALGORITHM,
   buildEarnOnHoodProbeAmounts,
+  buildEarnOnHoodRefinementAmounts,
+  buildEarnOnHoodTargetedAmounts,
   deriveEarnOnHoodExecutionBounds,
+  earnOnHoodQuoteBracket,
   earnOnHoodGasSolvency,
   preservesEarnOnHoodLongTermProfit,
   selectEarnOnHoodGasCandidates,
@@ -81,6 +85,70 @@ test('balance-scaled sizing has no fixed principal cap and reaches all spendable
   assert.equal(result.amounts.at(-1), result.spendableWei)
   assert.ok(result.amounts.at(-1) > 2_000_000_000_000_000n)
   assert.ok(result.amounts.every((amount, index) => index === 0 || amount > result.amounts[index - 1]))
+})
+
+test('coarse-to-fine sizing narrows around the best exact route quote with a bounded second round', () => {
+  const route = { id: 'route-a' }
+  const coarse = buildEarnOnHoodProbeAmounts({
+    walletBalanceWei: 6_500n,
+    walletReserveWei: 50n,
+    gasRiskAllowanceWei: 50n,
+    probePoints: 8,
+  })
+  const quotes = coarse.amounts.map((amountIn) => {
+    const distance = amountIn > 4_000n ? amountIn - 4_000n : 4_000n - amountIn
+    const gross = 1_000n - distance / 10n
+    return { route, amountIn, amountOut: amountIn + gross, error: null }
+  })
+  const refinement = buildEarnOnHoodRefinementAmounts({
+    spendableWei: coarse.spendableWei,
+    quotes,
+    refinementPoints: 6,
+  })
+
+  assert.equal(EARN_SIZING_ALGORITHM, 'BALANCE_SCALED_BRACKET_REFINEMENT_V1')
+  assert.equal(coarse.amounts.length, 8)
+  assert.equal(refinement.amounts.length, 6)
+  assert.equal(refinement.bestAmountInWei, 3_600n)
+  assert.equal(refinement.lowerBoundWei, 2_500n)
+  assert.equal(refinement.upperBoundWei, 4_900n)
+  assert.ok(refinement.amounts.some((amount) => amount > 3_800n && amount < 4_200n))
+})
+
+test('managed sizing clips the public bracket to current capital and never exceeds its quote budget', () => {
+  const targeted = buildEarnOnHoodTargetedAmounts({
+    spendableWei: 4_000n,
+    lowerBoundWei: 3_500n,
+    upperBoundWei: 4_500n,
+    anchorWei: 3_900n,
+    refinementPoints: 2,
+  })
+
+  assert.equal(targeted.lowerBoundWei, 3_500n)
+  assert.equal(targeted.upperBoundWei, 4_000n)
+  assert.ok(targeted.amounts.includes(3_900n))
+  assert.ok(targeted.amounts.length <= 5)
+  assert.ok(targeted.amounts.every((amount) => amount > 0n && amount <= 4_000n))
+})
+
+test('the next exact stage receives only immediate successful neighbours of the selected route amount', () => {
+  const routeA = { id: 'route-a' }
+  const routeB = { id: 'route-b' }
+  const quotes = [
+    { route: routeA, amountIn: 100n, amountOut: 110n, error: null },
+    { route: routeA, amountIn: 200n, amountOut: 240n, error: null },
+    { route: routeA, amountIn: 300n, amountOut: 320n, error: null },
+    { route: routeB, amountIn: 150n, amountOut: 999n, error: null },
+    { route: routeA, amountIn: 250n, amountOut: 0n, error: 'quote failed' },
+  ]
+  assert.deepEqual(
+    earnOnHoodQuoteBracket({ quotes, routeId: routeA.id, selectedAmountInWei: 200n, spendableWei: 400n }),
+    { lowerBoundWei: 100n, upperBoundWei: 300n },
+  )
+  assert.throws(
+    () => earnOnHoodQuoteBracket({ quotes, routeId: routeA.id, selectedAmountInWei: 250n, spendableWei: 400n }),
+    /absent/,
+  )
 })
 
 test('lifetime Gas solvency rebuilds old and current receipt evidence without double counting', () => {

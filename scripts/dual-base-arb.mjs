@@ -43,12 +43,13 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
-import { earnOnHoodGasSolvency } from '../src/earnonhood-live-policy.mjs'
+import { EARN_SIZING_ALGORITHM, earnOnHoodGasSolvency } from '../src/earnonhood-live-policy.mjs'
 import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
 import {
   EARN_BATCH_ROUTER,
   EARN_POOL_ADDRESSES,
   EARN_ROUTE_COMMITMENT,
+  EARN_ROUTES,
   EARN_VAULT,
   isEarnOnHoodRouteSwap,
 } from '../src/earnonhood-routes.mjs'
@@ -954,7 +955,12 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     BigInt(arm.earnOnHood.walletReserveWei) !== configuredEarnReserve ||
     Number(arm.earnOnHood.eventPollMs) !== RUNTIME_CONFIG.earnWatchEventPollMs ||
     Number(arm.earnOnHood.periodicMs) !== RUNTIME_CONFIG.earnWatchPeriodicMs ||
-    Number(arm.earnOnHood.probePoints) !== RUNTIME_CONFIG.earnLiveProbePoints
+    arm.earnOnHood.sizingAlgorithm !== EARN_SIZING_ALGORITHM ||
+    Number(arm.earnOnHood.coarseProbePoints) !== RUNTIME_CONFIG.earnLiveCoarseProbePoints ||
+    Number(arm.earnOnHood.refinementPoints) !== RUNTIME_CONFIG.earnLiveRefinementPoints ||
+    Number(arm.earnOnHood.publicMaximumExactQuotesPerWake) !==
+      EARN_ROUTES.length * (RUNTIME_CONFIG.earnLiveCoarseProbePoints + RUNTIME_CONFIG.earnLiveRefinementPoints) ||
+    Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== RUNTIME_CONFIG.earnLiveRefinementPoints + 3
   ) {
     throw new Error('dual watcher runtime economics differ from the authorization scope')
   }
@@ -1996,7 +2002,12 @@ async function armDualWatcher() {
         initialGasSurplusWei: historicalEarnGas.surplusWei.toString(),
         eventPollMs: RUNTIME_CONFIG.earnWatchEventPollMs,
         periodicMs: RUNTIME_CONFIG.earnWatchPeriodicMs,
-        probePoints: RUNTIME_CONFIG.earnLiveProbePoints,
+        sizingAlgorithm: EARN_SIZING_ALGORITHM,
+        coarseProbePoints: RUNTIME_CONFIG.earnLiveCoarseProbePoints,
+        refinementPoints: RUNTIME_CONFIG.earnLiveRefinementPoints,
+        publicMaximumExactQuotesPerWake:
+          EARN_ROUTES.length * (RUNTIME_CONFIG.earnLiveCoarseProbePoints + RUNTIME_CONFIG.earnLiveRefinementPoints),
+        managedMaximumExactQuotesPerWake: RUNTIME_CONFIG.earnLiveRefinementPoints + 3,
         discoveryRpc: 'ROBINHOOD_OFFICIAL_PUBLIC',
         escalationRpc: 'MANGA_RPC_URL_ONLY_AFTER_PUBLIC_NET_POSITIVE',
       },
@@ -2058,6 +2069,9 @@ async function armDualWatcher() {
         fixedPrincipalCap: null,
         initialGasSurplusEth: formatEther(BigInt(arm.earnOnHood.initialGasSurplusWei)),
         perAttemptGasCeilingEth: formatEther(BigInt(arm.earnOnHood.perAttemptGasCeilingWei)),
+        sizingAlgorithm: arm.earnOnHood.sizingAlgorithm,
+        publicMaximumExactQuotesPerWake: arm.earnOnHood.publicMaximumExactQuotesPerWake,
+        managedMaximumExactQuotesPerWake: arm.earnOnHood.managedMaximumExactQuotesPerWake,
         periodicMs: arm.earnOnHood.periodicMs,
       },
     }
@@ -2097,8 +2111,10 @@ function watcherUsageView(usage) {
 
 async function pollEarnOnHoodWake(cursor) {
   const head = await earnEventClient.getBlockNumber()
-  if (cursor === null) return { cursor: head, event: false, head, scannedFrom: null }
-  if (head <= cursor) return { cursor, event: false, head, scannedFrom: null }
+  if (cursor === null)
+    return { cursor: head, event: false, head, scannedFrom: null, sourceReceivedAt: new Date().toISOString() }
+  if (head <= cursor)
+    return { cursor, event: false, head, scannedFrom: null, sourceReceivedAt: new Date().toISOString() }
   const scannedFrom = head - cursor > 200n ? head - 199n : cursor + 1n
   const logs = await earnEventClient.getLogs({
     address: EARN_VAULT,
@@ -2107,12 +2123,19 @@ async function pollEarnOnHoodWake(cursor) {
     fromBlock: scannedFrom,
     toBlock: head,
   })
+  const routeLogs = logs.filter(isEarnOnHoodRouteSwap)
+  const latestRouteLog = routeLogs.at(-1) || null
+  const sourceReceivedAt = new Date().toISOString()
   return {
     cursor: head,
-    event: logs.some(isEarnOnHoodRouteSwap),
+    event: routeLogs.length > 0,
     head,
     scannedFrom,
     skippedBlocks: scannedFrom > cursor + 1n ? scannedFrom - cursor - 1n : 0n,
+    sourceReceivedAt,
+    eventBlockNumber: latestRouteLog?.blockNumber ?? null,
+    eventTransactionHash: latestRouteLog?.transactionHash ?? null,
+    eventLogIndex: latestRouteLog?.logIndex ?? null,
   }
 }
 
@@ -2165,19 +2188,34 @@ function runEarnOnHoodChild(command, extraEnvironment = {}) {
   })
 }
 
-function runEarnOnHoodShared(arm) {
+function runEarnOnHoodShared(arm, signal) {
   return runEarnOnHoodChild('execute', {
     EARN_LIVE_ARM: '1',
     EARN_SHARED_AUTHORIZATION_ID: arm.authorizationId,
     EARN_SHARED_WATCH_PID: String(process.pid),
+    EARN_WAKE_RECEIVED_AT: signal?.sourceReceivedAt || '',
+    EARN_WAKE_BLOCK_NUMBER: signal?.eventBlockNumber === null ? '' : String(signal?.eventBlockNumber || ''),
+    EARN_WAKE_TRANSACTION_HASH: signal?.eventTransactionHash || '',
   })
 }
 
-async function executeEarnWatcherWake({ arm, watchState, deployments, wakeReason, eventCursor, nextPeriodicAt }) {
+async function executeEarnWatcherWake({
+  arm,
+  watchState,
+  deployments,
+  wakeReason,
+  signal,
+  eventCursor,
+  nextPeriodicAt,
+}) {
   appendAudit('earn_watch_wake', {
     authorizationId: arm.authorizationId,
     wakeReason,
     publicEventCursor: eventCursor,
+    sourceReceivedAt: signal?.sourceReceivedAt || null,
+    eventBlockNumber: signal?.eventBlockNumber ?? null,
+    eventTransactionHash: signal?.eventTransactionHash || null,
+    eventLogIndex: signal?.eventLogIndex ?? null,
   })
   let nextState = {
     ...watchState,
@@ -2193,7 +2231,7 @@ async function executeEarnWatcherWake({ arm, watchState, deployments, wakeReason
     },
   }
   writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
-  const earnResult = await runEarnOnHoodShared(arm)
+  const earnResult = await runEarnOnHoodShared(arm, signal)
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const earnUsage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = earnResult.status === 'CONFIRMED_NET_PROFIT'
@@ -2399,6 +2437,7 @@ async function watchDual() {
     let lastEarnEventPollAt = 0
     let nextEarnPeriodicAt = Date.now()
     let pendingEarnWake = 'STARTUP'
+    let pendingEarnSignal = { sourceReceivedAt: new Date().toISOString() }
     while (!stopRequested) {
       const loopStartedAt = Date.now()
       let phase = 'BOARD'
@@ -2413,7 +2452,10 @@ async function watchDual() {
           try {
             const wake = await pollEarnOnHoodWake(earnEventCursor)
             earnEventCursor = wake.cursor
-            if (wake.event) pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'
+            if (wake.event) {
+              pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'
+              pendingEarnSignal = wake
+            }
             watchState = {
               ...watchState,
               earnOnHood: {
@@ -2437,7 +2479,10 @@ async function watchDual() {
             }
           }
         }
-        if (Date.now() >= nextEarnPeriodicAt && !pendingEarnWake) pendingEarnWake = 'PERIODIC_RECOVERY'
+        if (Date.now() >= nextEarnPeriodicAt && !pendingEarnWake) {
+          pendingEarnWake = 'PERIODIC_RECOVERY'
+          pendingEarnSignal = { sourceReceivedAt: new Date().toISOString() }
+        }
         const board = await screenedBoardCandidates(32)
         if (!board.snapshot?.generatedAt || !Number.isFinite(Date.parse(board.snapshot.generatedAt))) {
           throw new Error('loopback board snapshot has no valid generation timestamp')
@@ -2457,7 +2502,9 @@ async function watchDual() {
         if (board.candidates.length === 0) {
           if (pendingEarnWake) {
             const wakeReason = pendingEarnWake
+            const signal = pendingEarnSignal
             pendingEarnWake = null
+            pendingEarnSignal = null
             nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
             phase = 'EARN'
             const earnRun = await executeEarnWatcherWake({
@@ -2465,6 +2512,7 @@ async function watchDual() {
               watchState,
               deployments,
               wakeReason,
+              signal,
               eventCursor: earnEventCursor,
               nextPeriodicAt: nextEarnPeriodicAt,
             })
@@ -2498,7 +2546,9 @@ async function watchDual() {
         if (!candidate) {
           if (pendingEarnWake) {
             const wakeReason = pendingEarnWake
+            const signal = pendingEarnSignal
             pendingEarnWake = null
+            pendingEarnSignal = null
             nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
             phase = 'EARN'
             const earnRun = await executeEarnWatcherWake({
@@ -2506,6 +2556,7 @@ async function watchDual() {
               watchState,
               deployments,
               wakeReason,
+              signal,
               eventCursor: earnEventCursor,
               nextPeriodicAt: nextEarnPeriodicAt,
             })
@@ -2811,6 +2862,11 @@ async function dualWatchStatus() {
               initialGasSurplusEth: formatEther(BigInt(arm.earnOnHood.initialGasSurplusWei)),
               perAttemptGasCeilingEth: formatEther(BigInt(arm.earnOnHood.perAttemptGasCeilingWei)),
               minimumNetProfitEth: formatEther(BigInt(arm.earnOnHood.minimumNetProfitWei)),
+              sizingAlgorithm: arm.earnOnHood.sizingAlgorithm || null,
+              coarseProbePoints: arm.earnOnHood.coarseProbePoints || null,
+              refinementPoints: arm.earnOnHood.refinementPoints || null,
+              publicMaximumExactQuotesPerWake: arm.earnOnHood.publicMaximumExactQuotesPerWake || null,
+              managedMaximumExactQuotesPerWake: arm.earnOnHood.managedMaximumExactQuotesPerWake || null,
               eventPollMs: arm.earnOnHood.eventPollMs,
               periodicMs: arm.earnOnHood.periodicMs,
             }

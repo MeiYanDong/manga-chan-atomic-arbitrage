@@ -22,6 +22,13 @@ autonomous signer. See
 [ADR 0046](docs/decisions/0046-unified-earnonhood-standing-keeper.md) plus
 [ADR 0049](docs/decisions/0049-reviewed-earnonhood-two-pool-ai-routes.md).
 
+The v0.12 candidate replaces the 24-point flat route grid with an authorization-bound `8 + 6` coarse-to-fine exact
+search. A public-positive result hands only its committed route and immediate sizing bracket to at most nine managed
+quotes, while final quote, call, Gas, reserve, nonce and receipt guards remain unchanged. It also reduces public event
+polling from four seconds to one second and records the event receive boundary. This policy requires a fresh v4
+authorization before it can be production-active. See [ADR 0050](docs/decisions/0050-earn-coarse-to-fine-sizing-hot-path.md)
+and the [historical replay](docs/evidence/2026-09-12-earn-sizing-refinement-local-validation.md).
+
 The generic economic unit is:
 
 ```text

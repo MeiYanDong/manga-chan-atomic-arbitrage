@@ -20,8 +20,12 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
 import { decodeEarnOnHoodReceiptRoute } from '../src/earnonhood-receipt.mjs'
 import {
+  EARN_SIZING_ALGORITHM,
   buildEarnOnHoodProbeAmounts,
+  buildEarnOnHoodRefinementAmounts,
+  buildEarnOnHoodTargetedAmounts,
   deriveEarnOnHoodExecutionBounds,
+  earnOnHoodQuoteBracket,
   earnOnHoodGasSolvency,
   preservesEarnOnHoodLongTermProfit,
   selectEarnOnHoodGasCandidates,
@@ -50,7 +54,6 @@ const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
 const WALLET = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
 const EXPECTED_STATIC_SWAP_FEE = 3_000_000_000_000_000n
 const DEADLINE_SECONDS = 45n
-const MAX_GAS_EVALUATIONS = 8
 
 const pathComponents = [
   { name: 'tokenIn', type: 'address' },
@@ -295,7 +298,13 @@ function assertSharedAuthorization(context, { maximumGasCostWei = null, currentS
     arm.earnOnHood.routeCommitment !== EARN_ROUTE_COMMITMENT ||
     arm.earnOnHood.vault?.toLowerCase() !== VAULT.toLowerCase() ||
     arm.earnOnHood.batchRouter?.toLowerCase() !== BATCH_ROUTER.toLowerCase() ||
-    arm.earnOnHood.principalPolicy !== 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP'
+    arm.earnOnHood.principalPolicy !== 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP' ||
+    arm.earnOnHood.sizingAlgorithm !== EARN_SIZING_ALGORITHM ||
+    Number(arm.earnOnHood.coarseProbePoints) !== runtimeConfig.earnLiveCoarseProbePoints ||
+    Number(arm.earnOnHood.refinementPoints) !== runtimeConfig.earnLiveRefinementPoints ||
+    Number(arm.earnOnHood.publicMaximumExactQuotesPerWake) !==
+      ROUTES.length * (runtimeConfig.earnLiveCoarseProbePoints + runtimeConfig.earnLiveRefinementPoints) ||
+    Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== runtimeConfig.earnLiveRefinementPoints + 3
   ) {
     throw new Error('shared EarnOnHood route or principal authorization mismatch')
   }
@@ -453,12 +462,83 @@ async function mapWithConcurrency(items, concurrency, task) {
   return output
 }
 
+async function exactQuotesAtBlock(client, quoteInputs, blockNumber) {
+  return mapWithConcurrency(quoteInputs, 4, async ({ route, amountIn }) => {
+    try {
+      return { route, amountIn, amountOut: await exactQuote(client, route, amountIn, blockNumber), error: null }
+    } catch (error) {
+      return { route, amountIn, amountOut: 0n, error: errorText(error) }
+    }
+  })
+}
+
+function sortEarnQuotes(quotes) {
+  quotes.sort((left, right) => {
+    const leftGross = left.amountOut - left.amountIn
+    const rightGross = right.amountOut - right.amountIn
+    if (rightGross !== leftGross) return rightGross > leftGross ? 1 : -1
+    if (left.route.id !== right.route.id) return left.route.id.localeCompare(right.route.id)
+    return left.amountIn < right.amountIn ? -1 : left.amountIn > right.amountIn ? 1 : 0
+  })
+  return quotes
+}
+
+async function optimizeEarnOnHoodQuotes(client, sizing, blockNumber, candidateHint = null) {
+  if (candidateHint) {
+    const route = ROUTES.find((item) => item.id === candidateHint.routeId)
+    if (!route) throw new Error('public-screen candidate route is outside the committed Earn route book')
+    const targeted = buildEarnOnHoodTargetedAmounts({
+      spendableWei: sizing.spendableWei,
+      lowerBoundWei: candidateHint.lowerBoundWei,
+      upperBoundWei: candidateHint.upperBoundWei,
+      anchorWei: candidateHint.amountInWei,
+      refinementPoints: runtimeConfig.earnLiveRefinementPoints,
+    })
+    const quotes = await exactQuotesAtBlock(
+      client,
+      targeted.amounts.map((amountIn) => ({ route, amountIn })),
+      blockNumber,
+    )
+    return {
+      quotes: sortEarnQuotes(quotes),
+      quoteMode: 'PUBLIC_SELECTED_ROUTE_LOCAL_EXACT',
+      coarseQuoteCount: 0,
+      refinementQuoteCount: quotes.length,
+      exactQuoteCount: quotes.length,
+      maximumExactQuoteCount: runtimeConfig.earnLiveRefinementPoints + 3,
+      publicScreenBlockNumber: candidateHint.publicBlockNumber,
+    }
+  }
+
+  const coarseInputs = ROUTES.flatMap((route) => sizing.amounts.map((amountIn) => ({ route, amountIn })))
+  const coarseQuotes = await exactQuotesAtBlock(client, coarseInputs, blockNumber)
+  const refinementInputs = ROUTES.flatMap((route) => {
+    const refinement = buildEarnOnHoodRefinementAmounts({
+      spendableWei: sizing.spendableWei,
+      quotes: coarseQuotes.filter((quote) => quote.route.id === route.id),
+      refinementPoints: runtimeConfig.earnLiveRefinementPoints,
+    })
+    return refinement.amounts.map((amountIn) => ({ route, amountIn }))
+  })
+  const refinementQuotes = await exactQuotesAtBlock(client, refinementInputs, blockNumber)
+  return {
+    quotes: sortEarnQuotes([...coarseQuotes, ...refinementQuotes]),
+    quoteMode: 'FULL_ROUTE_BOOK_COARSE_TO_FINE',
+    coarseQuoteCount: coarseQuotes.length,
+    refinementQuoteCount: refinementQuotes.length,
+    exactQuoteCount: coarseQuotes.length + refinementQuotes.length,
+    maximumExactQuoteCount:
+      ROUTES.length * (runtimeConfig.earnLiveCoarseProbePoints + runtimeConfig.earnLiveRefinementPoints),
+    publicScreenBlockNumber: null,
+  }
+}
+
 function currentGasSolvency(sharedContext) {
   if (sharedContext) return assertSharedAuthorization(sharedContext).usage
   return earnOnHoodGasSolvency(readJsonLines(auditPath))
 }
 
-async function prepareOnClient(client, gasSolvency, rpcRole) {
+async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = null } = {}) {
   const blockNumber = await client.getBlockNumber()
   const block = await client.getBlock({ blockNumber })
   await assertProtocolIdentity(client, blockNumber)
@@ -481,7 +561,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
           walletBalanceWei: walletBalance,
           walletReserveWei: retainedWalletReserveWei,
           gasRiskAllowanceWei,
-          probePoints: runtimeConfig.earnLiveProbePoints,
+          probePoints: runtimeConfig.earnLiveCoarseProbePoints,
         })
       : { spendableWei: 0n, amounts: [] }
   if (sizing.amounts.length === 0) {
@@ -500,19 +580,8 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
       },
     }
   }
-  const quoteInputs = ROUTES.flatMap((route) => sizing.amounts.map((amountIn) => ({ route, amountIn })))
-  const quotes = await mapWithConcurrency(quoteInputs, 4, async ({ route, amountIn }) => {
-    try {
-      return { route, amountIn, amountOut: await exactQuote(client, route, amountIn, blockNumber), error: null }
-    } catch (error) {
-      return { route, amountIn, amountOut: 0n, error: errorText(error) }
-    }
-  })
-  quotes.sort((left, right) => {
-    const leftGross = left.amountOut - left.amountIn
-    const rightGross = right.amountOut - right.amountIn
-    return rightGross === leftGross ? 0 : rightGross > leftGross ? 1 : -1
-  })
+  const optimizer = await optimizeEarnOnHoodQuotes(client, sizing, blockNumber, candidateHint)
+  const { quotes } = optimizer
   const positiveGross = quotes.filter((quote) => !quote.error && quote.amountOut > quote.amountIn)
   if (positiveGross.length === 0) {
     const best = quotes[0]
@@ -535,6 +604,10 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
         dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
         principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
         lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
+        sizingAlgorithm: EARN_SIZING_ALGORITHM,
+        quoteMode: optimizer.quoteMode,
+        exactQuoteCount: optimizer.exactQuoteCount,
+        maximumExactQuoteCount: optimizer.maximumExactQuoteCount,
       },
     }
   }
@@ -543,7 +616,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
   const minimumNetProfitWei = parseEther(runtimeConfig.earnLiveMinNetWeth)
   const minimumQuoteHeadroomWei = parseEther(runtimeConfig.earnLiveMinHeadroomWeth)
   const evaluations = []
-  const gasCandidates = selectEarnOnHoodGasCandidates(positiveGross, MAX_GAS_EVALUATIONS)
+  const gasCandidates = selectEarnOnHoodGasCandidates(positiveGross, candidateHint ? 1 : ROUTES.length)
   for (const candidate of gasCandidates) {
     try {
       const provisionalPath = routePath(candidate.route, candidate.amountIn, candidate.amountIn + 1n)
@@ -650,6 +723,12 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
     }
   }
   const { candidate, bounds, transactionPath, finalGasEstimate, data } = selected
+  const quoteBracket = earnOnHoodQuoteBracket({
+    quotes,
+    routeId: candidate.route.id,
+    selectedAmountInWei: candidate.amountIn,
+    spendableWei: sizing.spendableWei,
+  })
   const report = {
     status: 'SHOT_READY',
     evidence: `${rpcRole}_SAME_BLOCK_IDENTITY_QUOTE_FINAL_CALL_AND_GAS_ESTIMATE_NO_SIGNATURE_NO_BROADCAST`,
@@ -677,6 +756,15 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
     dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
     principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
     lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
+    sizingAlgorithm: EARN_SIZING_ALGORITHM,
+    quoteMode: optimizer.quoteMode,
+    coarseQuoteCount: optimizer.coarseQuoteCount,
+    refinementQuoteCount: optimizer.refinementQuoteCount,
+    exactQuoteCount: optimizer.exactQuoteCount,
+    maximumExactQuoteCount: optimizer.maximumExactQuoteCount,
+    publicScreenBlockNumber: optimizer.publicScreenBlockNumber,
+    sizingBracketLowerEth: formatEther(quoteBracket.lowerBoundWei),
+    sizingBracketUpperEth: formatEther(quoteBracket.upperBoundWei),
     deadline,
   }
   return {
@@ -689,6 +777,13 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
     walletBalance,
     nonceLatest,
     retainedWalletReserveWei,
+    candidateHint: {
+      routeId: candidate.route.id,
+      amountInWei: candidate.amountIn,
+      lowerBoundWei: quoteBracket.lowerBoundWei,
+      upperBoundWei: quoteBracket.upperBoundWei,
+      publicBlockNumber: blockNumber,
+    },
   }
 }
 
@@ -713,12 +808,17 @@ async function preflight({ print = true } = {}) {
         route: screened.report.route,
         amountInWei: screened.candidate.amountIn,
         quotedNetAtGasCapWei: screened.bounds.quotedNetAtGasCapWei,
+        sourceReceivedAt: process.env.EARN_WAKE_RECEIVED_AT || null,
+        sourceBlockNumber: process.env.EARN_WAKE_BLOCK_NUMBER || null,
+        sourceTransactionHash: process.env.EARN_WAKE_TRANSACTION_HASH || null,
       },
       { mirrorShared: true },
     )
   }
   const exactGasSolvency = currentGasSolvency(sharedContext)
-  const prepared = await prepareOnClient(executionClient, exactGasSolvency, 'MANAGED_RPC_EXACT')
+  const prepared = await prepareOnClient(executionClient, exactGasSolvency, 'MANAGED_RPC_EXACT', {
+    candidateHint: screened.candidateHint,
+  })
   if (!sharedContext && watcherPid) {
     prepared.report.status = 'NO_SHOT'
     prepared.report.reasons = [...prepared.report.reasons, `DUAL_WATCHER_ACTIVE_PID_${watcherPid}`]
@@ -827,6 +927,12 @@ async function execute() {
       lifetimeGasSurplusBeforeWei: sharedAuthorization?.usage.earnGasSurplusWei || null,
       principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
       routeCommitment: EARN_ROUTE_COMMITMENT,
+      sourceReceivedAt: process.env.EARN_WAKE_RECEIVED_AT || null,
+      sourceBlockNumber: process.env.EARN_WAKE_BLOCK_NUMBER || null,
+      sourceTransactionHash: process.env.EARN_WAKE_TRANSACTION_HASH || null,
+      sizingAlgorithm: EARN_SIZING_ALGORITHM,
+      quoteMode: prepared.report.quoteMode,
+      exactQuoteCount: prepared.report.exactQuoteCount,
     })
     appendAudit('mutation_plan', plan, { mirrorShared: Boolean(sharedContext) })
     if (sharedContext)

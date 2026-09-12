@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Replace the Earn keeper's 24-point-per-route flat probe with the authorization-bound
+  `BALANCE_SCALED_BRACKET_REFINEMENT_V1` optimizer: eight full-range balance-scaled quotes plus six exact local
+  refinements per route. Cap the public screen at 56 quotes, hand only its committed route and immediate sizing bracket
+  to the managed endpoint for at most nine current-block quotes, and evaluate Gas for one best amount per represented
+  route before the unchanged final quote/call/Gas guards. Reduce reviewed-pool public event polling from four seconds
+  to one second and record the source-receive boundary for event-to-wire analysis. The v4 authorization commits every
+  sizing and quote-budget field, so deployment requires a clean revoke/reconcile/re-arm cutover.
 - Admit both reviewed direct `WETH -> AI -> WETH` directions across STOCK MEMES and LONG ECO to the standing
   EarnOnHood route book. Preserve the existing two triangles and all final execution guards, validate every directed
   pool/token edge with one identity read per pool, and reserve one bounded Gas evaluation for each profitable route so
