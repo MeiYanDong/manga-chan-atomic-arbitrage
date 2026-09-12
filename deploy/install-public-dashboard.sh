@@ -44,9 +44,6 @@ if ! nginx -t; then
   exit 1
 fi
 
-if [[ -n ${backup} ]]; then
-  rm -f "${backup}"
-fi
 systemctl enable nginx >/dev/null
 if systemctl is-active --quiet nginx; then
   systemctl reload nginx
@@ -54,10 +51,30 @@ else
   systemctl start nginx
 fi
 
-curl \
-  --fail \
-  --silent \
-  --show-error \
-  --max-time 35 \
-  --header 'Host: 47.251.185.146' \
-  http://127.0.0.1/healthz >/dev/null
+health_ready=0
+for attempt in {1..10}; do
+  if curl \
+    --fail \
+    --silent \
+    --show-error \
+    --max-time 35 \
+    --header 'Host: 47.251.185.146' \
+    http://127.0.0.1/healthz >/dev/null; then
+    health_ready=1
+    break
+  fi
+  sleep 1
+done
+
+if ((health_ready != 1)); then
+  rollback
+  if nginx -t; then
+    systemctl reload nginx || true
+  fi
+  echo "public dashboard failed its local Nginx health readback" >&2
+  exit 1
+fi
+
+if [[ -n ${backup} ]]; then
+  rm -f "${backup}"
+fi
