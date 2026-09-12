@@ -64,6 +64,7 @@ install -o root -g root -m 0644 deploy/systemd/manga-generic-watcher.service /et
 install -o root -g root -m 0644 deploy/systemd/manga-dual-weth-deploy.service /etc/systemd/system/manga-dual-weth-deploy.service
 install -o root -g root -m 0644 deploy/systemd/manga-dual-arm.service /etc/systemd/system/manga-dual-arm.service
 install -o root -g root -m 0644 deploy/systemd/manga-dual-watcher.service /etc/systemd/system/manga-dual-watcher.service
+install -o root -g root -m 0644 deploy/systemd/manga-legacy-collect.service /etc/systemd/system/manga-legacy-collect.service
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
 install -o root -g root -m 0644 deploy/systemd/manga-business-report.service /etc/systemd/system/manga-business-report.service
