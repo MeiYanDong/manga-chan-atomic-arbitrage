@@ -131,7 +131,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
-    "eslint": "10.9.1",
+    "eslint": "10.10.0",
     "hardhat": "3.15.0",
     "prettier": "3.9.6",
     "solhint": "6.2.4",
