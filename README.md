@@ -22,12 +22,13 @@ autonomous signer. See
 [ADR 0046](docs/decisions/0046-unified-earnonhood-standing-keeper.md) plus
 [ADR 0049](docs/decisions/0049-reviewed-earnonhood-two-pool-ai-routes.md).
 
-The v0.12 candidate replaces the 24-point flat route grid with an authorization-bound `8 + 6` coarse-to-fine exact
+The production v0.12 release replaces the 24-point flat route grid with an authorization-bound `8 + 6` coarse-to-fine exact
 search. A public-positive result hands only its committed route and immediate sizing bracket to at most nine managed
 quotes, while final quote, call, Gas, reserve, nonce and receipt guards remain unchanged. It also reduces public event
-polling from four seconds to one second and records the event receive boundary. This policy requires a fresh v4
-authorization before it can be production-active. See [ADR 0050](docs/decisions/0050-earn-coarse-to-fine-sizing-hot-path.md)
-and the [historical replay](docs/evidence/2026-09-12-earn-sizing-refinement-local-validation.md).
+polling from four seconds to one second and records the event receive boundary. Production authorization v4 commits
+this exact algorithm and both quote ceilings. See [ADR 0050](docs/decisions/0050-earn-coarse-to-fine-sizing-hot-path.md),
+the [historical replay](docs/evidence/2026-09-12-earn-sizing-refinement-local-validation.md) and the
+[production promotion](docs/evidence/2026-09-12-earn-sizing-hot-path-v4-production-promotion.md).
 
 The generic economic unit is:
 
@@ -104,24 +105,24 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   [`0x27ed…a2028`](https://robinhoodchain.blockscout.com/tx/0x27ed9bab2e6d78b82a1b0790de6c33c44359f7134d86f03d71936b61ed1a2028)
   atomically settled `0.002 ETH -> MOO -> AI -> ETH`, used `0.000047463672072 ETH` Gas and increased the operator
   wallet by **`0.000131868227091194 ETH` net**. This proves feasibility only; opportunity frequency, race-win rate and
-  scalable capacity remain unmeasured. The continuous signer later produced three additional receipt-confirmed positive
-  loops. The latest pre-change transaction
-  [`0x16e0…43b4`](https://robinhoodchain.blockscout.com/tx/0x16e0c06317885de646ad8055863f09299979c734b9dab07c2d9eefaf7d9943b4)
-  settled `0.001868866217063533 ETH -> MOO -> AI -> ETH` and increased the wallet by
-  `0.000082941657563928 ETH` after Gas.
+  scalable capacity remain unmeasured. The continuous signer later produced four additional receipt-confirmed positive
+  loops. Its latest pre-v4 transaction
+  [`0x0f85…f904`](https://robinhoodchain.blockscout.com/tx/0x0f854543d8b81dfe89525e3956df470406cff022bd912bcd3ac7efb8b17af904)
+  increased the wallet by `0.000039834792597808 ETH` after Gas.
 - Dual-v3 is active on the production host. Its WETH executor is
   `0xeC6BB0511Eb7a348ad1879535F66320a51a3eDfc`, deployed and seeded with `0.0032 WETH` by
   [`0xee0c…f880`](https://robinhoodchain.blockscout.com/tx/0xee0cee4e11b383ff869be571db44f5fbebbe88c1793daf011f4fcb03ae78f880).
   USDG cycles retain and compound USDG; WETH cycles retain and compound WETH. Native ETH remains in the operator
   wallet for Gas.
-- The active authorization is `0x840860ba36fc8c50b9025ca969085deb5660eeef1d7ca18b2c7654e1121b2bd5`. It is
+- The active v4 authorization is `0x85d40d06d2f7c639b6d2c311bd3ec9cb2751128a6f86465100ef71418c411989`. It is
   `UNTIL_REVOKED` with unlimited count limits. The generic contracts retain their immutable `100 USDG` and `1 WETH`
   caps. Earn sizing has no fixed principal cap and reaches the current wallet balance minus its complete Gas allowance
   and `0.00025 ETH` submission reserve. Its full failed-Gas envelope must leave the receipt-proven lifetime Earn net
   strictly positive.
-- At the 2026-09-12 21:10 Asia/Shanghai production readback, the active authorization had three confirmed Earn
-  executions and `0.000145699682082982 ETH` receipt-reconciled net profit with zero failed Gas. The four-route change in
-  this release is not production-active until its distinct route commitment is freshly authorized.
+- At the 2026-09-12 23:30 Asia/Shanghai production readback, five historical Earn receipts totaled
+  `0.000317402701771984 ETH` realized net with zero failed Gas. The fresh v4 authorization had zero executions and zero
+  current-authorization net; its latest public event wake returned `NO_SHOT_NO_SIGNATURE_NO_BROADCAST` because the best
+  quote remained negative after the complete Gas cap.
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
   disabled. Their public evidence is under [`deployments`](deployments).
@@ -141,7 +142,7 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
 - The signer-free board and the one dual/Earn watcher run release
-  `9faee7cd453d3486ac34150a8ca1d32a41e25475`. At the post-promotion readback, the board retained 3,925 candidates,
+  `868caba680d5a8f867c77f7bff59881a6ff82ec4`. At the post-promotion readback, the board retained 4,049 candidates,
   reported complete configured-start chain/source catalogs and healthy SQLite parity, and had no screened-positive
   row. Both services had zero automatic restarts. The board remains loopback-only and has no signer or broadcast path.
 - The dual watcher now freezes the exact typed candidate revision that causes escalation. A concurrent board refresh
