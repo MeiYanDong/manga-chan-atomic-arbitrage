@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Move the full unit and deterministic contract suites out of the 2 GB production install path and keep them in the
+  mandatory GitHub quality gate. Production now rebuilds types, UI, contract artifacts and the secret scan only. Raise
+  the measured board boundary to a 320 MiB V8 heap inside 512/576 MiB cgroup thresholds after the growing compact index
+  exhausted the prior 256 MiB heap during a controlled restart.
 - Limit the operator-facing Robinhood opportunity table to the twelve highest-priority routes while keeping the full
   source API and background scan intact. State the hidden-row count explicitly so the operations page stays concise
   without implying that unshown candidates disappeared.

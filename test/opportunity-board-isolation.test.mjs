@@ -171,9 +171,9 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(unit, /^EnvironmentFile=\/etc\/manga-opportunity-board\/live\.env$/m)
   assert.match(unit, /^ProtectSystem=strict$/m)
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-opportunity-board$/m)
-  assert.match(unit, /^MemoryHigh=448M$/m)
-  assert.match(unit, /^MemoryMax=512M$/m)
-  assert.match(unit, /^Environment=NODE_OPTIONS=--max-old-space-size=256$/m)
+  assert.match(unit, /^MemoryHigh=512M$/m)
+  assert.match(unit, /^MemoryMax=576M$/m)
+  assert.match(unit, /^Environment=NODE_OPTIONS=--max-old-space-size=320$/m)
   assert.match(unit, /^RuntimeDirectory=manga-opportunity-board-feed$/m)
   assert.match(unit, /^RuntimeDirectoryMode=0750$/m)
   assert.match(unit, /^RuntimeDirectoryPreserve=restart$/m)
@@ -219,6 +219,21 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.match(example, /^MANGA_BOARD_READ_MODEL=sqlite$/m)
   assert.match(example, /^MANGA_BOARD_SOURCE_CATALOG_START_BLOCK=45000000$/m)
   assert.doesNotMatch(example, /MANGA_PRIVATE_KEY|MANGA_RPC_URL=|MANGA_WS_URL=/)
+})
+
+test('release installer rebuilds artifacts without repeating CI contract suites on production', () => {
+  const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+
+  assert.match(installer, /^npm ci --no-audit --no-fund$/m)
+  assert.match(installer, /^npm run release:build$/m)
+  assert.doesNotMatch(installer, /^npm run check$/m)
+  assert.match(packageJson.scripts['release:build'], /ui:build/)
+  assert.match(packageJson.scripts['release:build'], /compile/)
+  assert.match(packageJson.scripts['release:build'], /secret:scan/)
+  assert.doesNotMatch(packageJson.scripts['release:build'], /npm test|test:contract/)
+  assert.match(packageJson.scripts.check, /npm test/)
+  assert.match(packageJson.scripts.check, /test:contract/)
 })
 
 test('business reporter can read ledgers but cannot sign or write trading state', () => {
