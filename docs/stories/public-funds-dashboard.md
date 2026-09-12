@@ -20,6 +20,8 @@ what only pays Gas, and what is parked for later collection.
   deliberate disclosure.
 - Public access uses port 80 through Nginx. The Node board remains loopback-only, raw internal APIs stay private and all
   mutation methods are rejected.
+- Any Host header accepted on public port 80 reaches the same read-only dashboard. Nginx serves static UI files without
+  waiting for the market scanner and serves warmed API data while one background refresh is in flight.
 - Desktop and mobile UI builds, product-language checks, isolation tests, Nginx validation and public production readback
   pass before completion is claimed.
 

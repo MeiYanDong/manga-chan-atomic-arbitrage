@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make the public dashboard a catch-all port-80 virtual host instead of matching one literal Host header. Serve the
+  built UI directly from Nginx and keep a 30-second, stampede-locked presentation API cache with background refresh
+  and stale-on-upstream-failure fallback. The market scanner remains loopback-only, the health check remains uncached,
+  and the installer now warms every UI endpoint and rolls back if either the static surface or cache is unavailable.
 - Integrate the reviewed EarnOnHood WETH/AI/MOO triangle into the single until-revoked dual signer. Replace the fixed
   `0.002 WETH` input ceiling with balance-scaled probes whose maximum is the current spendable wallet balance. Public
   Vault events and a five-minute recovery tick wake the standing route book; the managed RPC is touched only after a

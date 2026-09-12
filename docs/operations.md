@@ -205,9 +205,14 @@ sudo ./deploy/install-public-dashboard.sh deploy/nginx/manga-public-dashboard.co
 curl --fail --silent --show-error http://127.0.0.1/healthz
 ```
 
-Open only TCP port 80 in the SWAS firewall. The proxy allows GET/HEAD for `/healthz`, `/api/v1/*` and the static UI.
-It returns 404 for raw `/api/*` endpoints and rejects mutation methods. Verify the public IP from a separate client,
-including security headers, a current business snapshot, a rejected POST and an inaccessible `/api/event-metrics`.
+Open only TCP port 80 in the SWAS firewall with source `0.0.0.0/0`. The Nginx server is the catch-all virtual host: it
+serves the built UI directly, allows GET/HEAD for uncached `/healthz` and the short-lived cached `/api/v1/*`
+presentation surface, returns 404 for raw `/api/*` endpoints and rejects mutation methods. The installer disables only
+the stock enabled-site symlink, warms all five UI API reads and proves a cache hit; it restores the previous site and
+configuration if validation fails. Verify the public IP from a separate client, including a sub-second static root,
+security headers, a current business snapshot, a rejected POST and an inaccessible `/api/event-metrics`. A stale cache
+fallback preserves the last timestamped read model during a board event-loop delay; it is availability evidence, not a
+new chain observation.
 
 The exact current source catalog is the private atomically replaced `source-catalog.json` projection. It is written as
 canonical JSON through a bounded buffer and linked from economic checkpoints by SHA-256; routine snapshot commits do
