@@ -127,9 +127,11 @@ warning/error logs were empty.
 
 ## Remaining evidence boundaries
 
-- The latest public portfolio refresh was `PARTIAL`: Base balances were verified, but some Robinhood contract-token
-  reads were unavailable in that particular cycle. Known wallet/executor evidence must not be promoted into a complete
-  network total until a fresh full readback succeeds.
+- One intermediate public portfolio refresh was `PARTIAL`: Base balances were verified, but some Robinhood
+  contract-token reads were unavailable in that cycle. The later `2026-09-12T21:20:03.732Z` public report recovered to
+  `VERIFIED` for both networks, including `51.021011 USDG / 0.0032 WETH / 0.003025083246341695 ETH` on Robinhood Chain
+  and `0.003 WETH / 0.006987074636027231 ETH` on Base. Future partial reads must still remain partial rather than
+  borrowing this older complete total.
 - Whole-project business net remains `UNKNOWN` because historical operating-cost coverage is partial. The receipt-gated
   strategy net is real but is not the same metric as whole-project profitability.
 - `/healthz` intentionally queries the live board and can still time out during a long single-process maintenance
