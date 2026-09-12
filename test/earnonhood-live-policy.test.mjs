@@ -7,13 +7,17 @@ import {
   deriveEarnOnHoodExecutionBounds,
   earnOnHoodGasSolvency,
   preservesEarnOnHoodLongTermProfit,
+  selectEarnOnHoodGasCandidates,
 } from '../src/earnonhood-live-policy.mjs'
 import {
   EARN_HOOD_ECOSYSTEM_POOL,
+  EARN_POOL_ADDRESSES,
   EARN_ROUTES,
   EARN_ROUTE_COMMITMENT,
+  EARN_ROUTE_STEPS,
   EARN_SWAP_EVENT_TOPIC,
   EARN_VAULT,
+  EARN_WETH,
   isEarnOnHoodRouteSwap,
 } from '../src/earnonhood-routes.mjs'
 
@@ -116,8 +120,53 @@ test('reviewed Vault Swap topics wake only the committed Earn route book', () =>
   assert.match(EARN_ROUTE_COMMITMENT, /^0x[0-9a-f]{64}$/)
 })
 
+test('reviewed route book covers both two-pool AI directions and every directed pool edge', () => {
+  assert.deepEqual(
+    EARN_ROUTES.map((route) => route.id),
+    ['WETH_AI_WETH_STOCK_LONG', 'WETH_AI_WETH_LONG_STOCK', 'WETH_AI_MOO_WETH', 'WETH_MOO_AI_WETH'],
+  )
+  assert.deepEqual(
+    EARN_ROUTES.slice(0, 2).map((route) => route.steps.length),
+    [2, 2],
+  )
+  assert.equal(new Set(EARN_ROUTES.map((route) => route.id)).size, EARN_ROUTES.length)
+  assert.equal(new Set(EARN_POOL_ADDRESSES.map((pool) => pool.toLowerCase())).size, 3)
+  assert.equal(
+    new Set(
+      EARN_ROUTE_STEPS.map(
+        (step) => `${step.pool.toLowerCase()}:${step.tokenIn.toLowerCase()}:${step.tokenOut.toLowerCase()}`,
+      ),
+    ).size,
+    EARN_ROUTE_STEPS.length,
+  )
+  for (const route of EARN_ROUTES) {
+    assert.equal(route.steps[0].tokenIn.toLowerCase(), EARN_WETH.toLowerCase())
+    assert.equal(route.steps.at(-1).tokenOut.toLowerCase(), EARN_WETH.toLowerCase())
+    assert.equal(new Set(route.steps.map((step) => step.pool.toLowerCase())).size, route.steps.length)
+  }
+})
+
+test('bounded Gas evaluation represents every profitable route before global fill', () => {
+  const route = (id) => ({ id })
+  const quotes = [
+    { route: route('three-hop-a'), amountIn: 100n, amountOut: 150n },
+    { route: route('three-hop-a'), amountIn: 100n, amountOut: 149n },
+    { route: route('three-hop-a'), amountIn: 100n, amountOut: 148n },
+    { route: route('two-hop'), amountIn: 100n, amountOut: 120n },
+    { route: route('reverse'), amountIn: 100n, amountOut: 110n },
+    { route: route('loss'), amountIn: 100n, amountOut: 99n },
+  ]
+  const selected = selectEarnOnHoodGasCandidates(quotes, 4)
+  assert.deepEqual(
+    selected.map((quote) => quote.route.id),
+    ['three-hop-a', 'two-hop', 'reverse', 'three-hop-a'],
+  )
+  assert.equal(selected[0].amountOut, 150n)
+  assert.equal(selected.at(-1).amountOut, 149n)
+})
+
 test('receipt decoder requires the exact committed pool/token sequence and amount continuity', () => {
-  const route = EARN_ROUTES[0]
+  const route = EARN_ROUTES.find((candidate) => candidate.id === 'WETH_AI_MOO_WETH')
   const amounts = [1_000n, 1_100n, 1_200n, 1_300n]
   const topicAddress = (address) => `0x${'0'.repeat(24)}${address.slice(2).toLowerCase()}`
   const logs = route.steps.map((step, index) => ({
@@ -138,4 +187,19 @@ test('receipt decoder requires the exact committed pool/token sequence and amoun
       ),
     /differs/,
   )
+})
+
+test('receipt decoder accepts the exact committed two-pool AI sequence', () => {
+  const route = EARN_ROUTES.find((candidate) => candidate.id === 'WETH_AI_WETH_STOCK_LONG')
+  const amounts = [1_000n, 1_050n, 1_025n]
+  const topicAddress = (address) => `0x${'0'.repeat(24)}${address.slice(2).toLowerCase()}`
+  const logs = route.steps.map((step, index) => ({
+    address: EARN_VAULT,
+    topics: [EARN_SWAP_EVENT_TOPIC, topicAddress(step.pool), topicAddress(step.tokenIn), topicAddress(step.tokenOut)],
+    data: encodeAbiParameters(
+      [{ type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }],
+      [amounts[index], amounts[index + 1], 3n, 4n],
+    ),
+  }))
+  assert.equal(decodeEarnOnHoodReceiptRoute({ logs }, route, amounts[0]).finalAmountOutWei, amounts.at(-1))
 })

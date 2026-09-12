@@ -24,9 +24,11 @@ import {
   deriveEarnOnHoodExecutionBounds,
   earnOnHoodGasSolvency,
   preservesEarnOnHoodLongTermProfit,
+  selectEarnOnHoodGasCandidates,
 } from '../src/earnonhood-live-policy.mjs'
 import {
   EARN_BATCH_ROUTER as BATCH_ROUTER,
+  EARN_POOL_ADDRESSES as ROUTE_POOLS,
   EARN_ROUTE_COMMITMENT,
   EARN_ROUTES as ROUTES,
   EARN_ROUTE_STEPS as ROUTE_STEPS,
@@ -342,7 +344,7 @@ function routePath(route, amountIn, minimumAmountOut) {
 }
 
 async function assertProtocolIdentity(client, blockNumber) {
-  const codeTargets = [VAULT, BATCH_ROUTER, WETH, ...ROUTE_STEPS.map((step) => step.pool)]
+  const codeTargets = [VAULT, BATCH_ROUTER, WETH, ...ROUTE_POOLS]
   const [chainId, codes, routerVault, routerWeth, wethSymbol, wethDecimals, poolChecks] = await Promise.all([
     client.getChainId(),
     Promise.all(codeTargets.map((address) => client.getCode({ address, blockNumber }))),
@@ -351,45 +353,45 @@ async function assertProtocolIdentity(client, blockNumber) {
     client.readContract({ address: WETH, abi: wethAbi, functionName: 'symbol', blockNumber }),
     client.readContract({ address: WETH, abi: wethAbi, functionName: 'decimals', blockNumber }),
     Promise.all(
-      ROUTE_STEPS.map(async (step) => {
+      ROUTE_POOLS.map(async (pool) => {
         const [initialized, paused, recoveryMode, tokens, staticSwapFee] = await Promise.all([
           client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'isPoolInitialized',
-            args: [step.pool],
+            args: [pool],
             blockNumber,
           }),
           client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'isPoolPaused',
-            args: [step.pool],
+            args: [pool],
             blockNumber,
           }),
           client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'isPoolInRecoveryMode',
-            args: [step.pool],
+            args: [pool],
             blockNumber,
           }),
           client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'getPoolTokens',
-            args: [step.pool],
+            args: [pool],
             blockNumber,
           }),
           client.readContract({
             address: VAULT,
             abi: vaultAbi,
             functionName: 'getStaticSwapFeePercentage',
-            args: [step.pool],
+            args: [pool],
             blockNumber,
           }),
         ])
-        return { step, initialized, paused, recoveryMode, tokens, staticSwapFee }
+        return { pool, initialized, paused, recoveryMode, tokens, staticSwapFee }
       }),
     ),
   ])
@@ -403,15 +405,20 @@ async function assertProtocolIdentity(client, blockNumber) {
     throw new Error(`WETH identity mismatch: ${wethSymbol}/${wethDecimals}`)
   for (const check of poolChecks) {
     const tokens = check.tokens.map((token) => token.toLowerCase())
+    const requiredTokens = new Set(
+      ROUTE_STEPS.filter((step) => step.pool.toLowerCase() === check.pool.toLowerCase()).flatMap((step) => [
+        step.tokenIn.toLowerCase(),
+        step.tokenOut.toLowerCase(),
+      ]),
+    )
     if (
       !check.initialized ||
       check.paused ||
       check.recoveryMode ||
       check.staticSwapFee !== EXPECTED_STATIC_SWAP_FEE ||
-      !tokens.includes(check.step.tokenIn.toLowerCase()) ||
-      !tokens.includes(check.step.tokenOut.toLowerCase())
+      [...requiredTokens].some((token) => !tokens.includes(token))
     ) {
-      throw new Error(`EarnOnHood pool boundary mismatch: ${check.step.pool}`)
+      throw new Error(`EarnOnHood pool boundary mismatch: ${check.pool}`)
     }
   }
 }
@@ -536,7 +543,8 @@ async function prepareOnClient(client, gasSolvency, rpcRole) {
   const minimumNetProfitWei = parseEther(runtimeConfig.earnLiveMinNetWeth)
   const minimumQuoteHeadroomWei = parseEther(runtimeConfig.earnLiveMinHeadroomWeth)
   const evaluations = []
-  for (const candidate of positiveGross.slice(0, MAX_GAS_EVALUATIONS)) {
+  const gasCandidates = selectEarnOnHoodGasCandidates(positiveGross, MAX_GAS_EVALUATIONS)
+  for (const candidate of gasCandidates) {
     try {
       const provisionalPath = routePath(candidate.route, candidate.amountIn, candidate.amountIn + 1n)
       const provisionalGas = await client.estimateContractGas({

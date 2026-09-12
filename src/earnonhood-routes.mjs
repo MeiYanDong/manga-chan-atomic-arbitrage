@@ -13,6 +13,22 @@ export const EARN_LONG_ECO_POOL = getAddress('0xcDe242535A75F8ccB5D4b14686e312c1
 
 export const EARN_ROUTES = [
   {
+    id: 'WETH_AI_WETH_STOCK_LONG',
+    symbols: ['WETH', 'AI', 'WETH'],
+    steps: [
+      { pool: EARN_STOCK_MEMES_POOL, tokenIn: EARN_WETH, tokenOut: EARN_AI },
+      { pool: EARN_LONG_ECO_POOL, tokenIn: EARN_AI, tokenOut: EARN_WETH },
+    ],
+  },
+  {
+    id: 'WETH_AI_WETH_LONG_STOCK',
+    symbols: ['WETH', 'AI', 'WETH'],
+    steps: [
+      { pool: EARN_LONG_ECO_POOL, tokenIn: EARN_WETH, tokenOut: EARN_AI },
+      { pool: EARN_STOCK_MEMES_POOL, tokenIn: EARN_AI, tokenOut: EARN_WETH },
+    ],
+  },
+  {
     id: 'WETH_AI_MOO_WETH',
     symbols: ['WETH', 'AI', 'MOO', 'WETH'],
     steps: [
@@ -33,9 +49,16 @@ export const EARN_ROUTES = [
 ]
 
 export const EARN_ROUTE_STEPS = [
-  ...new Map(EARN_ROUTES.flatMap((route) => route.steps).map((step) => [step.pool, step])).values(),
+  ...new Map(
+    EARN_ROUTES.flatMap((route) => route.steps).map((step) => [
+      `${step.pool.toLowerCase()}:${step.tokenIn.toLowerCase()}:${step.tokenOut.toLowerCase()}`,
+      step,
+    ]),
+  ).values(),
 ]
-export const EARN_POOL_ADDRESSES = EARN_ROUTE_STEPS.map((step) => step.pool)
+export const EARN_POOL_ADDRESSES = [
+  ...new Map(EARN_ROUTE_STEPS.map((step) => [step.pool.toLowerCase(), step.pool])).values(),
+]
 export const EARN_ROUTE_COMMITMENT = keccak256(
   toHex(
     stableStringify({
