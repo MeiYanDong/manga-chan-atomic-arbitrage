@@ -145,6 +145,9 @@ test('dashboard client is same-origin, read-only and free of signer material', (
   assert.doesNotMatch(combined, /fetch\([^)]*,\s*\{[^}]*method:\s*['"](?:POST|PUT|PATCH|DELETE)/s)
   assert.match(app, /requestJson\('\/api\/v1\/system'/)
   assert.match(app, /requestOptionalJson\('\/api\/v1\/business'/)
+  assert.match(app, /requestOptionalJson\('\/api\/v1\/opportunities\/chains'/)
+  assert.match(app, /独立核对各链上的 Uniswap 与 PancakeSwap/)
+  assert.match(app, /未知结果不会显示为零/)
   assert.match(app, /不能授权、签名或发起交易/)
   assert.match(app, /RPC 自动重试 \/ 降级/)
   assert.match(styles, /\.page-stack\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s)
@@ -233,7 +236,11 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.match(service, /^User=manga-chan-arb$/m)
   assert.match(service, /^Group=manga-board$/m)
   assert.match(service, /^StateDirectory=manga-business-report$/m)
-  assert.match(service, /^StateDirectoryMode=0750$/m)
+  assert.match(service, /^StateDirectoryMode=0755$/m)
+  assert.match(
+    service,
+    /^Environment=MANGA_BUSINESS_DAILY_PROFIT_PATH=\/var\/lib\/manga-business-report\/daily-profit\.json$/m,
+  )
   assert.match(service, /^ProtectSystem=strict$/m)
   assert.match(service, /^ReadWritePaths=\/var\/lib\/manga-business-report$/m)
   assert.match(
@@ -257,6 +264,10 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.match(installer, /manga-business-report\.service/)
   assert.match(installer, /manga-business-report\.path/)
   assert.match(installer, /manga-business-report\.timer/)
+  assert.match(
+    installer,
+    /install -d -o "\$\{service_user\}" -g "\$\{board_group\}" -m 0755 "\$\{report_runtime_dir\}"/,
+  )
   assert.match(pathUnit, /^Unit=manga-business-report\.service$/m)
   assert.match(pathUnit, /^PathChanged=\/var\/lib\/manga-chan-arbitrage\/generic-state\.json$/m)
   assert.match(pathUnit, /^PathChanged=\/var\/lib\/manga-chan-arbitrage\/weth-state\.json$/m)
@@ -297,6 +308,15 @@ test('public dashboard proxy exposes only the read-only presentation surface', (
   assert.match(nginx, /^\s*listen \[::\]:80 default_server;$/m)
   assert.match(nginx, /^\s*server_name _;$/m)
   assert.match(nginx, /^proxy_cache_path \/var\/cache\/nginx\/manga-public-dashboard$/m)
+  assert.match(
+    nginx,
+    /^\s*location = \/api\/v1\/profit\/daily \{$[\s\S]*?^\s*alias \/var\/lib\/manga-business-report\/daily-profit\.json;$/m,
+  )
+  assert.match(
+    nginx,
+    /^\s*location = \/api\/v1\/opportunities\/chains \{$[\s\S]*?^\s*alias \/var\/lib\/atomic-cycle-shadow\/public\.json;$/m,
+  )
+  assert.match(nginx, /Access-Control-Allow-Origin "\*"/)
   assert.match(nginx, /^\s*proxy_pass http:\/\/127\.0\.0\.1:8788;$/m)
   assert.match(nginx, /^\s*location \^~ \/api\/v1\/ \{$/m)
   assert.match(nginx, /^\s*proxy_cache manga_public_dashboard;$/m)
@@ -314,7 +334,10 @@ test('public dashboard proxy exposes only the read-only presentation surface', (
   assert.match(installer, /systemctl reload nginx|systemctl start nginx/)
   assert.match(installer, /default_link_target=\$\(readlink "\$\{default_enabled\}"\)/)
   assert.match(installer, /--header 'Host: unrestricted-public-host\.invalid'/)
-  assert.match(installer, /api\/v1\/overview api\/v1\/opportunities api\/v1\/sources api\/v1\/system api\/v1\/business/)
+  assert.match(
+    installer,
+    /api\/v1\/overview api\/v1\/opportunities api\/v1\/opportunities\/chains api\/v1\/sources api\/v1\/system api\/v1\/business api\/v1\/profit\/daily/,
+  )
   assert.match(installer, /\^X-Dashboard-Cache: HIT/)
   assert.match(installer, /for attempt in \{1\.\.10\}/)
   assert.match(installer, /if \(\(static_ready != 1\)\); then\s+rollback/)

@@ -26,6 +26,7 @@ release_dir=${prefix}/releases/${release_sha}
 runtime_dir=/var/lib/manga-chan-arbitrage
 config_dir=/etc/manga-chan-arbitrage
 board_runtime_dir=/var/lib/manga-opportunity-board
+report_runtime_dir=/var/lib/manga-business-report
 board_config_dir=/etc/manga-opportunity-board
 credential_dir=/etc/credstore.encrypted
 
@@ -38,6 +39,7 @@ install -d -o root -g root -m 0755 "${prefix}/releases"
 install -d -o "${service_user}" -g "${service_group}" -m 0700 "${runtime_dir}"
 install -d -o root -g "${service_group}" -m 0750 "${config_dir}"
 install -d -o "${board_user}" -g "${board_group}" -m 0750 "${board_runtime_dir}"
+install -d -o "${service_user}" -g "${board_group}" -m 0755 "${report_runtime_dir}"
 install -d -o root -g "${board_group}" -m 0750 "${board_config_dir}"
 install -d -o root -g root -m 0700 "${credential_dir}"
 

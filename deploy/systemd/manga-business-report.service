@@ -13,6 +13,7 @@ EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
 Environment=MANGA_BUSINESS_REPORT_DIR=/var/lib/manga-business-report
 Environment=MANGA_BUSINESS_SNAPSHOT_PATH=/var/lib/manga-business-report/business-snapshot.json
+Environment=MANGA_BUSINESS_DAILY_PROFIT_PATH=/var/lib/manga-business-report/daily-profit.json
 Environment=MANGA_BUSINESS_BOARD_URL=http://127.0.0.1:8788
 Environment=MANGA_BUSINESS_REPORT_HOUR=9
 Environment=MANGA_BUSINESS_REPORT_MINUTE=5
@@ -22,7 +23,7 @@ UMask=0027
 ExecStart=/usr/bin/env node scripts/business-report.mjs tick
 TimeoutStartSec=45
 StateDirectory=manga-business-report
-StateDirectoryMode=0750
+StateDirectoryMode=0755
 MemoryMax=128M
 TasksMax=16
 CPUWeight=50

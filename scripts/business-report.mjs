@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   assertFeishuWebhookUrl,
   buildBusinessSnapshot,
+  buildDailyProfitSnapshot,
   dailyReportSchedule,
   deriveDeliveryState,
   formatFeishuDailyReport,
@@ -19,6 +20,9 @@ const RUN_DIR = path.resolve(process.env.MANGA_RUN_DIR || path.join(ROOT, 'runs'
 const REPORT_DIR = path.resolve(process.env.MANGA_BUSINESS_REPORT_DIR || path.join(RUN_DIR, 'business-report'))
 const SNAPSHOT_PATH = path.resolve(
   process.env.MANGA_BUSINESS_SNAPSHOT_PATH || path.join(REPORT_DIR, 'business-snapshot.json'),
+)
+const DAILY_PROFIT_PATH = path.resolve(
+  process.env.MANGA_BUSINESS_DAILY_PROFIT_PATH || path.join(REPORT_DIR, 'daily-profit.json'),
 )
 const DELIVERY_STATE_PATH = path.join(REPORT_DIR, 'delivery-state.json')
 const DELIVERY_RECEIPTS_PATH = path.join(REPORT_DIR, 'delivery-receipts.jsonl')
@@ -66,6 +70,11 @@ function writeJsonAtomic(file, value, mode) {
   fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode })
   fs.renameSync(temporary, file)
   fs.chmodSync(file, mode)
+}
+
+function writePublicSnapshots(snapshot) {
+  writeJsonAtomic(SNAPSHOT_PATH, snapshot, 0o640)
+  writeJsonAtomic(DAILY_PROFIT_PATH, buildDailyProfitSnapshot(snapshot), 0o644)
 }
 
 function appendDeliveryReceipt(receipt) {
@@ -226,7 +235,7 @@ async function tick() {
   try {
     let delivery = deliveryState()
     let snapshot = await currentBusinessSnapshot(delivery)
-    writeJsonAtomic(SNAPSHOT_PATH, snapshot, 0o640)
+    writePublicSnapshots(snapshot)
     const schedule = dailyReportSchedule(new Date(), REPORT_HOUR, REPORT_MINUTE)
     const delivered = readJsonLines(DELIVERY_RECEIPTS_PATH).some(
       (receipt) => receipt?.periodKey === schedule.periodKey && receipt?.status === 'DELIVERED',
@@ -257,7 +266,7 @@ async function tick() {
     delivery = { lastSuccessAt: receipt.sentAt, lastPeriodKey: receipt.periodKey }
     writeJsonAtomic(DELIVERY_STATE_PATH, delivery, 0o600)
     snapshot = await currentBusinessSnapshot(delivery)
-    writeJsonAtomic(SNAPSHOT_PATH, snapshot, 0o640)
+    writePublicSnapshots(snapshot)
     console.log(
       JSON.stringify({ status: 'DAILY_REPORT_DELIVERED', periodKey: receipt.periodKey, sentAt: receipt.sentAt }),
     )

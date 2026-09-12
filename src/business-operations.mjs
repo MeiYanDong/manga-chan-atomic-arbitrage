@@ -6,8 +6,11 @@ import { dualSpendablePrincipal } from './dual-live-policy.mjs'
 export const BUSINESS_SNAPSHOT_SCHEMA_VERSION = 3
 export const BUSINESS_SNAPSHOT_MODE = 'READ_ONLY_SANITIZED_OPERATIONS'
 export const BUSINESS_TIME_ZONE = 'Asia/Shanghai'
+export const DAILY_PROFIT_SCHEMA_VERSION = 1
+export const DAILY_PROFIT_MODE = 'READ_ONLY_RECEIPT_GATED_DAILY_PROFIT'
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1_000
 const MAX_PUBLIC_SNAPSHOT_BYTES = 1_000_000
+const MAX_DAILY_PROFIT_SNAPSHOT_BYTES = 128_000
 
 function asDate(value) {
   const date = value instanceof Date ? value : new Date(value)
@@ -373,6 +376,64 @@ export function buildBusinessSnapshot({
   return snapshot
 }
 
+/**
+ * Build a small, public read model that remains honest about two different
+ * accounting layers:
+ *
+ * - marked execution net is receipt-gated and already deducts each strategy's
+ *   declared successful-transaction Gas treatment;
+ * - project effects retain their native asset and include only registered
+ *   costs, so they remain PARTIAL until all operating costs are reconciled.
+ */
+export function buildDailyProfitSnapshot(snapshot) {
+  assertPublicBusinessSnapshot(snapshot)
+  const today = shanghaiDateKey(snapshot.generatedAt)
+  const activities = Array.isArray(snapshot.activities) ? snapshot.activities : []
+  const days = (snapshot.economics?.lastSevenDays || []).map((period) => {
+    const periodActivities = activities.filter((activity) => {
+      try {
+        return shanghaiDateKey(activity.occurredAt) === period.periodKey
+      } catch {
+        return false
+      }
+    })
+    const project = summarizeProjectEconomics(periodActivities)
+    return {
+      date: period.periodKey,
+      periodStatus: period.periodKey === today ? 'IN_PROGRESS' : 'FINAL',
+      evidenceStatus: 'RECEIPT_GATED',
+      successfulTrades: Number(period.confirmedExecutions || 0),
+      markedTradingNetByAsset: [
+        { asset: 'USDG', value: String(period.verifiedExecutionNetUsdg || '0') },
+        { asset: 'ETH', value: String(period.verifiedExecutionNetEth || '0') },
+      ],
+      failedTransactions: Number(period.failedTransactions || 0),
+      failedGasByAsset: [{ asset: 'ETH', value: String(period.failedGasEth || '0') }],
+      projectResultByAsset: project.byAsset,
+      businessNet: {
+        state: 'UNKNOWN',
+        reason: 'OPERATING_COST_COVERAGE_PARTIAL',
+      },
+    }
+  })
+  const result = {
+    schemaVersion: DAILY_PROFIT_SCHEMA_VERSION,
+    mode: DAILY_PROFIT_MODE,
+    generatedAt: snapshot.generatedAt,
+    timeZone: BUSINESS_TIME_ZONE,
+    coverage: {
+      execution: 'RECEIPT_GATED',
+      project: snapshot.economics?.project?.coverage || 'PARTIAL',
+      businessNet: 'UNKNOWN',
+    },
+    accountingNote:
+      'USDG is the existing conservative marked strategy result; native project effects remain separate by asset. Missing operating costs are UNKNOWN, never zero.',
+    days,
+  }
+  assertPublicDailyProfitSnapshot(result)
+  return result
+}
+
 export function formatFeishuDailyReport(snapshot, periodKey) {
   const period = snapshot.economics.lastSevenDays.find((item) => item.periodKey === periodKey)
   if (!period) throw new Error('requested report period is outside the retained daily series')
@@ -436,6 +497,40 @@ export function assertPublicBusinessSnapshot(snapshot) {
   const serialized = JSON.stringify(snapshot)
   if (/private.?key|signed.?raw|webhook|rpc.?url|authorization.?id|wallet.?address/i.test(serialized)) {
     throw new Error('business snapshot contains a forbidden sensitive field')
+  }
+  return snapshot
+}
+
+export function assertPublicDailyProfitSnapshot(snapshot) {
+  if (
+    snapshot?.schemaVersion !== DAILY_PROFIT_SCHEMA_VERSION ||
+    snapshot?.mode !== DAILY_PROFIT_MODE ||
+    snapshot?.timeZone !== BUSINESS_TIME_ZONE ||
+    !Number.isFinite(Date.parse(snapshot.generatedAt)) ||
+    !Array.isArray(snapshot.days) ||
+    snapshot.days.length > 8
+  ) {
+    throw new Error('invalid daily profit snapshot identity')
+  }
+  const dates = new Set()
+  for (const day of snapshot.days) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day?.date || '') || dates.has(day.date)) {
+      throw new Error('invalid or duplicate daily profit period')
+    }
+    dates.add(day.date)
+    if (!['IN_PROGRESS', 'FINAL'].includes(day.periodStatus)) {
+      throw new Error('invalid daily profit period status')
+    }
+    if (day.businessNet?.state !== 'UNKNOWN') {
+      throw new Error('daily business net must remain unknown while cost coverage is partial')
+    }
+  }
+  const serialized = JSON.stringify(snapshot)
+  if (
+    Buffer.byteLength(serialized) > MAX_DAILY_PROFIT_SNAPSHOT_BYTES ||
+    /private.?key|signed.?raw|webhook|rpc.?url|authorization.?id|wallet.?address|transaction.?hash/i.test(serialized)
+  ) {
+    throw new Error('daily profit snapshot contains forbidden data')
   }
   return snapshot
 }

@@ -5,8 +5,10 @@ import path from 'node:path'
 import test from 'node:test'
 import {
   assertFeishuWebhookUrl,
+  assertPublicDailyProfitSnapshot,
   assertPublicBusinessSnapshot,
   buildBusinessSnapshot,
+  buildDailyProfitSnapshot,
   dailyReportSchedule,
   deriveDeliveryState,
   formatFeishuDailyReport,
@@ -224,6 +226,40 @@ test('builds receipt-gated business results and compounds only authorized profit
   ])
   assert.equal(snapshot.portfolio.summary.watchedObjects, 7)
   assert.doesNotMatch(JSON.stringify(snapshot), /active-dual-authorization/)
+})
+
+test('builds a compact daily profit API without inventing a cross-asset business total', () => {
+  const daily = buildDailyProfitSnapshot(buildBusinessSnapshot(fixture()))
+  assert.equal(daily.schemaVersion, 1)
+  assert.equal(daily.mode, 'READ_ONLY_RECEIPT_GATED_DAILY_PROFIT')
+  assert.equal(daily.timeZone, 'Asia/Shanghai')
+  assert.equal(daily.coverage.execution, 'RECEIPT_GATED')
+  assert.equal(daily.coverage.project, 'PARTIAL')
+  assert.equal(daily.coverage.businessNet, 'UNKNOWN')
+  assert.equal(daily.days.length, 7)
+
+  const today = daily.days.find((day) => day.date === '2026-09-08')
+  assert.ok(today)
+  assert.equal(today.periodStatus, 'IN_PROGRESS')
+  assert.equal(today.successfulTrades, 3)
+  assert.deepEqual(today.markedTradingNetByAsset, [
+    { asset: 'USDG', value: '1.3' },
+    { asset: 'ETH', value: '0.00003' },
+  ])
+  assert.equal(today.failedTransactions, 1)
+  assert.deepEqual(today.failedGasByAsset, [{ asset: 'ETH', value: '0.00002' }])
+  assert.deepEqual(today.projectResultByAsset, [
+    { asset: 'ETH', profit: '0.00003', cost: '0.00004', net: '-0.00001' },
+    { asset: 'USDG', profit: '1', cost: '0', net: '1' },
+    { asset: 'WETH', profit: '0.0001', cost: '0', net: '0.0001' },
+  ])
+  assert.deepEqual(today.businessNet, {
+    state: 'UNKNOWN',
+    reason: 'OPERATING_COST_COVERAGE_PARTIAL',
+  })
+  assert.doesNotMatch(JSON.stringify(daily), /0x[0-9a-f]{40}|transactionHash|authorizationId|walletAddress/)
+  assert.equal(assertPublicDailyProfitSnapshot(daily), daily)
+  assert.throws(() => assertPublicDailyProfitSnapshot({ ...daily, webhook: 'forbidden' }), /forbidden data/)
 })
 
 test('deduplicates identical Earn receipts and drops conflicting profit evidence', () => {
