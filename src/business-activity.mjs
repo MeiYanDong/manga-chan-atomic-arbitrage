@@ -163,13 +163,14 @@ function collectionActivity(record, index) {
   const amount = String(record?.amountUsdg || '')
   if (!/^\d+(?:\.\d+)?$/.test(amount)) return null
   const gas = decimal(record?.gasSpentWei, 18)
+  const target = ['MANGA', 'SPX'].includes(record?.targetId) ? record.targetId : '旧合约'
   return {
     activityId: `collection:${transactionHash}:${index}`,
     occurredAt,
     networkId: 'ROBINHOOD',
     network: 'Robinhood Chain',
     type: BUSINESS_ACTIVITY_TYPES.COLLECTION,
-    title: `${record?.token || '旧合约'}资金归集`,
+    title: `${target} 资金归集`,
     status: 'CONFIRMED',
     amounts: [{ asset: 'USDG', value: amount, direction: 'INTERNAL' }],
     effects: bigint(record?.gasSpentWei) > 0n ? [{ kind: 'COST', asset: 'ETH', value: gas }] : [],

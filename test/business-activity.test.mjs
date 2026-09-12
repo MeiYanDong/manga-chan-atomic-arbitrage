@@ -28,7 +28,8 @@ test('normalizes reviewed history and runtime ledgers into one newest-first acti
         event: 'withdrawal_complete',
         hash: collectionHash,
         confirmedAt: '2026-09-12T05:25:38.000Z',
-        token: 'MANGA',
+        targetId: 'MANGA',
+        token: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
         amountUsdg: '10.045402',
         gasSpentWei: '6582268176000',
         blockNumber: 60855935,
@@ -39,6 +40,8 @@ test('normalizes reviewed history and runtime ledgers into one newest-first acti
   assert.equal(activities.length, registry.length + 2)
   assert.equal(activities[0].transactionHash, executionHash)
   assert.equal(activities[1].type, 'COLLECTION')
+  assert.equal(activities[1].title, 'MANGA 资金归集')
+  assert.doesNotMatch(JSON.stringify(activities[1]), /0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168/i)
   assert.deepEqual(activities[0].effects, [
     { kind: 'PROFIT', asset: 'USDG', value: '1' },
     { kind: 'COST', asset: 'ETH', value: '0.00001' },

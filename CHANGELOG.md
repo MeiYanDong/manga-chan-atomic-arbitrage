@@ -6,7 +6,8 @@
   `策略`. Add a schema-v3 unified project activity ledger, per-native-asset project economics, transaction filters and
   receipt drawers; move the Base funding receipt out of a special funds card. Material execution/collection ledger
   changes can trigger a sanitized refresh while the five-minute balance/report timer remains. Opportunity, signing,
-  nonce, broadcast and contract behavior are unchanged.
+  nonce, broadcast and contract behavior are unchanged. Collection rows use the reviewed MANGA/SPX business identity
+  instead of exposing the underlying USDG contract address in the primary table.
 - Add a one-shot, exact-allowlist collector for the funded historical MANGA and SPX executors. It freezes both full
   USDG withdrawals under one aggregate Gas envelope, retains at least `0.0025 ETH`, shares the production wallet lock,
   excludes every signer generation, persists each signed raw transaction privately and requires final receipt, exact
