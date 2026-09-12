@@ -51,7 +51,9 @@ install -d -o root -g root -m 0755 "${release_dir}"
 tar -xzf "${archive}" --strip-components=1 -C "${release_dir}"
 cd "${release_dir}"
 npm ci --no-audit --no-fund
-npm run check
+# The immutable commit must already have a successful GitHub CI quality receipt.
+# Production rebuilds runtime artifacts but does not repeat the memory-heavy test suite.
+npm run release:build
 
 printf 'MANGA_RELEASE_SHA=%s\n' "${release_sha}" > "${config_dir}/release.env.tmp"
 chown root:"${service_group}" "${config_dir}/release.env.tmp"

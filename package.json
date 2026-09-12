@@ -57,6 +57,7 @@
     "secret:scan": "node scripts/secret-scan.mjs",
     "ui:dev": "vite --config vite.config.mjs",
     "ui:build": "vite build --config vite.config.mjs",
+    "release:build": "npm run typecheck && npm run ui:build && npm run compile && npm run secret:scan",
     "check": "npm run format:check && npm run lint && npm run verify:systemd && npm run typecheck && npm run ui:build && npm run compile && npm test && npm run test:contract && npm run secret:scan",
     "status": "node scripts/manga-chan-arb.mjs status",
     "runtime:verify": "node scripts/manga-chan-arb.mjs runtime-verify",

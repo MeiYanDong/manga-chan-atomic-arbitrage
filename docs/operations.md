@@ -151,6 +151,12 @@ installer moves `current`, use an explicit board restart, verify both the proces
 `MANGA_RELEASE_SHA`, wait for `/healthz` to become healthy, refresh the sanitized snapshot, and only then restore the
 timer:
 
+`install-release.sh` only accepts an immutable 40-character commit identity and rebuilds type, UI, contract artifacts
+and the secret scan. The full unit and deterministic contract suites belong to the required GitHub `quality` gate;
+record its successful run URL before production. Do not deploy a commit whose CI receipt is missing, pending or failed.
+Repeating those memory-heavy suites on the 2 GB production host can starve Nginx and the board without adding a new
+merge gate.
+
 ```bash
 sudo systemctl stop manga-business-report.timer
 sudo systemctl stop manga-business-report.path
