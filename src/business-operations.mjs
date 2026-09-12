@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import { formatUnits } from 'viem'
+import { formatUnits, parseUnits } from 'viem'
 import { buildBusinessActivities, summarizeProjectEconomics } from './business-activity.mjs'
 import { dualSpendablePrincipal } from './dual-live-policy.mjs'
 
@@ -98,20 +98,82 @@ function executionDateKey(record) {
   }
 }
 
-function executionSummary(records, { periodKey = null, authorizationId = null } = {}) {
+function canonicalEarnExecutions(records) {
+  const executions = new Map()
+  const conflicted = new Set()
+  for (const record of records) {
+    if (
+      record?.event !== 'mutation_effect' ||
+      !['CONFIRMED_NET_PROFIT', 'REALIZED_NET_VERIFIED'].includes(record?.status)
+    ) {
+      continue
+    }
+    const transactionHash = [record?.transaction, record?.hash, record?.transactionHash].find((value) =>
+      /^0x[0-9a-f]{64}$/i.test(String(value || '')),
+    )
+    const confirmedAt = record?.confirmedAt || record?.at
+    if (!transactionHash || !Number.isFinite(Date.parse(confirmedAt))) continue
+    let netProfitWei
+    try {
+      netProfitWei = record?.realizedNetProfitWei
+        ? BigInt(record.realizedNetProfitWei)
+        : parseUnits(String(record?.realizedNetProfitEth || ''), 18)
+    } catch {
+      continue
+    }
+    if (netProfitWei <= 0n) continue
+    const normalized = {
+      transactionHash: transactionHash.toLowerCase(),
+      confirmedAt,
+      authorizationId: record?.authorizationId || null,
+      netProfitWei,
+    }
+    if (conflicted.has(normalized.transactionHash)) continue
+    const before = executions.get(normalized.transactionHash)
+    if (
+      before &&
+      (before.confirmedAt !== normalized.confirmedAt ||
+        before.authorizationId !== normalized.authorizationId ||
+        before.netProfitWei !== normalized.netProfitWei)
+    ) {
+      executions.delete(normalized.transactionHash)
+      conflicted.add(normalized.transactionHash)
+      continue
+    }
+    executions.set(normalized.transactionHash, normalized)
+  }
+  return [...executions.values()]
+}
+
+function earnExecutionDateKey(record) {
+  try {
+    return shanghaiDateKey(record.confirmedAt)
+  } catch {
+    return null
+  }
+}
+
+function executionSummary(records, earnExecutions, { periodKey = null, authorizationId = null } = {}) {
   const selected = records.filter((record) => {
     if (periodKey && executionDateKey(record) !== periodKey) return false
     return !authorizationId || record?.authorizationId === authorizationId
   })
+  const selectedEarn = earnExecutions.filter((record) => {
+    if (periodKey && earnExecutionDateKey(record) !== periodKey) return false
+    return !authorizationId || record.authorizationId === authorizationId
+  })
   const netUsdgWei = selected.reduce((sum, record) => sum + executionNetUsdgWei(record), 0n)
+  const netEthWei = selectedEarn.reduce((sum, record) => sum + record.netProfitWei, 0n)
   return {
     periodKey,
-    confirmedExecutions: selected.length,
+    confirmedExecutions: selected.length + selectedEarn.length,
     confirmedByBase: {
       USDG: selected.filter((record) => executionBase(record) === 'USDG').length,
       WETH: selected.filter((record) => executionBase(record) === 'WETH').length,
+      EARN_ETH: selectedEarn.length,
     },
     verifiedExecutionNetUsdg: decimal(netUsdgWei, 6),
+    verifiedExecutionNetEth: decimal(netEthWei, 18),
   }
 }
 
@@ -171,13 +233,13 @@ function processStatus(runtime, processAlive) {
   return runtime.status || 'UNKNOWN'
 }
 
-function dailySeries(now, executions, auditRecords) {
+function dailySeries(now, executions, earnExecutions, auditRecords) {
   const today = shanghaiDateKey(now)
   const results = []
   for (let offset = 6; offset >= 0; offset -= 1) {
     const periodKey = shiftDateKey(today, -offset)
     results.push({
-      ...executionSummary(executions, { periodKey }),
+      ...executionSummary(executions, earnExecutions, { periodKey }),
       ...failedGasSummary(auditRecords, periodKey),
     })
   }
@@ -203,6 +265,7 @@ export function buildBusinessSnapshot({
 }) {
   const timestamp = asDate(now)
   const executions = [...(usdgState?.executions || []), ...(wethState?.executions || [])]
+  const earnExecutions = canonicalEarnExecutions(earnOnHoodRecords)
   const authorizationId = arm?.authorizationId || null
   const today = shanghaiDateKey(timestamp)
   const yesterday = shiftDateKey(today, -1)
@@ -242,6 +305,8 @@ export function buildBusinessSnapshot({
             fixedPrincipalCap: null,
             lifetimeGasSurplusEth:
               runtime?.usage?.earnLifetimeGasSurplusEth || decimal(arm.earnOnHood.initialGasSurplusWei, 18),
+            confirmedExecutions: Number(runtime?.usage?.confirmedByBase?.EARN_ETH || 0),
+            currentNetEth: runtime?.usage?.earnCurrentAuthorizationNetEth || null,
             lastResult: runtime?.earnOnHood?.lastResult || null,
             lastDynamicMaximumPrincipalEth: runtime?.earnOnHood?.lastDynamicMaximumPrincipalEth || null,
             nextPeriodicAt: runtime?.earnOnHood?.nextPeriodicAt || null,
@@ -261,24 +326,24 @@ export function buildBusinessSnapshot({
     economics: {
       project: summarizeProjectEconomics(activities),
       today: {
-        ...executionSummary(executions, { periodKey: today }),
+        ...executionSummary(executions, earnExecutions, { periodKey: today }),
         ...failedGasSummary(auditRecords, today),
       },
       previousDay: {
-        ...executionSummary(executions, { periodKey: yesterday }),
+        ...executionSummary(executions, earnExecutions, { periodKey: yesterday }),
         ...failedGasSummary(auditRecords, yesterday),
       },
       allTime: {
-        ...executionSummary(executions),
+        ...executionSummary(executions, earnExecutions),
         ...failedGasSummary(auditRecords),
       },
       activeStrategy: authorizationId
         ? {
-            ...executionSummary(executions, { authorizationId }),
+            ...executionSummary(executions, earnExecutions, { authorizationId }),
             ...failedGasSummary(auditRecords.filter((record) => record?.authorizationId === authorizationId)),
           }
         : null,
-      lastSevenDays: dailySeries(timestamp, executions, auditRecords),
+      lastSevenDays: dailySeries(timestamp, executions, earnExecutions, auditRecords),
     },
     market: {
       status: board?.health?.status || board?.overview?.serviceStatus || 'UNKNOWN',
@@ -330,10 +395,10 @@ export function formatFeishuDailyReport(snapshot, periodKey) {
   const marketLabel = ['RUNNING', 'SCANNING', 'HEALTHY'].includes(snapshot.market.status) ? '扫描正常' : '扫描降级'
   return [
     `【MANGA 套利经营日报｜${periodKey}】`,
-    `昨日结果：已确认净收益 ${signed(period.verifiedExecutionNetUsdg)} USDG`,
-    `成交：${period.confirmedExecutions} 笔（USDG 本金 ${period.confirmedByBase.USDG} 笔，WETH 本金 ${period.confirmedByBase.WETH} 笔）`,
+    `昨日结果：已确认净收益 ${signed(period.verifiedExecutionNetUsdg)} USDG；${signed(period.verifiedExecutionNetEth, 6)} ETH`,
+    `成交：${period.confirmedExecutions} 笔（USDG 本金 ${period.confirmedByBase.USDG} 笔，WETH 本金 ${period.confirmedByBase.WETH} 笔，Earn ETH ${period.confirmedByBase.EARN_ETH} 笔）`,
     `失败成本：${display(period.failedGasEth, 6)} ETH（${period.failedTransactions} 笔失败交易）`,
-    `当前策略：${systemLabel}，累计净收益 ${signed(active?.verifiedExecutionNetUsdg || 0)} USDG，共 ${active?.confirmedExecutions || 0} 笔`,
+    `当前策略：${systemLabel}，累计净收益 ${signed(active?.verifiedExecutionNetUsdg || 0)} USDG；${signed(active?.verifiedExecutionNetEth || 0, 6)} ETH，共 ${active?.confirmedExecutions || 0} 笔`,
     `可复投资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,
     `当前机会：可以执行 ${snapshot.market.exactReady ?? 0} 条；接近门槛 ${snapshot.market.screenedPositive ?? 0} 条`,
     portfolio

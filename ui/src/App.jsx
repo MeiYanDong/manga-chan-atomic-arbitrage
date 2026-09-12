@@ -180,20 +180,37 @@ function Notice({ tone = 'warning', children }) {
   return <div className={`notice notice-${tone}`}>{children}</div>
 }
 
+function executionMetric(summary) {
+  if (!summary) return { primary: '—', secondary: '收益口径待核验' }
+  const usdg = Number(summary.verifiedExecutionNetUsdg)
+  const eth = Number(summary.verifiedExecutionNetEth)
+  const primaryIsEth = Number.isFinite(eth) && eth !== 0 && (!Number.isFinite(usdg) || usdg === 0)
+  return {
+    primary: primaryIsEth
+      ? `${number(summary.verifiedExecutionNetEth, 6, true)} ETH`
+      : `${number(summary.verifiedExecutionNetUsdg, 2, true)} USDG`,
+    secondary: primaryIsEth
+      ? `${number(summary.verifiedExecutionNetUsdg, 2, true)} USDG · ${summary.confirmedExecutions} 笔`
+      : `${number(summary.verifiedExecutionNetEth, 6, true)} ETH · ${summary.confirmedExecutions} 笔`,
+  }
+}
+
 function MetricStrip({ business, overview }) {
   const today = business?.economics?.today
   const allTime = business?.economics?.allTime
+  const todayMetric = executionMetric(today)
+  const allTimeMetric = executionMetric(allTime)
   return (
     <section className="metric-strip" aria-label="核心经营指标">
       <div>
         <span>今日策略净收益</span>
-        <strong>{number(today?.verifiedExecutionNetUsdg, 2, true)}</strong>
-        <small>USDG 记账值 · {today?.confirmedExecutions ?? '—'} 笔</small>
+        <strong>{todayMetric.primary}</strong>
+        <small>{todayMetric.secondary}</small>
       </div>
       <div>
         <span>策略累计净收益</span>
-        <strong>{number(allTime?.verifiedExecutionNetUsdg, 2, true)}</strong>
-        <small>USDG 记账值 · {allTime?.confirmedExecutions ?? '—'} 笔</small>
+        <strong>{allTimeMetric.primary}</strong>
+        <small>{allTimeMetric.secondary}</small>
       </div>
       <div>
         <span>可复投资金</span>
@@ -718,6 +735,14 @@ function StrategyPage({ data, onOpenOpportunity }) {
             <dd>
               {business?.strategy?.earnOnHood?.lifetimeGasSurplusEth
                 ? `${formatMetric(business.strategy.earnOnHood.lifetimeGasSurplusEth, 6)} ETH`
+                : '待核验'}
+            </dd>
+          </div>
+          <div>
+            <dt>Earn 本轮已确认</dt>
+            <dd>
+              {business?.strategy?.earnOnHood
+                ? `${number(business.strategy.earnOnHood.currentNetEth, 6, true)} ETH · ${business.strategy.earnOnHood.confirmedExecutions ?? '—'} 笔`
                 : '待核验'}
             </dd>
           </div>
