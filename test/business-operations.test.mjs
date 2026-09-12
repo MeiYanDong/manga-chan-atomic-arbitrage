@@ -152,6 +152,7 @@ function fixture() {
       },
     ],
     board: {
+      generatedAt: '2026-09-08T03:00:00.000Z',
       health: { status: 'HEALTHY' },
       overview: { coverage: { candidateTokens: 863 }, freshCandidates: 4, screenedPositive: 1, exactReady: 0 },
       sources: { pairListings: 20, longLaunches: 30, dopplerTargetsDiscovered: 40, genericPools: 50 },
@@ -215,6 +216,7 @@ test('builds receipt-gated business results and compounds only authorized profit
   assert.equal(snapshot.capital.walletGasLastVerifiedEth, '0.003')
   assert.equal(snapshot.market.sourceCounts.pairListings, 20)
   assert.equal(snapshot.market.sourceCounts.longRoutes, 30)
+  assert.equal(snapshot.market.observedAt, '2026-09-08T03:00:00.000Z')
   assert.equal(snapshot.recentExecutions[0].baseAsset, 'WETH')
   assert.equal(snapshot.activities.length, 7)
   assert.equal(snapshot.activities.at(-1).type, 'DEPLOYMENT')

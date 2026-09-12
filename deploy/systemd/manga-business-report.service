@@ -15,6 +15,7 @@ Environment=MANGA_BUSINESS_REPORT_DIR=/var/lib/manga-business-report
 Environment=MANGA_BUSINESS_SNAPSHOT_PATH=/var/lib/manga-business-report/business-snapshot.json
 Environment=MANGA_BUSINESS_DAILY_PROFIT_PATH=/var/lib/manga-business-report/daily-profit.json
 Environment=MANGA_BUSINESS_BOARD_URL=http://127.0.0.1:8788
+Environment=MANGA_BUSINESS_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/operations-snapshot.json
 Environment=MANGA_BUSINESS_REPORT_HOUR=9
 Environment=MANGA_BUSINESS_REPORT_MINUTE=5
 LoadCredentialEncrypted=manga-feishu-webhook:/etc/credstore.encrypted/manga-feishu-webhook

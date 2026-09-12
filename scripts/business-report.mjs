@@ -12,6 +12,7 @@ import {
   formatFeishuDailyReport,
   readPublicBusinessSnapshot,
 } from '../src/business-operations.mjs'
+import { readBusinessBoardSnapshot, resolveBusinessBoardProjection } from '../src/business-board-snapshot.mjs'
 import { isSecureSystemdCredential } from '../src/journal.mjs'
 import { requestLoopbackJson } from '../src/loopback-json-client.mjs'
 import { collectPortfolioSnapshot, createPortfolioClients, readBasePublicHeartbeat } from '../src/portfolio-monitor.mjs'
@@ -29,6 +30,9 @@ const DELIVERY_STATE_PATH = path.join(REPORT_DIR, 'delivery-state.json')
 const DELIVERY_RECEIPTS_PATH = path.join(REPORT_DIR, 'delivery-receipts.jsonl')
 const LOCK_PATH = path.join(REPORT_DIR, 'report.lock')
 const BOARD_URL = process.env.MANGA_BUSINESS_BOARD_URL || 'http://127.0.0.1:8788'
+const BOARD_SNAPSHOT_PATH = process.env.MANGA_BUSINESS_BOARD_SNAPSHOT
+  ? path.resolve(process.env.MANGA_BUSINESS_BOARD_SNAPSHOT)
+  : null
 const WEBHOOK_FILE = process.env.MANGA_FEISHU_WEBHOOK_FILE || null
 const BASE_HEARTBEAT_PATH =
   process.env.MANGA_BUSINESS_BASE_HEARTBEAT_PATH || '/run/atomic-cycle-portfolio/heartbeat.json'
@@ -151,14 +155,24 @@ async function requestBoard(pathname) {
   return requestLoopbackJson(pathname, { baseUrl: BOARD_URL })
 }
 
+function readPersistedBoardProjection() {
+  return BOARD_SNAPSHOT_PATH ? readBusinessBoardSnapshot(BOARD_SNAPSHOT_PATH) : null
+}
+
+async function currentBoardProjection() {
+  return resolveBusinessBoardProjection({
+    readPersisted: readPersistedBoardProjection,
+    boardServiceStatus: () => serviceStatus('manga-opportunity-board.service'),
+    requestBoard,
+  })
+}
+
 async function currentBusinessSnapshot(delivery = deliveryState()) {
   const runtime = readJson(path.join(RUN_DIR, 'dual-watch-state.json'))
   const processAlive = processIsAlive(Number(runtime?.pid))
   const robinhoodServiceStatus = processStatusForPortfolio(runtime, processAlive)
-  const [health, overview, sources, portfolio] = await Promise.all([
-    requestBoard('/healthz'),
-    requestBoard('/api/v1/overview'),
-    requestBoard('/api/v1/sources'),
+  const [board, portfolio] = await Promise.all([
+    currentBoardProjection(),
     collectPortfolioSnapshot({
       clients: portfolioClients,
       robinhoodServiceStatus,
@@ -176,7 +190,7 @@ async function currentBusinessSnapshot(delivery = deliveryState()) {
     collectionRecords: readJsonLines(path.join(RUN_DIR, 'legacy-collection-audit.jsonl')),
     earnOnHoodRecords: readJsonLines(path.join(RUN_DIR, 'earnonhood-audit.jsonl')),
     projectRegistry: readJson(PROJECT_HISTORY_PATH)?.entries || [],
-    board: { health, overview, sources: sources?.summary || null },
+    board,
     delivery,
     processAlive,
     reportHour: REPORT_HOUR,

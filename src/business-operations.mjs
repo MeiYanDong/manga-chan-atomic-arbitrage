@@ -350,6 +350,7 @@ export function buildBusinessSnapshot({
     },
     market: {
       status: board?.health?.status || board?.overview?.serviceStatus || 'UNKNOWN',
+      observedAt: board?.generatedAt || null,
       candidateTokens: board?.overview?.coverage?.candidateTokens ?? null,
       freshQuotes: board?.overview?.freshCandidates ?? null,
       screenedPositive: board?.overview?.screenedPositive ?? null,

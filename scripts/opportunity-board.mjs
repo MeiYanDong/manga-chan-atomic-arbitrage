@@ -119,6 +119,7 @@ import {
 } from '../src/v3-shortlist-cache.mjs'
 import { BoardStore } from '../src/board-store.mjs'
 import { readPublicBusinessSnapshot } from '../src/business-operations.mjs'
+import { buildBusinessBoardSnapshot } from '../src/business-board-snapshot.mjs'
 import {
   buildDashboardModel,
   dashboardApiNeedsOpportunityDetails,
@@ -279,6 +280,9 @@ function loadConfig() {
   const businessSnapshotPath = path.resolve(
     process.env.MANGA_BOARD_BUSINESS_SNAPSHOT || path.join(runDir, 'business-snapshot.json'),
   )
+  const operationsSnapshotPath = path.resolve(
+    process.env.MANGA_BOARD_OPERATIONS_SNAPSHOT || path.join(runDir, 'operations-snapshot.json'),
+  )
   const host = process.env.MANGA_BOARD_HOST || '127.0.0.1'
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('opportunity board must bind to loopback')
   const amountGrid = parseUsdgAmountGrid(process.env.MANGA_BOARD_AMOUNT_GRID_USDG, DEFAULT_AMOUNT_GRID_USDG)
@@ -305,6 +309,7 @@ function loadConfig() {
     runDir,
     executionSnapshotPath,
     businessSnapshotPath,
+    operationsSnapshotPath,
     host,
     port: integer(process.env.MANGA_BOARD_PORT, 8_788),
     readModel,
@@ -3152,6 +3157,30 @@ class OpportunityBoard {
     return projection
   }
 
+  publishOperationsSnapshot() {
+    const model = this.dashboardModel()
+    if (!model) throw new Error('board operations model is not ready')
+    const overview = routeDashboardApi('/api/v1/overview', new URLSearchParams(), model)
+    if (overview.status !== 200) throw new Error('board overview projection is not ready')
+    const healthy = boardHealthIsReady({
+      hasSnapshot: Boolean(this.snapshot),
+      runtimeStatus: this.runtimeHealthStatus,
+      cycleAgeMs: 0,
+      maximumAgeMs: Math.max(this.config.staleMs * 2, this.config.scanIntervalMs * 4),
+      persistenceRequired: this.config.readModel === 'sqlite',
+      persistenceStatus: this.persistenceState.status,
+      persistenceParity: this.persistenceState.parity,
+    })
+    const projection = buildBusinessBoardSnapshot({
+      generatedAt: model.generatedAt,
+      healthStatus: healthy ? 'HEALTHY' : 'NOT_READY',
+      overview: overview.payload,
+      sources: model.system.sourceSummary,
+    })
+    writeJsonAtomic(this.config.operationsSnapshotPath, projection)
+    return projection
+  }
+
   /** @param {string} status @param {{reason?: string}} [options] */
   publish(status, options = {}) {
     const reason = options.reason || 'CYCLE_FINAL'
@@ -3232,6 +3261,12 @@ class OpportunityBoard {
     this.previousSnapshot = reconciled.snapshot
     this.snapshot = reconciled.snapshot
     this.runtimeHealthStatus = status
+    try {
+      this.publishOperationsSnapshot()
+    } catch (error) {
+      console.error(JSON.stringify({ status: 'OPERATIONS_SNAPSHOT_WRITE_FAILED', reason: publicError(error) }))
+    }
+    markPhase('operationsSnapshotMs')
     timing.totalMs = Number((performance.now() - startedAt).toFixed(2))
     this.eventMetrics.lastFullPublicationTiming = timing
     return reconciled
