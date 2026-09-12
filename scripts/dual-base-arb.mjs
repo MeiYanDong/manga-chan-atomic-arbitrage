@@ -36,6 +36,7 @@ import {
   dualAuthorizationUsage,
   dualSpendablePrincipal,
   evaluateDualAuthorizationBudget,
+  isDualOpportunityMiss,
   normalizeWethToUsdg,
   selectBestExactEvaluation,
   validateDualSignedAttempt,
@@ -65,7 +66,6 @@ import {
   fixedSignerLaneConflict,
   genericSignerLaneConflict,
   isBoardSnapshotTransportFailure,
-  isGenericOpportunityMiss,
   isTransientRpcError,
   latestUnresolvedMutation,
 } from '../src/policy.mjs'
@@ -2083,15 +2083,6 @@ async function armDualWatcher() {
   }
 }
 
-function dualOpportunityMiss(error) {
-  return (
-    isGenericOpportunityMiss(error) ||
-    /no dual-base candidate passed exact|no fresh typed dual-base|triggered dual-base candidate left|candidate exceeds realized authorized principal|principal is below candidate amount|exact normalized net profit is below|exact WETH simulation does not meet|WETH gross profit cannot fund|protected WETH max fee is below|worst-case Gas breaks|current gas price moved above/i.test(
-      errorText(error),
-    )
-  )
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -2675,7 +2666,7 @@ async function watchDual() {
           })
           return watchState
         }
-        if (dualOpportunityMiss(error)) {
+        if (isDualOpportunityMiss(error)) {
           watchState = {
             ...watchState,
             status: 'RUNNING',

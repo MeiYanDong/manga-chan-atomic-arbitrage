@@ -2,6 +2,7 @@ import { keccak256, toHex } from 'viem'
 import { EARN_SIZING_ALGORITHM } from './earnonhood-live-policy.mjs'
 import { EARN_ROUTES } from './earnonhood-routes.mjs'
 import { stableStringify } from './journal.mjs'
+import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
@@ -9,6 +10,22 @@ export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v1'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2 = 'dual-base-loopback-escalation-v2'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3 = 'dual-base-loopback-escalation-v3'
+
+/**
+ * Exact candidates can decay between preflight and the final signing boundary.
+ * This is a normal no-shot only while no signed mutation is unresolved; the
+ * watcher checks that stronger condition before calling this classifier.
+ *
+ * @param {unknown} error
+ */
+export function isDualOpportunityMiss(error) {
+  return (
+    isGenericOpportunityMiss(error) ||
+    /no dual-base candidate passed exact|no fresh typed dual-base|triggered dual-base candidate left|candidate exceeds realized authorized principal|principal is below candidate amount|exact normalized net profit is below|exact WETH simulation does not meet|WETH gross profit cannot fund|protected WETH max fee is below|worst-case Gas breaks|current gas price moved above|fee increased beyond the protected preflight cap|quote fell below the protected output floor/i.test(
+      errorText(error),
+    )
+  )
+}
 
 /**
  * The cheap board screen may be more permissive than the exact execution

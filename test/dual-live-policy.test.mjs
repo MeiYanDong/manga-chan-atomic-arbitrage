@@ -8,6 +8,7 @@ import {
   dualAuthorizationUsage,
   dualSpendablePrincipal,
   evaluateDualAuthorizationBudget,
+  isDualOpportunityMiss,
   normalizeWethToUsdg,
   selectBestExactEvaluation,
   validateDualProfitFloors,
@@ -70,6 +71,14 @@ test('converts a common USDG net floor into WETH conservatively', () => {
   assert.equal(wethFloorFromUsdg(100_000n, 4_000_000_000_000_000n, 12_000_000n), 33_333_333_333_334n)
   assert.equal(normalizeWethToUsdg(33_333_333_333_334n, 4_000_000_000_000_000n, 12_000_000n), 100_000n)
   assert.equal(normalizeWethToUsdg(33_333_333_333_333n, 4_000_000_000_000_000n, 12_000_000n), 99_999n)
+})
+
+test('last-moment fee and quote decay reject one candidate without halting the watcher', () => {
+  assert.equal(isDualOpportunityMiss(new Error('fee increased beyond the protected preflight cap')), true)
+  assert.equal(isDualOpportunityMiss(new Error('quote fell below the protected output floor')), true)
+  assert.equal(isDualOpportunityMiss(new Error('exact simulation does not meet the net floor')), true)
+  assert.equal(isDualOpportunityMiss(new Error('reconciled receipt and wallet balance disagree')), false)
+  assert.equal(isDualOpportunityMiss(new Error('executor operator mismatch')), false)
 })
 
 test('screen floor can trigger exact preflight without lowering the signed execution floor', () => {

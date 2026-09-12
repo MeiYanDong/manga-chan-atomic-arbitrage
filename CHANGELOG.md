@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Treat a final pre-sign fee increase or quote drop as one exact candidate miss after the unresolved-mutation gate,
+  rather than terminating the until-revoked watcher as an invariant. Receipt, balance, nonce and identity conflicts
+  remain terminal, and no signing or economic threshold is relaxed.
 - Retry a busy loopback board read once before publishing an `UNKNOWN` market section in the business snapshot. Keep
   both attempts local, bounded to eight seconds each, and fail closed after the second failure without reusing stale
   market values or touching any RPC/signing path.
