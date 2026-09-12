@@ -7,7 +7,7 @@
 - New authorization: `0xc34fef94660b1fc24cd73dc00e77a9c33575d1195cb6217aa506b54b57ccfaac`
 - Route commitment: `0xe9b21e5bec428e98dfbadae505b191806f2d0cc70aadcd94fa8e4b3c53b21498`
 - Chain mutation caused by the release promotion and new authorization: none
-- Signed or broadcast attempts under the new authorization at final readback: zero
+- Signed or broadcast attempts under the new authorization at initial acceptance readback: zero
 
 ## Scope
 
@@ -79,12 +79,37 @@ commit. The runtime reported:
 
 The startup probe and the next reviewed-pool swap-event probe both completed without a signature or broadcast. The
 later sample's best quoted net at the conservative Gas cap was `-0.000037780368663512 ETH`, so the protected decision
-was `NO_SHOT_NO_SIGNATURE_NO_BROADCAST`. This is evidence that the newly admitted routes are live and fail closed; it
-is not a new profit receipt.
+was `NO_SHOT_NO_SIGNATURE_NO_BROADCAST`. This initial acceptance readback proved that the newly admitted routes were
+live and failed closed; it was not a profit receipt.
 
-Lifetime canonical Earn receipts remain four confirmed executions, `+0.000277567909174176 ETH` verified execution
-net and zero failed transactions/Gas. The new authorization starts its own economic counter at zero; historical profit
-was preserved only as the Gas-surplus solvency input.
+At that initial readback, lifetime canonical Earn receipts remained four confirmed executions,
+`+0.000277567909174176 ETH` verified execution net and zero failed transactions/Gas. The new authorization started its
+own economic counter at zero; historical profit was preserved only as the Gas-surplus solvency input.
+
+## First canonical receipt after promotion
+
+After the initial acceptance readback, a reviewed-pool swap event woke the new direct route. At
+`2026-09-12T13:44:40.912Z`, transaction
+[`0x0f854543d8b81dfe89525e3956df470406cff022bd912bcd3ac7efb8b17af904`](https://robinhoodchain.blockscout.com/tx/0x0f854543d8b81dfe89525e3956df470406cff022bd912bcd3ac7efb8b17af904)
+settled in block `61151312`. Its immutable mutation plan committed the newly admitted
+`WETH_AI_WETH_LONG_STOCK` direction:
+
+- LONG ECO `WETH -> AI`, using pool `0xcDe242535A75F8ccB5D4b14686e312c196B28855`;
+- STOCK MEMES `AI -> WETH`, using pool `0x00e7B76d0C0F0370C28A07aA9d9fDF92736238A6`;
+- input `0.001581825398940058 ETH`;
+- receipt-derived final output `0.001652012997781866 ETH`;
+- inferred gross profit `0.000070187598841808 ETH`;
+- canonical Gas `324622` at `93502000 wei`, or `0.000030352806244 ETH`; and
+- realized net profit `+0.000039834792597808 ETH`.
+
+The receipt swap logs, canonical Gas and exact-block wallet balance delta agreed. The wallet increased from
+`0.002893909777810176 ETH` to `0.002933744570407984 ETH`, exactly matching the realized net result. A post-receipt
+exact-release runtime verification observed nonce latest/pending `22/22`, the same wallet balance, unchanged executor
+identities and balances, authorization still `ARMED / UNTIL_REVOKED`, and `unresolvedMutation=null`.
+
+The current authorization therefore has one exact preflight, one signed attempt, one confirmed Earn execution,
+`+0.000039834792597808 ETH` realized net and zero failed Gas. The lifetime canonical Earn total is now five confirmed
+executions and `+0.000317402701771984 ETH` verified net.
 
 ## Public dashboard recovery
 
