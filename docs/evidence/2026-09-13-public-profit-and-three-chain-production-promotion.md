@@ -37,6 +37,9 @@ At `2026-09-12T19:00:10Z`, the immutable MANGA symlink resolved to the release a
 `HEALTHY/RUNNING`, full configured-start chain and source catalogs, healthy SQLite persistence and exact projection
 parity. Its PID was `2892`, `NRestarts=0`, current memory was `398,405,632` bytes and observed peak memory was
 `537,395,200` bytes inside the `603,979,776`-byte hard limit. No board errors were present after the final cold start.
+At `2026-09-12T19:03:22Z`, a later soak readback still reported the same PID and zero restarts; both its kernel working
+directory and `MANGA_RELEASE_SHA` resolved to the exact release. The business-report timer and path had settled to
+`active/waiting`, with the preceding one-shot result successful.
 
 Independent process readback preserved the pre-promotion identities:
 
