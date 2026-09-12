@@ -122,6 +122,16 @@ export function businessHeadline(business, _overview) {
   return '本策略暂未成交'
 }
 
+export function runtimeBadge(business, { loading = false, error = false } = {}) {
+  const status = business?.strategy?.status
+  if (status === 'RUNNING') return { status: 'RUNNING', label: '实盘运行中' }
+  if (status === 'STOPPED') return { status: 'STOPPED', label: '执行已停止' }
+  if (status === 'HALTED' || status === 'HALTED_UNKNOWN') return { status: 'HALTED', label: '执行已熔断' }
+  if (!business && loading) return { status: 'PENDING', label: '正在更新' }
+  if (!business && error) return { status: 'ERROR', label: '运行状态待核验' }
+  return { status: 'DEGRADED', label: '执行状态待核验' }
+}
+
 export function opportunityLane(item) {
   if (item?.axes?.exactPreflight === 'PASSED' || item?.axes?.execution === 'READY') return 'executable'
   if (item?.axes?.quote === 'FRESH_PROXY_POSITIVE') return 'near'
