@@ -27,6 +27,8 @@ test('primary dashboard is a Chinese-first data product without presentation cop
   assert.match(app, /可以执行/)
   assert.match(app, /接近门槛/)
   assert.match(app, /继续观察/)
+  assert.match(app, /verifiedExecutionNetEth/)
+  assert.match(app, /Earn 本轮已确认/)
   assert.doesNotMatch(app, /你转入的 0\.01 ETH|Base 首笔入金|BASE_BOOTSTRAP_RECEIPT/)
 })
 

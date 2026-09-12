@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Include receipt-confirmed EarnOnHood ETH loops in today's, all-time and active-authorization strategy results instead
+  of leaving those counters at zero. Keep USDG and ETH net results separate, deduplicate identical receipt rows, drop
+  conflicting duplicates, surface the active Earn count/net in the strategy page, and include both native units in the
+  Feishu daily report.
 - Make the public dashboard a catch-all port-80 virtual host instead of matching one literal Host header. Serve the
   built UI directly from Nginx and keep a 30-second, stampede-locked presentation API cache with background refresh
   and stale-on-upstream-failure fallback. The market scanner remains loopback-only, the health check remains uncached,

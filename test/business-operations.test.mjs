@@ -92,8 +92,10 @@ function fixture() {
       usage: {
         exactPreflights: 2,
         signedAttempts: 2,
-        confirmedExecutions: 2,
+        confirmedExecutions: 3,
+        confirmedByBase: { USDG: 1, WETH: 1, EARN_ETH: 1 },
         earnLifetimeGasSurplusEth: '0.000131868227091194',
+        earnCurrentAuthorizationNetEth: '0.00003',
       },
       earnOnHood: {
         status: 'WATCHING',
@@ -105,6 +107,32 @@ function fixture() {
     usdgState: { executions: [legacyExecution, usdgExecution] },
     wethState: { executions: [wethExecution] },
     auditRecords,
+    earnOnHoodRecords: [
+      {
+        event: 'mutation_effect',
+        status: 'CONFIRMED_NET_PROFIT',
+        at: '2026-09-07T14:30:00.000Z',
+        transaction: `0x${'5'.repeat(64)}`,
+        route: 'WETH → MOO → AI → WETH',
+        amountInEth: '0.001',
+        gasSpentEth: '0.00001',
+        realizedNetProfitEth: '0.00002',
+        blockNumber: 2,
+      },
+      {
+        event: 'mutation_effect',
+        status: 'CONFIRMED_NET_PROFIT',
+        at: '2026-09-08T02:45:00.000Z',
+        transaction: `0x${'6'.repeat(64)}`,
+        authorizationId,
+        route: 'WETH → AI → MOO → WETH',
+        amountInEth: '0.0012',
+        gasSpentEth: '0.00001',
+        realizedNetProfitEth: '0.00003',
+        realizedNetProfitWei: '30000000000000',
+        blockNumber: 3,
+      },
+    ],
     projectRegistry: [
       {
         activityId: 'fixture-deployment',
@@ -163,25 +191,34 @@ test('builds receipt-gated business results and compounds only authorized profit
   assert.equal(snapshot.strategy.earnOnHood.status, 'WATCHING')
   assert.equal(snapshot.strategy.earnOnHood.fixedPrincipalCap, null)
   assert.equal(snapshot.strategy.earnOnHood.lastDynamicMaximumPrincipalEth, '0.002378210095727194')
+  assert.equal(snapshot.strategy.earnOnHood.confirmedExecutions, 1)
+  assert.equal(snapshot.strategy.earnOnHood.currentNetEth, '0.00003')
   assert.equal(snapshot.economics.today.verifiedExecutionNetUsdg, '1.3')
-  assert.equal(snapshot.economics.today.confirmedExecutions, 2)
-  assert.deepEqual(snapshot.economics.today.confirmedByBase, { USDG: 1, WETH: 1 })
+  assert.equal(snapshot.economics.today.verifiedExecutionNetEth, '0.00003')
+  assert.equal(snapshot.economics.today.confirmedExecutions, 3)
+  assert.deepEqual(snapshot.economics.today.confirmedByBase, { USDG: 1, WETH: 1, EARN_ETH: 1 })
   assert.equal(snapshot.economics.today.failedTransactions, 1)
   assert.equal(snapshot.economics.today.failedGasEth, '0.00002')
   assert.equal(snapshot.economics.previousDay.verifiedExecutionNetUsdg, '1.7')
+  assert.equal(snapshot.economics.previousDay.verifiedExecutionNetEth, '0.00002')
+  assert.equal(snapshot.economics.previousDay.confirmedExecutions, 2)
   assert.equal(snapshot.economics.allTime.verifiedExecutionNetUsdg, '3')
+  assert.equal(snapshot.economics.allTime.verifiedExecutionNetEth, '0.00005')
+  assert.equal(snapshot.economics.allTime.confirmedExecutions, 5)
   assert.equal(snapshot.economics.activeStrategy.verifiedExecutionNetUsdg, '1.3')
+  assert.equal(snapshot.economics.activeStrategy.verifiedExecutionNetEth, '0.00003')
+  assert.equal(snapshot.economics.activeStrategy.confirmedExecutions, 3)
   assert.equal(snapshot.capital.spendableUsdg, '11')
   assert.equal(snapshot.capital.spendableWeth, '0.0011')
   assert.equal(snapshot.capital.walletGasLastVerifiedEth, '0.003')
   assert.equal(snapshot.market.sourceCounts.pairListings, 20)
   assert.equal(snapshot.market.sourceCounts.longRoutes, 30)
   assert.equal(snapshot.recentExecutions[0].baseAsset, 'WETH')
-  assert.equal(snapshot.activities.length, 5)
+  assert.equal(snapshot.activities.length, 7)
   assert.equal(snapshot.activities.at(-1).type, 'DEPLOYMENT')
   assert.equal(snapshot.economics.project.coverage, 'PARTIAL')
   assert.deepEqual(snapshot.economics.project.byAsset, [
-    { asset: 'ETH', profit: '0', cost: '0.00045', net: '-0.00045' },
+    { asset: 'ETH', profit: '0.00005', cost: '0.00045', net: '-0.0004' },
     { asset: 'USDG', profit: '3', cost: '0', net: '3' },
     { asset: 'WETH', profit: '0.0001', cost: '0', net: '0.0001' },
   ])
@@ -189,12 +226,34 @@ test('builds receipt-gated business results and compounds only authorized profit
   assert.doesNotMatch(JSON.stringify(snapshot), /active-dual-authorization/)
 })
 
+test('deduplicates identical Earn receipts and drops conflicting profit evidence', () => {
+  const duplicated = fixture()
+  duplicated.earnOnHoodRecords.push({ ...duplicated.earnOnHoodRecords[1] })
+  const duplicatedSnapshot = buildBusinessSnapshot(duplicated)
+  assert.equal(duplicatedSnapshot.economics.allTime.confirmedExecutions, 5)
+  assert.equal(duplicatedSnapshot.economics.allTime.verifiedExecutionNetEth, '0.00005')
+
+  const conflicted = fixture()
+  conflicted.earnOnHoodRecords.push({
+    ...conflicted.earnOnHoodRecords[1],
+    authorizationId: conflicted.arm.authorizationId,
+    realizedNetProfitEth: '0.00004',
+    realizedNetProfitWei: '40000000000000',
+  })
+  const conflictedSnapshot = buildBusinessSnapshot(conflicted)
+  assert.equal(conflictedSnapshot.economics.allTime.confirmedExecutions, 4)
+  assert.equal(conflictedSnapshot.economics.allTime.verifiedExecutionNetEth, '0.00002')
+  assert.equal(conflictedSnapshot.economics.activeStrategy.confirmedExecutions, 2)
+  assert.equal(conflictedSnapshot.economics.activeStrategy.verifiedExecutionNetEth, '0')
+})
+
 test('daily Feishu copy reports business outcomes without raw execution identifiers', () => {
   const snapshot = buildBusinessSnapshot(fixture())
   const report = formatFeishuDailyReport(snapshot, '2026-09-07')
 
-  assert.match(report, /昨日结果：已确认净收益 \+1\.70 USDG/)
-  assert.match(report, /成交：1 笔（USDG 本金 1 笔，WETH 本金 0 笔）/)
+  assert.match(report, /昨日结果：已确认净收益 \+1\.70 USDG；\+0\.000020 ETH/)
+  assert.match(report, /成交：2 笔（USDG 本金 1 笔，WETH 本金 0 笔，Earn ETH 1 笔）/)
+  assert.match(report, /当前策略：运行中，累计净收益 \+1\.30 USDG；\+0\.000030 ETH，共 3 笔/)
   assert.match(report, /可复投资金：11\.00 USDG；0\.0011 WETH/)
   assert.match(report, /当前机会：可以执行 0 条；接近门槛 1 条/)
   assert.match(report, /资金监控：5 个活跃地址；2 个待归集地址（15\.68 USDG）/)
