@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  BASE_BOOTSTRAP_RECEIPT,
   PAGES,
   assetClassLabel,
   businessHeadline,
@@ -15,6 +16,7 @@ import {
   noTradeReason,
   opportunityLane,
   opportunityReason,
+  portfolioMoneyMap,
   relativeAge,
   sortOpportunitiesForOperator,
   sourceLabel,
@@ -22,6 +24,40 @@ import {
   sourceAdapterLabel,
   toneForStatus,
 } from '../ui/src/view-model.mjs'
+
+test('funds map keeps live balances separate and reconciles the Base bootstrap receipt', () => {
+  const portfolio = {
+    networks: [
+      {
+        id: 'ROBINHOOD',
+        active: { USDG: '35.344393', WETH: '0.0032' },
+        parked: { USDG: '15.676618' },
+        all: { USDG: '51.021011' },
+      },
+    ],
+    accounts: [
+      { id: 'base-operator', assets: [{ symbol: 'ETH', amount: '0.006987074636027231' }] },
+      { id: 'base-executor', assets: [{ symbol: 'WETH', amount: '0.003' }] },
+      { id: 'robinhood-operator', assets: [{ symbol: 'ETH', amount: '0.002759654781831194' }] },
+    ],
+  }
+  assert.deepEqual(portfolioMoneyMap(portfolio), {
+    base: { walletEth: '0.006987074636027231', executorWeth: '0.003' },
+    robinhood: {
+      walletEth: '0.002759654781831194',
+      activeUsdg: '35.344393',
+      activeWeth: '0.0032',
+      parkedUsdg: '15.676618',
+      totalUsdg: '51.021011',
+    },
+  })
+  const accounted =
+    Number(BASE_BOOTSTRAP_RECEIPT.walletEthAfterBootstrap) +
+    Number(BASE_BOOTSTRAP_RECEIPT.executorWethAfterBootstrap) +
+    Number(BASE_BOOTSTRAP_RECEIPT.deploymentAndInitializationGasEth)
+  assert.ok(Math.abs(accounted - Number(BASE_BOOTSTRAP_RECEIPT.depositedEth)) < 1e-15)
+  assert.match(BASE_BOOTSTRAP_RECEIPT.fundingTransactionUrl, /^https:\/\/base\.blockscout\.com\/tx\/0x/)
+})
 
 test('dashboard navigation only accepts known workspaces', () => {
   assert.equal(PAGES.length, 5)

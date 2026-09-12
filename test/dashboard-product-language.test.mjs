@@ -18,7 +18,9 @@ test('primary dashboard copy is Chinese-first and removes the engineering-consol
     assert.doesNotMatch(app + html, new RegExp(banned, 'i'))
   }
   assert.match(app, /套利经营台/)
-  assert.match(app, /一共盯.*个对象/)
+  assert.match(app, /本套利项目的钱，现在分布在这里/)
+  assert.match(app, /你转入的 0\.01 ETH/)
+  assert.match(app, /公网 · 只读/)
   assert.match(app, /查看地址与链上记录/)
   assert.match(app, /businessHeadline/)
   assert.match(app, /可以执行/)
