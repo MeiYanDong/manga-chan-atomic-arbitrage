@@ -56,6 +56,59 @@ export function buildEarnOnHoodProbeAmounts(input) {
 }
 
 /**
+ * Keep the best gross quote from every reviewed route in the bounded Gas
+ * evaluation set before filling the remaining slots globally. Gas is largely
+ * fixed per route, so the maximum-gross amount is also the useful first Gas
+ * sample for that route. This prevents a lower-Gas two-hop route from being
+ * hidden by several higher-gross but net-negative three-hop amounts.
+ *
+ * @param {Array<{route: {id: string}, amountIn: bigint, amountOut: bigint, error?: unknown}>} quotes
+ * @param {number} maximumCandidates
+ */
+export function selectEarnOnHoodGasCandidates(quotes, maximumCandidates) {
+  if (!Array.isArray(quotes)) throw new Error('EarnOnHood Gas candidates must be an array')
+  if (!Number.isSafeInteger(maximumCandidates) || maximumCandidates <= 0) {
+    throw new Error('EarnOnHood Gas candidate limit must be a positive integer')
+  }
+  const positive = quotes
+    .filter(
+      (quote) =>
+        !quote.error &&
+        typeof quote.route?.id === 'string' &&
+        quote.route.id.length > 0 &&
+        typeof quote.amountIn === 'bigint' &&
+        typeof quote.amountOut === 'bigint' &&
+        quote.amountOut > quote.amountIn,
+    )
+    .sort((left, right) => {
+      const leftGross = left.amountOut - left.amountIn
+      const rightGross = right.amountOut - right.amountIn
+      return rightGross === leftGross ? 0 : rightGross > leftGross ? 1 : -1
+    })
+  const selected = []
+  const selectedQuotes = new Set()
+  const representedRoutes = new Set()
+  for (const quote of positive) {
+    if (representedRoutes.has(quote.route.id)) continue
+    selected.push(quote)
+    selectedQuotes.add(quote)
+    representedRoutes.add(quote.route.id)
+  }
+  selected.sort((left, right) => {
+    const leftGross = left.amountOut - left.amountIn
+    const rightGross = right.amountOut - right.amountIn
+    return rightGross === leftGross ? 0 : rightGross > leftGross ? 1 : -1
+  })
+  if (selected.length > maximumCandidates) return selected.slice(0, maximumCandidates)
+  for (const quote of positive) {
+    if (selectedQuotes.has(quote)) continue
+    selected.push(quote)
+    if (selected.length === maximumCandidates) break
+  }
+  return selected
+}
+
+/**
  * Rebuild the Earn lane's lifetime gas-solvency balance from receipt-backed
  * append-only records. Positive mutation effects are already net of Gas;
  * reverted transactions contribute their canonical Gas loss.

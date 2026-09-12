@@ -13,12 +13,14 @@ The repository retains three deployed execution generations:
   nonce lane. Dual-v3 is the active production signer under an explicit until-revoked authorization.
 
 It also contains an EarnOnHood standing keeper inside the same dual signer. The scanner explores weighted Omnipools
-without signing; live execution remains limited to the reviewed WETH/AI/MOO triangle. Public Vault events plus a
-five-minute recovery tick wake balance-scaled probes with no fixed principal cap. The managed endpoint is used only
-after a public screen is net-positive, and worst-case failed Gas must leave lifetime receipt-proven Earn net positive.
-It is not a second autonomous signer. See
+without signing; live execution remains limited to four reviewed routes across the same three pools: both direct
+`WETH -> AI -> WETH` directions and both `WETH/AI/MOO/WETH` triangles. Public Vault events plus a five-minute recovery
+tick wake balance-scaled probes with no fixed principal cap. The managed endpoint is used only after a public screen is
+net-positive, and worst-case failed Gas must leave lifetime receipt-proven Earn net positive. It is not a second
+autonomous signer. See
 [the mechanism and live validation](docs/research/2026-09-12-earnonhood-mechanism-arbitrage-live-validation.md) and
-[ADR 0046](docs/decisions/0046-unified-earnonhood-standing-keeper.md).
+[ADR 0046](docs/decisions/0046-unified-earnonhood-standing-keeper.md) plus
+[ADR 0049](docs/decisions/0049-reviewed-earnonhood-two-pool-ai-routes.md).
 
 The generic economic unit is:
 
@@ -91,12 +93,15 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 
 ## Honest status
 
-- EarnOnHood weighted Omnipools have one receipt-proven mainnet arbitrage. Transaction
+- EarnOnHood weighted Omnipools have receipt-proven mainnet arbitrage. The first validation transaction
   [`0x27ed…a2028`](https://robinhoodchain.blockscout.com/tx/0x27ed9bab2e6d78b82a1b0790de6c33c44359f7134d86f03d71936b61ed1a2028)
   atomically settled `0.002 ETH -> MOO -> AI -> ETH`, used `0.000047463672072 ETH` Gas and increased the operator
   wallet by **`0.000131868227091194 ETH` net**. This proves feasibility only; opportunity frequency, race-win rate and
-  scalable capacity remain unmeasured. Release v0.11 integrates that reviewed route into the continuous signer; a new
-  receipt is still required before claiming any post-integration profit.
+  scalable capacity remain unmeasured. The continuous signer later produced three additional receipt-confirmed positive
+  loops. The latest pre-change transaction
+  [`0x16e0…43b4`](https://robinhoodchain.blockscout.com/tx/0x16e0c06317885de646ad8055863f09299979c734b9dab07c2d9eefaf7d9943b4)
+  settled `0.001868866217063533 ETH -> MOO -> AI -> ETH` and increased the wallet by
+  `0.000082941657563928 ETH` after Gas.
 - Dual-v3 is active on the production host. Its WETH executor is
   `0xeC6BB0511Eb7a348ad1879535F66320a51a3eDfc`, deployed and seeded with `0.0032 WETH` by
   [`0xee0c…f880`](https://robinhoodchain.blockscout.com/tx/0xee0cee4e11b383ff869be571db44f5fbebbe88c1793daf011f4fcb03ae78f880).
@@ -107,10 +112,9 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   caps. Earn sizing has no fixed principal cap and reaches the current wallet balance minus its complete Gas allowance
   and `0.00025 ETH` submission reserve. Its full failed-Gas envelope must leave the receipt-proven lifetime Earn net
   strictly positive.
-- At the latest production readback, four reviewed-pool events had each completed a public Earn screen. All four found
-  no positive gross route, so the new authorization still had zero managed exact preflights, zero signatures, zero
-  confirmed executions and zero failed Gas. The dynamic maximum was `0.002378210095727194 ETH`; dual-era and
-  post-integration realized profit remain `0` until a canonical receipt proves otherwise.
+- At the 2026-09-12 21:10 Asia/Shanghai production readback, the active authorization had three confirmed Earn
+  executions and `0.000145699682082982 ETH` receipt-reconciled net profit with zero failed Gas. The four-route change in
+  this release is not production-active until its distinct route commitment is freshly authorized.
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
   disabled. Their public evidence is under [`deployments`](deployments).

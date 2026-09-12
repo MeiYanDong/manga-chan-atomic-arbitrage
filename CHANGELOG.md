@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Admit both reviewed direct `WETH -> AI -> WETH` directions across STOCK MEMES and LONG ECO to the standing
+  EarnOnHood route book. Preserve the existing two triangles and all final execution guards, validate every directed
+  pool/token edge with one identity read per pool, and reserve one bounded Gas evaluation for each profitable route so
+  lower-Gas two-hop loops cannot be hidden by higher-gross three-hop probes. The changed route commitment requires a
+  fresh production authorization.
 - Include receipt-confirmed EarnOnHood ETH loops in today's, all-time and active-authorization strategy results instead
   of leaving those counters at zero. Keep USDG and ETH net results separate, deduplicate identical receipt rows, drop
   conflicting duplicates, surface the active Earn count/net in the strategy page, and include both native units in the
