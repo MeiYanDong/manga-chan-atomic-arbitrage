@@ -27,6 +27,7 @@ const emptyData = {
   sourceSummary: null,
   system: null,
   business: null,
+  chainOpportunities: null,
 }
 
 const activityLabels = Object.freeze({
@@ -68,6 +69,7 @@ function useOperationsData() {
           requestJson('/api/v1/sources', controller.signal),
           requestJson('/api/v1/system', controller.signal),
           requestOptionalJson('/api/v1/business', controller.signal),
+          requestOptionalJson('/api/v1/opportunities/chains', controller.signal),
         ])
         if (!mounted) return
         const succeeded = results.filter((result) => result.status === 'fulfilled').length
@@ -78,6 +80,7 @@ function useOperationsData() {
         const sources = value(2)
         const system = value(3)
         const business = value(4)
+        const chainOpportunities = value(5)
         setState((before) => ({
           data: {
             overview: overview || before.data.overview,
@@ -86,6 +89,7 @@ function useOperationsData() {
             sourceSummary: sources?.summary || before.data.sourceSummary,
             system: system || before.data.system,
             business: business || before.data.business,
+            chainOpportunities: chainOpportunities || before.data.chainOpportunities,
           },
           loading: false,
           error: null,
@@ -675,6 +679,64 @@ function SourceTable({ summary, sources }) {
   )
 }
 
+function CrossChainOpportunityTable({ snapshot }) {
+  const networks = snapshot?.networks || []
+  return (
+    <>
+      <p className="section-note">独立核对各链上的 Uniswap 与 PancakeSwap；这里只展示扣除 Gas 后的结论。</p>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>链</th>
+              <th>覆盖范围</th>
+              <th className="numeric">有效闭环</th>
+              <th className="numeric">净正机会</th>
+              <th>当前结论</th>
+            </tr>
+          </thead>
+          <tbody>
+            {networks.map((network) => {
+              const positive = network.funnel?.gasAdjustedPositiveCycles || 0
+              return (
+                <tr key={network.id}>
+                  <td>{network.name}</td>
+                  <td>
+                    <strong>{(network.coverage?.venues || []).join('、') || '待核验'}</strong>
+                    <small>{(network.coverage?.assets || []).join('、') || '资产待核验'}</small>
+                  </td>
+                  <td className="numeric">
+                    <strong>{network.funnel?.fullyQuotedCycles ?? '—'}</strong>
+                    <small>尝试 {network.funnel?.attemptedCycles ?? '—'}</small>
+                  </td>
+                  <td className={`numeric ${positive > 0 ? 'positive' : ''}`}>{positive}</td>
+                  <td>
+                    {network.status === 'PARTIAL' ? (
+                      <Status value="PARTIAL" label="数据不完整" />
+                    ) : positive > 0 ? (
+                      <Status value="READY" label="影子净正，待工程准入" />
+                    ) : (
+                      <Status value="NO_SHOT" label="本轮无净正" />
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+            {networks.length === 0 && (
+              <tr>
+                <td colSpan={5} className="empty-cell">
+                  跨平台扫描尚未生成；未知结果不会显示为零。
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="coverage-note">影子净正不等于已成交；执行器、分叉测试和链上回执全部通过后才能记为收益。</p>
+    </>
+  )
+}
+
 function StrategyPage({ data, onOpenOpportunity }) {
   const business = data.business
   const overview = data.overview
@@ -692,8 +754,11 @@ function StrategyPage({ data, onOpenOpportunity }) {
         ))}
         {services.length === 0 && <span>服务状态待核验</span>}
       </section>
+      <Section title="跨平台机会">
+        <CrossChainOpportunityTable snapshot={data.chainOpportunities} />
+      </Section>
       <Section
-        title="机会"
+        title="Robinhood 原有策略机会"
         side={
           <span className="section-summary">
             可执行 {overview?.exactReady ?? '—'} · 接近门槛 {overview?.screenedPositive ?? '—'}

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Publish a receipt-gated seven-day `/api/v1/profit/daily` read model directly through Nginx. Keep USDG and ETH/WETH
+  separate, mark the current Beijing day in progress, expose failed Gas, and leave consolidated business net UNKNOWN
+  while shared-cost coverage is partial.
+- Integrate the credential-free atomic-cycle Robinhood/BNB venue shadow through
+  `/api/v1/opportunities/chains`. The Chinese strategy page shows per-chain venue/asset coverage, completed quotes and
+  Gas-adjusted positive counts; partial coverage remains visibly unknown and grants no execution authority.
 - Replace the Earn keeper's 24-point-per-route flat probe with the authorization-bound
   `BALANCE_SCALED_BRACKET_REFINEMENT_V1` optimizer: eight full-range balance-scaled quotes plus six exact local
   refinements per route. Cap the public screen at 56 quotes, hand only its committed route and immediate sizing bracket

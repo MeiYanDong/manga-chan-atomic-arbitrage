@@ -91,7 +91,7 @@ if ((static_ready != 1)); then
   exit 1
 fi
 
-for endpoint in healthz api/v1/overview api/v1/opportunities api/v1/sources api/v1/system api/v1/business; do
+for endpoint in healthz api/v1/overview api/v1/opportunities api/v1/opportunities/chains api/v1/sources api/v1/system api/v1/business api/v1/profit/daily; do
   endpoint_ready=0
   for attempt in {1..10}; do
     if curl \

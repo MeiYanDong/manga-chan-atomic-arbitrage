@@ -87,6 +87,12 @@ custom bot at 09:05, retrying every five minutes until one durable success recei
 broadcast a transaction, and neither turns a quote or process heartbeat into profit evidence. See
 [ADR 0024](docs/decisions/0024-sanitized-business-dashboard-and-feishu-reporting.md).
 
+Two Nginx-served static read models stay available independently of the board event loop: `/api/v1/profit/daily`
+contains the receipt-gated seven-day profit series, while `/api/v1/opportunities/chains` contains only the sanitized
+Robinhood/BNB cross-venue Shadow produced by the separate atomic-cycle service. The latter has no wallet, signer or
+broadcast path; a positive Shadow row is not a trade or realized profit. See [ADR 0051](docs/decisions/0051-static-public-daily-profit-api.md)
+and [ADR 0052](docs/decisions/0052-static-cross-chain-shadow-read-model.md).
+
 The same five-minute snapshot now includes a sanitized cross-strategy funds registry: two operator wallets, three active
 executors and two stopped-but-funded executors across Base and Robinhood Chain. The `资金` page keeps the two parked
 contracts visible until a separately authorized, receipt-reconciled collection is complete. Base contributes only a
