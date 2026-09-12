@@ -102,16 +102,15 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   [`0xee0c…f880`](https://robinhoodchain.blockscout.com/tx/0xee0cee4e11b383ff869be571db44f5fbebbe88c1793daf011f4fcb03ae78f880).
   USDG cycles retain and compound USDG; WETH cycles retain and compound WETH. Native ETH remains in the operator
   wallet for Gas.
-- The post-validation active authorization is `0xb39a62be40f5eebaf783bf9d4bc60916d140e51b0b6d441cce10565659d8701d`. It is
-  `UNTIL_REVOKED`, has unlimited count limits, uses `35.344393 USDG` and `0.0032 WETH` arm-time principal, and caps
-  authorized principal at `100 USDG` and `1 WETH`. The proxy screen floor is `0.05 USDG`; signing independently requires
-  at least `0.1 USDG` exact net after Gas. The cumulative failed-Gas breaker is `0.001 ETH` and the wallet reserve floor
-  is `0.002 ETH`.
-- At the latest production readback, the active authorization had processed current empty signer-free feeds but had
-  zero exact preflights, zero signed attempts, zero confirmed executions and zero failed Gas. Its immediate predecessor
-  performed four exact preflights; all were exact-negative and produced no signature, broadcast or Gas. Therefore
-  dual-era realized profit is `0`, not unknown positive profit. Automatic USDG/WETH compounding is deployed and armed
-  but remains unexercised until a canonical execution receipt exists.
+- The active authorization is `0x840860ba36fc8c50b9025ca969085deb5660eeef1d7ca18b2c7654e1121b2bd5`. It is
+  `UNTIL_REVOKED` with unlimited count limits. The generic contracts retain their immutable `100 USDG` and `1 WETH`
+  caps. Earn sizing has no fixed principal cap and reaches the current wallet balance minus its complete Gas allowance
+  and `0.00025 ETH` submission reserve. Its full failed-Gas envelope must leave the receipt-proven lifetime Earn net
+  strictly positive.
+- At the latest production readback, four reviewed-pool events had each completed a public Earn screen. All four found
+  no positive gross route, so the new authorization still had zero managed exact preflights, zero signatures, zero
+  confirmed executions and zero failed Gas. The dynamic maximum was `0.002378210095727194 ETH`; dual-era and
+  post-integration realized profit remain `0` until a canonical receipt proves otherwise.
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
   disabled. Their public evidence is under [`deployments`](deployments).
@@ -130,12 +129,10 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 - The old macOS polling watcher, fixed-route cloud signer and standalone generic-v2 watcher remain stopped; dual-v3
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
-- The signer-free board runs release `0d7e75a44b2db403596a0aadffcb7f7c0f7a0e57`; the continuously active dual
-  watcher intentionally remains on accepted release `2f3007ddd9293863a56c0665cde30d6705b9f7a7`. The board-only promotion did
-  not restart or re-arm the signer. At the `2026-09-11 00:33 CST` readback, the board had 3,569 admitted candidates,
-  separate live/persisted `RUNNING` statuses, complete configured-start chain/source catalogs, healthy SQLite parity
-  and zero screened-net-positive rows. Both services had zero automatic restarts. The board remains loopback-only and
-  has no signer or broadcast path.
+- The signer-free board and the one dual/Earn watcher run release
+  `9faee7cd453d3486ac34150a8ca1d32a41e25475`. At the post-promotion readback, the board retained 3,925 candidates,
+  reported complete configured-start chain/source catalogs and healthy SQLite parity, and had no screened-positive
+  row. Both services had zero automatic restarts. The board remains loopback-only and has no signer or broadcast path.
 - The dual watcher now freezes the exact typed candidate revision that causes escalation. A concurrent board refresh
   can no longer replace that revision or reject it merely because its quote-block-bound candidate hash disappeared
   from the latest projection. Quote age, canonical block identity, current exact simulation, Gas, nonce, principal,
@@ -168,6 +165,10 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
 
 See [`docs/evidence/2026-09-05-generic-v2-live-promotion.md`](docs/evidence/2026-09-05-generic-v2-live-promotion.md)
 for the receipt, post-state, bounded authorization, service and economic evidence.
+See
+[`docs/evidence/2026-09-12-unified-earnonhood-keeper-production-promotion.md`](docs/evidence/2026-09-12-unified-earnonhood-keeper-production-promotion.md)
+for the no-fixed-cap Earn policy, controlled signer cutover, Linux gates, event-driven production soak and current
+receipt-separated result.
 See [`docs/evidence/2026-09-06-signed-attempt-recovery.md`](docs/evidence/2026-09-06-signed-attempt-recovery.md)
 for the lifecycle root cause, repaired release, two-reader terminal recovery and then-current restart blockers.
 See
