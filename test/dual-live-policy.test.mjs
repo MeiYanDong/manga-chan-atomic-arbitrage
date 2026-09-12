@@ -14,6 +14,7 @@ import {
   validateDualSignedAttempt,
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
+import { EARN_SIZING_ALGORITHM } from '../src/earnonhood-live-policy.mjs'
 
 function arm(overrides = {}) {
   const value = {
@@ -54,6 +55,11 @@ function arm(overrides = {}) {
       initialGasSurplusWei: '5000',
       perAttemptGasCeilingWei: '500',
       walletReserveWei: '250',
+      sizingAlgorithm: EARN_SIZING_ALGORITHM,
+      coarseProbePoints: 8,
+      refinementPoints: 6,
+      publicMaximumExactQuotesPerWake: 56,
+      managedMaximumExactQuotesPerWake: 9,
     },
     ...overrides,
   }
@@ -89,6 +95,30 @@ test('screen floor can trigger exact preflight without lowering the signed execu
     ),
     { allowed: false, reason: 'invalid-profit-floors' },
   )
+})
+
+test('v4 authorization binds the coarse-to-fine sizing and managed quote ceilings', () => {
+  const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
+  assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
+    allowed: true,
+    reason: null,
+  })
+
+  for (const earnOnHood of [
+    { ...valid.earnOnHood, sizingAlgorithm: 'UNREVIEWED' },
+    { ...valid.earnOnHood, coarseProbePoints: 3 },
+    { ...valid.earnOnHood, refinementPoints: 17 },
+    { ...valid.earnOnHood, publicMaximumExactQuotesPerWake: 57 },
+    { ...valid.earnOnHood, managedMaximumExactQuotesPerWake: 10 },
+  ]) {
+    assert.deepEqual(
+      evaluateDualAuthorizationBudget(arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION, earnOnHood }), {
+        failedGasWei: 0n,
+        earnGasSurplusWei: 5_000n,
+      }),
+      { allowed: false, reason: 'invalid-earnonhood-sizing-policy' },
+    )
+  }
 })
 
 test('selects the largest same-block normalized exact net across bases', () => {
@@ -277,7 +307,7 @@ test('broadcast reservation accepts only the unique latest unresolved signed raw
   )
 })
 
-test('v3 authorization counts Earn receipts in the single wallet nonce lane', () => {
+test('current authorization counts Earn receipts in the single wallet nonce lane', () => {
   const authorization = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   const attempt = {
     event: 'mutation_signed',
