@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  BaseError,
+  ContractFunctionRevertedError,
   createPublicClient,
   createWalletClient,
   decodeErrorResult,
@@ -14,8 +16,16 @@ import {
   parseUnits,
 } from 'viem'
 
-import { buildBptExecutionPlan, equalPremiumAllocations } from '../src/global-execution-plan.mjs'
-import { buildEarnBptArbitrageTemplates, buildUnifiedLiquidityGraph } from '../src/global-liquidity-graph.mjs'
+import {
+  buildBptExecutionPlan,
+  equalPremiumAllocations,
+  executionActionFromEdge,
+} from '../src/global-execution-plan.mjs'
+import {
+  buildEarnBptArbitrageTemplates,
+  buildUnifiedLiquidityGraph,
+  shortestSwapPaths,
+} from '../src/global-liquidity-graph.mjs'
 import { ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import { diagnosticErrorText } from '../src/policy.mjs'
 import { loadRuntimeConfig } from '../src/config.mjs'
@@ -32,7 +42,11 @@ const FORK_CACHE_DIR = path.join(DEFAULT_RUNTIME_DIR, 'hardhat-fork-cache')
 const CATALOG_PATH = path.resolve(
   process.env.MANGA_UNIVERSAL_FORK_CATALOG || path.join(DEFAULT_RUNTIME_DIR, 'global-catalog.json'),
 )
+const DIAGNOSTIC_FIRST_PREFIX = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_FIRST_PREFIX === '1'
+const DIAGNOSTIC_FIRST_TEMPLATE = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_FIRST_TEMPLATE === '1'
+const DIAGNOSTIC_TEMPLATE_KIND = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_TEMPLATE_KIND || null
 const EARN_OMNIPOOL = getAddress('0x070F0Bcf458c2A836cF68c986df3BA86586e64FD')
+const EARN_ETHUSD_POOL = getAddress('0x4114bC5fcF2272B3147d079821182303C0A0733C')
 const erc20Abi = parseAbi(['function decimals() view returns (uint8)'])
 const chain = defineChain({
   id: 4_663,
@@ -57,24 +71,48 @@ async function waitForRpc(child) {
   throw new Error('fork node did not become ready')
 }
 
-function quoteResult(error, abi) {
-  const pending = [error]
-  const seen = new Set()
-  while (pending.length > 0) {
-    const item = pending.shift()
-    if (!item || seen.has(item)) continue
-    if (typeof item === 'string' && /^0x[0-9a-f]{8,}$/i.test(item)) {
-      try {
-        const decoded = decodeErrorResult({ abi, data: item })
-        if (decoded.errorName === 'QuoteResult') return BigInt(decoded.args[0])
-      } catch {}
-      continue
-    }
-    if (typeof item !== 'object') continue
-    seen.add(item)
-    for (const value of Object.values(item)) pending.push(value)
+function decodedExecutorError(error, abi) {
+  const reverted =
+    error instanceof BaseError ? error.walk((item) => item instanceof ContractFunctionRevertedError) : null
+  const data = reverted instanceof ContractFunctionRevertedError ? reverted.raw : null
+  if (!data) return { selector: null, errorName: null, args: [] }
+  try {
+    const decoded = decodeErrorResult({ abi, data })
+    return { selector: data.slice(0, 10), errorName: decoded.errorName, args: decoded.args || [] }
+  } catch {
+    return { selector: data.slice(0, 10), errorName: null, args: [] }
   }
-  return null
+}
+
+function quoteResult(error, abi) {
+  const decoded = decodedExecutorError(error, abi)
+  return decoded.errorName === 'QuoteResult' ? BigInt(decoded.args[0]) : null
+}
+
+async function diagnoseActionPrefixes({ publicClient, account, executor, abi, plan, principal }) {
+  const prefixes = []
+  for (let length = 1; length <= plan.actions.length; length += 1) {
+    const prefixPlan = { ...plan, actions: plan.actions.slice(0, length) }
+    try {
+      await publicClient.simulateContract({
+        account,
+        address: executor,
+        abi,
+        functionName: 'quoteWithFlash',
+        args: [prefixPlan, principal],
+      })
+      prefixes.push({ length, outcome: 'UNEXPECTED_RETURN' })
+    } catch (error) {
+      const decoded = decodedExecutorError(error, abi)
+      prefixes.push({
+        length,
+        actionKind: prefixPlan.actions.at(-1).kind,
+        outcome: decoded.errorName || decoded.selector || diagnosticErrorText(error).split('\n')[0],
+      })
+      if (decoded.errorName === 'InvalidSwapDelta') break
+    }
+  }
+  return prefixes
 }
 
 function weightedAllocations(principal, pool) {
@@ -86,6 +124,66 @@ function weightedAllocations(principal, pool) {
   return allocations.some((amount) => amount <= 0n)
     ? equalPremiumAllocations(principal, pool.tokens.length)
     : allocations
+}
+
+function buildEarnAdapterRoundTrip(graph, catalog, settlementToken, principal, deadline) {
+  const pool = catalog.earn.pools.find((item) => item.address.toLowerCase() === EARN_ETHUSD_POOL.toLowerCase())
+  if (!pool || pool.tokens.length !== 2 || pool.addLiquidityExecutable === false) {
+    throw new Error('reviewed ETHUSD Earn add/remove adapter pool is not executable')
+  }
+  const settlementKey = settlementToken.toLowerCase()
+  const other = pool.tokens.find((token) => token.address.toLowerCase() !== settlementKey)?.address
+  if (!pool.tokens.some((token) => token.address.toLowerCase() === settlementKey) || !other) {
+    throw new Error('reviewed ETHUSD pool does not contain the settlement pair')
+  }
+  const outbound = shortestSwapPaths(graph, settlementToken, other, { maximumHops: 2, excludedVenue: 'EARN' })[0]
+  const inbound = shortestSwapPaths(graph, other, settlementToken, { maximumHops: 2, excludedVenue: 'EARN' })[0]
+  if (!outbound || !inbound) throw new Error('reviewed ETHUSD pool lacks external settlement paths')
+  const half = principal / 2n
+  if (half <= 0n) throw new Error('adapter principal is too small')
+  const actions = [
+    ...outbound.map((edge, index) => executionActionFromEdge(edge, index === 0 ? half : 0n)),
+    {
+      kind: 4,
+      tokenIn: '0x0000000000000000000000000000000000000000',
+      tokenOut: EARN_ETHUSD_POOL,
+      pool: EARN_ETHUSD_POOL,
+      amountIn: 0n,
+      minimumAmountOut: 1n,
+      fee: 0,
+      v4Pool: {
+        currency0: '0x0000000000000000000000000000000000000000',
+        currency1: '0x0000000000000000000000000000000000000000',
+        fee: 0,
+        tickSpacing: 0,
+        hooks: '0x0000000000000000000000000000000000000000',
+      },
+    },
+    {
+      kind: 5,
+      tokenIn: EARN_ETHUSD_POOL,
+      tokenOut: '0x0000000000000000000000000000000000000000',
+      pool: EARN_ETHUSD_POOL,
+      amountIn: 0n,
+      minimumAmountOut: 0n,
+      fee: 0,
+      v4Pool: {
+        currency0: '0x0000000000000000000000000000000000000000',
+        currency1: '0x0000000000000000000000000000000000000000',
+        fee: 0,
+        tickSpacing: 0,
+        hooks: '0x0000000000000000000000000000000000000000',
+      },
+    },
+    ...inbound.map((edge) => executionActionFromEdge(edge, 0n)),
+  ]
+  return {
+    settlementToken,
+    trackedTokens: [settlementToken, other, EARN_ETHUSD_POOL].map((token) => ({ token, maximumResidual: 1n })),
+    actions,
+    minimumProfit: 1n,
+    deadline,
+  }
 }
 
 async function main() {
@@ -135,17 +233,64 @@ async function main() {
         await publicClient.readContract({ address: settlementToken, abi: erc20Abi, functionName: 'decimals' }),
       )
       const principal = decimals === 18 ? parseUnits('0.001', decimals) : parseUnits('10', decimals)
-      const templates = buildEarnBptArbitrageTemplates(graph, settlementToken).filter(
-        (template) => template.pool.toLowerCase() === EARN_OMNIPOOL.toLowerCase(),
+      const allTemplates = buildEarnBptArbitrageTemplates(graph, settlementToken)
+      const templates = allTemplates.filter(
+        (template) =>
+          template.pool.toLowerCase() === EARN_OMNIPOOL.toLowerCase() &&
+          (DIAGNOSTIC_TEMPLATE_KIND
+            ? template.kind === DIAGNOSTIC_TEMPLATE_KIND
+            : template.kind === 'BPT_DISCOUNT_REMOVE_AND_SELL'),
       )
-      const pool = catalog.earn.pools.find((item) => item.address.toLowerCase() === EARN_OMNIPOOL.toLowerCase())
-      for (const template of templates) {
-        const plan = buildBptExecutionPlan(template, {
-          principal,
-          minimumProfit: 1n,
-          deadline: block.timestamp + 300n,
-          allocations: template.kind === 'BPT_PREMIUM_BUY_AND_ADD' ? weightedAllocations(principal, pool) : undefined,
+      const cases = templates.map((template) => {
+        const pool = catalog.earn.pools.find((item) => item.address.toLowerCase() === template.pool.toLowerCase())
+        return {
+          templateId: template.id,
+          kind: template.kind,
+          plan: buildBptExecutionPlan(template, {
+            principal,
+            minimumProfit: 1n,
+            deadline: block.timestamp + 300n,
+            allocations: template.kind === 'BPT_PREMIUM_BUY_AND_ADD' ? weightedAllocations(principal, pool) : undefined,
+          }),
+        }
+      })
+      if (!DIAGNOSTIC_FIRST_PREFIX && !DIAGNOSTIC_FIRST_TEMPLATE) {
+        cases.push({
+          templateId: `EARN_ADD_REMOVE_ADAPTER_${EARN_ETHUSD_POOL.toLowerCase()}`,
+          kind: 'EARN_ADD_REMOVE_ADAPTER_ROUND_TRIP',
+          plan: buildEarnAdapterRoundTrip(graph, catalog, settlementToken, principal, block.timestamp + 300n),
         })
+      }
+      for (const candidate of cases) {
+        const { plan } = candidate
+        if (DIAGNOSTIC_FIRST_PREFIX || DIAGNOSTIC_FIRST_TEMPLATE) {
+          const diagnosticPlan = DIAGNOSTIC_FIRST_PREFIX ? { ...plan, actions: plan.actions.slice(0, 1) } : plan
+          const actionPrefixes = await diagnoseActionPrefixes({
+            publicClient,
+            account: operator,
+            executor,
+            abi: compiled.abi,
+            plan: diagnosticPlan,
+            principal,
+          })
+          console.log(
+            JSON.stringify(
+              {
+                status: DIAGNOSTIC_FIRST_PREFIX
+                  ? 'UNIVERSAL_MAINNET_FORK_FIRST_PREFIX_DIAGNOSTIC'
+                  : 'UNIVERSAL_MAINNET_FORK_FIRST_TEMPLATE_DIAGNOSTIC',
+                evidence: 'LOCAL_FORK_REAL_PROTOCOL_STATE_NO_MAINNET_BROADCAST',
+                forkBlock: block.number.toString(),
+                templateId: candidate.templateId,
+                firstAction: plan.actions[0],
+                actionPrefixes,
+              },
+              (_, value) => (typeof value === 'bigint' ? value.toString() : value),
+              2,
+            ),
+          )
+          return
+        }
         let delta = null
         let failure = null
         try {
@@ -159,13 +304,19 @@ async function main() {
           failure = 'quote unexpectedly returned without QuoteResult'
         } catch (error) {
           delta = quoteResult(error, compiled.abi)
-          if (delta === null) failure = diagnosticErrorText(error).slice(0, 600)
+          if (delta === null) {
+            const decoded = decodedExecutorError(error, compiled.abi)
+            failure = {
+              selector: decoded.selector,
+              errorName: decoded.errorName,
+            }
+          }
         }
         results.push({
           settlementToken,
           decimals,
-          templateId: template.id,
-          kind: template.kind,
+          templateId: candidate.templateId,
+          kind: candidate.kind,
           principal: formatUnits(principal, decimals),
           quoteDeltaWei: delta?.toString() || null,
           failure,

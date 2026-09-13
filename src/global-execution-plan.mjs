@@ -16,7 +16,7 @@ function blankV4() {
   return { currency0: ZERO, currency1: ZERO, fee: 0, tickSpacing: 0, hooks: ZERO }
 }
 
-function edgeAction(edge, amountIn) {
+export function executionActionFromEdge(edge, amountIn) {
   const common = {
     tokenIn: getAddress(edge.tokenIn),
     tokenOut: getAddress(edge.tokenOut),
@@ -61,7 +61,7 @@ function edgeAction(edge, amountIn) {
 }
 
 function appendPath(actions, path, firstAmount) {
-  path.forEach((edge, index) => actions.push(edgeAction(edge, index === 0 ? firstAmount : 0n)))
+  path.forEach((edge, index) => actions.push(executionActionFromEdge(edge, index === 0 ? firstAmount : 0n)))
 }
 
 function trackedFromTemplate(template) {
@@ -168,7 +168,7 @@ export function buildCycleExecutionPlan(cycle, options) {
     venues.add(edge.venue)
     tracked.set(key(getAddress(edge.tokenIn)), getAddress(edge.tokenIn))
     tracked.set(key(getAddress(edge.tokenOut)), getAddress(edge.tokenOut))
-    return edgeAction(edge, index === 0 ? principal : 0n)
+    return executionActionFromEdge(edge, index === 0 ? principal : 0n)
   })
   if (venues.size < 2) throw new Error('cycle must cross at least two venues')
   return {

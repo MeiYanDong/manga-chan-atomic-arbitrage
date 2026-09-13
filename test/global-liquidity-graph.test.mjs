@@ -8,6 +8,7 @@ import {
   fundingCapability,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
+import { loadRobinhoodHubUniswapCatalog } from '../src/robinhood-uniswap-catalog.mjs'
 
 const USDG = '0x0000000000000000000000000000000000000001'
 const WETH = '0x0000000000000000000000000000000000000002'
@@ -93,6 +94,48 @@ test('quarantines malformed or explicitly unsupported source records', () => {
   })
   assert.equal(graph.edges.length, 0)
   assert.equal(graph.rejected.length, 2)
+})
+
+test('catalog quarantines factory entries that have no executable liquidity', async () => {
+  const v2Pool = '0x0000000000000000000000000000000000000021'
+  const v3Pool = '0x0000000000000000000000000000000000000022'
+  const client = {
+    async readContract({ functionName }) {
+      if (functionName === 'getPair') return v2Pool
+      if (functionName === 'getReserves') return [0n, 1n, 0]
+      if (functionName === 'getPool') return v3Pool
+      if (functionName === 'liquidity') return 0n
+      throw new Error(`unexpected read ${functionName}`)
+    },
+  }
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n)
+  assert.equal(catalog.v2Pools.length, 0)
+  assert.equal(catalog.v3Pools.length, 0)
+  assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V2' && item.reason === 'zero reserve'))
+  assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V3' && item.reason === 'zero active liquidity'))
+})
+
+test('Permit2-incompatible Earn tokens disable only their input edges and add hyperedge', () => {
+  const graph = buildUnifiedLiquidityGraph({
+    earnPools: [
+      {
+        address: BPT,
+        initialized: true,
+        addLiquidityExecutable: false,
+        addLiquidityReason: 'blocked token approval',
+        tokens: [
+          { address: USDG, symbol: 'USDG', decimals: 6, permit2Compatible: true },
+          { address: STOCK, symbol: 'BLOCKED', decimals: 18, permit2Compatible: false },
+        ],
+      },
+    ],
+  })
+  assert.ok(graph.edges.some((edge) => edge.tokenIn === USDG && edge.tokenOut === STOCK))
+  assert.ok(!graph.edges.some((edge) => edge.tokenIn === STOCK && edge.venue === 'EARN'))
+  assert.ok(graph.hyperedges.some((edge) => edge.kind === 'EARN_REMOVE_PROPORTIONAL'))
+  assert.ok(!graph.hyperedges.some((edge) => edge.kind === 'EARN_ADD_UNBALANCED'))
+  assert.ok(graph.rejected.some((item) => item.venue === 'EARN_ADD' && item.reason === 'blocked token approval'))
+  assert.ok(graph.rejected.some((item) => item.venue === 'EARN_INPUT' && item.token === STOCK))
 })
 
 test('managed exact work keeps one best amount per route and fair settlement coverage', () => {

@@ -115,9 +115,23 @@ export function buildUnifiedLiquidityGraph(input) {
       if (!Array.isArray(source.tokens) || source.tokens.length < 2 || source.tokens.length > 8) {
         throw new Error('Earn pool token count is outside 2..8')
       }
-      const tokens = source.tokens.map((token) => addAsset(assets, token))
+      const tokenRecords = source.tokens.map((token) => ({
+        address: addAsset(assets, token),
+        permit2Compatible: token.permit2Compatible !== false,
+      }))
+      const tokens = tokenRecords.map((token) => token.address)
       addAsset(assets, { address: pool, symbol: source.symbol || source.name || null, decimals: 18 })
-      for (const tokenIn of tokens) {
+      for (const token of tokenRecords.filter((item) => !item.permit2Compatible)) {
+        rejected.push({
+          venue: 'EARN_INPUT',
+          pool,
+          token: token.address,
+          reason: 'token rejects canonical Permit2 approval; Earn input edges are disabled',
+        })
+      }
+      for (const tokenRecord of tokenRecords) {
+        const tokenIn = tokenRecord.address
+        if (!tokenRecord.permit2Compatible) continue
         for (const tokenOut of tokens) {
           if (tokenIn === tokenOut) continue
           addSwapEdge(edges, adjacency, {
@@ -139,15 +153,23 @@ export function buildUnifiedLiquidityGraph(input) {
         outputs: tokens,
         executable: true,
       })
-      hyperedges.push({
-        id: `EARN_ADD_${key(pool)}`,
-        kind: 'EARN_ADD_UNBALANCED',
-        venue: 'EARN',
-        pool,
-        inputs: tokens,
-        outputs: [pool],
-        executable: true,
-      })
+      if (source.addLiquidityExecutable !== false && tokenRecords.every((token) => token.permit2Compatible)) {
+        hyperedges.push({
+          id: `EARN_ADD_${key(pool)}`,
+          kind: 'EARN_ADD_UNBALANCED',
+          venue: 'EARN',
+          pool,
+          inputs: tokens,
+          outputs: [pool],
+          executable: true,
+        })
+      } else {
+        rejected.push({
+          venue: 'EARN_ADD',
+          pool,
+          reason: source.addLiquidityReason || 'one or more pool tokens reject canonical Permit2 approval',
+        })
+      }
     } catch (error) {
       reject('EARN', source, error)
     }

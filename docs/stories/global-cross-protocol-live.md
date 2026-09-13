@@ -10,6 +10,8 @@
 - 图同时包含四个场所和 Earn 加/退流动性超边；
 - USDG、WETH 均能发现跨场所闭环；
 - 当前 Earn 资产自动查询 v2/v3，v4 来源必须有审核或链上目录证明；
+- Factory 返回的 V2/V3 池必须分别有非零储备/active liquidity，空池只进入隔离证据；
+- Earn 输入边按代币对 canonical Permit2 的固定区块调用能力 admission，不影响该代币的其他协议边；
 - 2～4 跳枚举有组合上限、事件优先级与轮转覆盖，未入本轮不等于永久过滤。
 
 ## Story 2：通用执行但不能任意调用
@@ -21,6 +23,7 @@
 - 合约只支持六种 typed action，未知动作、伪池、错误 callback 和残余资产全部回滚；
 - Morpho 闪电贷与库存模式分别验证本金偿还和库存基线；
 - v2、v3、v4、Earn Swap、Earn 加池、Earn 退池都有确定性正向和负向测试；
+- 真实协议 fork 分别用可兼容的 ETHUSD 池验证加/退池，不把 EARN 的 Permit2 限制伪装成执行器能力；
 - `quoteWithFlash`、模拟和失败交易不计作收益。
 
 ## Story 3：发现后走最短可信提交路径

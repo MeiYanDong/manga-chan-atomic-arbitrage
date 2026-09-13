@@ -285,9 +285,6 @@ contract UniversalAtomicExecutor {
             revert UnauthorizedCallback();
         }
         IPoolManagerUniversalMinimal manager = IPoolManagerUniversalMinimal(UNISWAP_V4_POOL_MANAGER);
-        manager.sync(action.tokenIn);
-        _safeTransfer(action.tokenIn, UNISWAP_V4_POOL_MANAGER, amountIn);
-        if (manager.settle() != amountIn) revert SettlementMismatch();
         bool zeroForOne = action.v4Pool.currency0 == action.tokenIn;
         int256 delta = manager.swap(
             action.v4Pool,
@@ -299,6 +296,9 @@ contract UniversalAtomicExecutor {
             bytes("")
         );
         uint256 amountOut = _validateV4Delta(delta, zeroForOne, amountIn);
+        manager.sync(action.tokenIn);
+        _safeTransfer(action.tokenIn, UNISWAP_V4_POOL_MANAGER, amountIn);
+        if (manager.settle() != amountIn) revert SettlementMismatch();
         manager.take(action.tokenOut, address(this), amountOut);
         _setPhase(outerPhase);
         return abi.encode(amountOut);
@@ -456,11 +456,11 @@ contract UniversalAtomicExecutor {
         address[] memory tokens = _earnPoolTokens(action.pool);
         for (uint256 index = 0; index < tokens.length; ++index) _requireTracked(plan, tokens[index]);
         uint256[] memory minimumAmounts = new uint256[](tokens.length);
-        _forceApprove(action.pool, EARN_VAULT, amountIn);
+        _forceApprove(action.pool, EARN_ROUTER, amountIn);
         uint256[] memory outputs = IEarnRouterUniversalMinimal(EARN_ROUTER).removeLiquidityProportional(
             action.pool, amountIn, minimumAmounts, false, bytes("")
         );
-        _forceApprove(action.pool, EARN_VAULT, 0);
+        _forceApprove(action.pool, EARN_ROUTER, 0);
         if (outputs.length != tokens.length) revert SettlementMismatch();
         for (uint256 index = 0; index < outputs.length; ++index) aggregateOut += outputs[index];
     }

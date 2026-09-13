@@ -74,6 +74,7 @@ export function normalizeEarnOnHoodCatalog(snapshot, options = {}) {
           balance: balance.toString(),
           weight,
           priceUsd: Number.isFinite(Number(token.priceUsd)) ? Number(token.priceUsd) : null,
+          permit2Compatible: token.permit2Compatible !== false,
         }
       })
       seenPools.add(key(address))
@@ -84,6 +85,12 @@ export function normalizeEarnOnHoodCatalog(snapshot, options = {}) {
         tvlUsd,
         swapFee,
         tokens,
+        addLiquidityExecutable:
+          source.addLiquidityExecutable !== false && tokens.every((token) => token.permit2Compatible),
+        addLiquidityReason:
+          typeof source.addLiquidityReason === 'string' && source.addLiquidityReason.trim()
+            ? source.addLiquidityReason.trim().slice(0, 160)
+            : null,
       })
     } catch (error) {
       rejected.push({
