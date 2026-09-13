@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  BaseError,
+  ContractFunctionRevertedError,
   createPublicClient,
   createWalletClient,
   decodeErrorResult,
@@ -57,22 +59,10 @@ async function waitForRpc(child) {
   throw new Error('fork node did not become ready')
 }
 
-function findRevertData(error) {
-  const pending = [error]
-  const seen = new Set()
-  while (pending.length > 0) {
-    const item = pending.shift()
-    if (!item || seen.has(item)) continue
-    if (typeof item === 'string' && /^0x[0-9a-f]{8,}$/i.test(item)) return item
-    if (typeof item !== 'object') continue
-    seen.add(item)
-    for (const value of Object.values(item)) pending.push(value)
-  }
-  return null
-}
-
 function decodedExecutorError(error, abi) {
-  const data = findRevertData(error)
+  const reverted =
+    error instanceof BaseError ? error.walk((item) => item instanceof ContractFunctionRevertedError) : null
+  const data = reverted instanceof ContractFunctionRevertedError ? reverted.raw : null
   if (!data) return { selector: null, errorName: null, args: [] }
   try {
     const decoded = decodeErrorResult({ abi, data })
