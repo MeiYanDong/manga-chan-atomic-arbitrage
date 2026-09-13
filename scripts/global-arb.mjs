@@ -39,7 +39,9 @@ import {
 import { globalSettlementAssets } from '../src/global-settlement-assets.mjs'
 import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
+import { DailyHotRpcBudget, jsonRpcCallCount } from '../src/hot-rpc-lane.mjs'
 import { classifyReconciliation, errorText, latestUnresolvedMutation } from '../src/policy.mjs'
+import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import {
   loadUniversalContractArtifact,
@@ -65,6 +67,7 @@ const STATE_PATH = path.join(RUN_DIR, 'universal-state.json')
 const AUDIT_PATH = path.join(RUN_DIR, 'audit.jsonl')
 const GLOBAL_SNAPSHOT_PATH = path.join(RUN_DIR, 'global-opportunity.json')
 const GLOBAL_CATALOG_PATH = path.join(RUN_DIR, 'global-catalog.json')
+const GLOBAL_RPC_BUDGET_PATH = path.join(RUN_DIR, 'global-rpc-fallback-budget.json')
 const SOURCE_CATALOG_PATH = path.join(RUN_DIR, 'source-catalog.json')
 const SIGNED_DIR = path.join(RUN_DIR, 'signed')
 const WALLET_LOCK_PATH = path.join(RUN_DIR, 'wallet.lock')
@@ -78,13 +81,37 @@ const chain = defineChain({
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: { default: { http: [RPC_URL] } },
 })
+let managedFallbackBudget = null
+
+function currentManagedFallbackBudget() {
+  if (!managedFallbackBudget) {
+    managedFallbackBudget = new DailyHotRpcBudget({
+      dailyEventCandidateCap: 1,
+      dailyLogicalCallCap: runtime.globalManagedFallbackDailyLogicalCallCap,
+      persisted: readJson(GLOBAL_RPC_BUDGET_PATH),
+      onChange: (state) => writeProtectedJson(GLOBAL_RPC_BUDGET_PATH, state),
+    })
+  }
+  return managedFallbackBudget
+}
+
+function consumeManagedFallbackBudget(body) {
+  const debit = currentManagedFallbackBudget().consumeLogicalCalls(jsonRpcCallCount(body))
+  if (!debit.consumed) throw new Error('managed RPC fallback daily logical-call budget exhausted')
+}
+
 const executionClient = createPublicClient({
   chain,
   transport: http(RPC_URL, { timeout: 30_000, retryCount: 1 }),
 })
 const discoveryClient = createPublicClient({
   chain,
-  transport: http(PUBLIC_RPC, { timeout: 30_000, retryCount: 2 }),
+  transport: publicFirstRpcTransport(PUBLIC_RPC, RPC_URL, {
+    managedFetchFn: async (input, init) => {
+      consumeManagedFallbackBudget(init?.body)
+      return globalThis.fetch(input, init)
+    },
+  }),
 })
 const erc20Abi = parseAbi([
   'function balanceOf(address) view returns (uint256)',
@@ -116,6 +143,10 @@ function stringify(value) {
 function readJson(file) {
   if (!fs.existsSync(file)) return null
   return JSON.parse(fs.readFileSync(file, 'utf8'))
+}
+
+function managedFallbackBudgetSnapshot() {
+  return currentManagedFallbackBudget().snapshot()
 }
 
 function writeProtectedJson(file, value) {
@@ -817,7 +848,7 @@ async function globalPreflight({ print = true } = {}) {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     status: selected ? 'EXACT_NET_POSITIVE' : 'NO_EXACT_NET_OPPORTUNITY',
-    evidence: 'PUBLIC_FULL_STATE_QUOTES_THEN_MANAGED_EXACT_SIMULATION_NO_SIGNATURE',
+    evidence: 'PUBLIC_FIRST_BATCHED_STATE_QUOTES_WITH_MANAGED_TRANSPORT_FALLBACK_THEN_MANAGED_EXACT_SIMULATION',
     graph: {
       blockNumber: block.number,
       assets: discovery.graph.assets.size,
@@ -838,6 +869,10 @@ async function globalPreflight({ print = true } = {}) {
     managedEvaluated: managedCandidates.length,
     managedMaximumCandidates: GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
     exactNetPositive: exact.length,
+    rpc: {
+      discoveryPolicy: 'PUBLIC_FIRST_BATCHED_WITH_BOUNDED_MANAGED_TRANSPORT_FALLBACK',
+      managedFallbackBudget: managedFallbackBudgetSnapshot(),
+    },
     selected: selected
       ? {
           templateId: selected.templateId,
@@ -1196,6 +1231,7 @@ function assertSharedAuthorization(deployment) {
     Number(arm.global.maximumRoutesPerWake) !== runtime.globalMaxRoutesPerWake ||
     Number(arm.global.quoteConcurrency) !== runtime.globalQuoteConcurrency ||
     Number(arm.global.managedMaximumCandidatesPerWake) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE ||
+    Number(arm.global.managedFallbackDailyLogicalCallCap) !== runtime.globalManagedFallbackDailyLogicalCallCap ||
     arm.global.settlementAssets.length !== SETTLEMENT_TOKENS.length ||
     arm.global.settlementAssets.some((token, index) => token.toLowerCase() !== SETTLEMENT_TOKENS[index].toLowerCase())
   ) {

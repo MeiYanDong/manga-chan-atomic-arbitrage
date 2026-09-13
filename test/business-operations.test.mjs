@@ -284,8 +284,12 @@ test('includes only receipt-gated universal executions in the operating totals',
       },
     ],
   }
-  input.arm.global = { settlementAssets: ['USDG', 'WETH'] }
-  input.runtime.global = { status: 'WATCHING', lastResult: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED' }
+  input.arm.global = { settlementAssets: ['USDG', 'WETH'], managedFallbackDailyLogicalCallCap: 20_000 }
+  input.runtime.global = {
+    status: 'WATCHING',
+    lastResult: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED',
+    rpc: { managedFallbackBudget: { consumedLogicalCalls: 432 } },
+  }
   input.runtime.usage.confirmedByBase.GLOBAL = 1
   const snapshot = buildBusinessSnapshot(input)
   assert.equal(snapshot.economics.today.verifiedExecutionNetUsdg, '1.5')
@@ -297,6 +301,8 @@ test('includes only receipt-gated universal executions in the operating totals',
     snapshot.economics.today.confirmedExecutions,
   )
   assert.equal(snapshot.strategy.global.confirmedExecutions, 1)
+  assert.equal(snapshot.strategy.global.managedFallbackLogicalCallsToday, 432)
+  assert.equal(snapshot.strategy.global.managedFallbackDailyLogicalCallCap, 20_000)
   assert.equal(snapshot.recentExecutions[0].route, '跨平台 2 跳循环')
 })
 

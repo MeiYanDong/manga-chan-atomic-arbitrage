@@ -52,6 +52,7 @@ const CONFIG_KEYS = new Set([
   'GLOBAL_EXTRA_SETTLEMENT_ASSETS',
   'GLOBAL_MAX_ROUTES_PER_WAKE',
   'GLOBAL_QUOTE_CONCURRENCY',
+  'GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP',
   'GLOBAL_LIVE_ARM',
 ])
 
@@ -150,6 +151,12 @@ export function loadRuntimeConfig(environment = process.env) {
     globalExtraSettlementAssets: value('GLOBAL_EXTRA_SETTLEMENT_ASSETS') || '',
     globalMaxRoutesPerWake: boundedInteger(value('GLOBAL_MAX_ROUTES_PER_WAKE'), 32, 4, 256),
     globalQuoteConcurrency: boundedInteger(value('GLOBAL_QUOTE_CONCURRENCY'), 8, 1, 16),
+    globalManagedFallbackDailyLogicalCallCap: boundedInteger(
+      value('GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP'),
+      20_000,
+      1_000,
+      1_000_000,
+    ),
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
 }

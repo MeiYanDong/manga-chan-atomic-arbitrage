@@ -333,6 +333,10 @@ export function buildBusinessSnapshot({
             lastNormalizedNetProfitUsdg: runtime?.global?.lastNormalizedNetProfitUsdg || null,
             nextPeriodicAt: runtime?.global?.nextPeriodicAt || null,
             settlementAssets: arm.global.settlementAssets?.length || 0,
+            managedFallbackLogicalCallsToday: Number(
+              runtime?.global?.rpc?.managedFallbackBudget?.consumedLogicalCalls || 0,
+            ),
+            managedFallbackDailyLogicalCallCap: Number(arm.global.managedFallbackDailyLogicalCallCap || 0),
           }
         : null,
     },
