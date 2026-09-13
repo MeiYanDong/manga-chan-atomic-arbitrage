@@ -12,6 +12,10 @@
 - Keep the mandatory four-template mainnet-fork gate bounded to its four exact calls. Per-action prefix replay remains
   an explicit one-template diagnostic mode, preventing a failed gate from silently expanding into dozens of fork
   calls and exhausting a small production host.
+- Probe each Earn token's canonical Permit2 approval behavior with a fixed-block, non-persistent `eth_call`. Preserve
+  swaps that receive a restricted token and every remove-liquidity edge, while excluding only Earn input edges and add
+  hyperedges that the deployed Router cannot fund. This captures venue-specific token behavior instead of assuming
+  every nominal ERC-20 is Permit2-compatible.
 - Make the universal mainnet-fork gate read its canonical catalog and place Hardhat's fork cache under `MANGA_RUN_DIR`
   by default, so the documented unprivileged production command validates protected runtime artifacts without path or
   filesystem-permission overrides.

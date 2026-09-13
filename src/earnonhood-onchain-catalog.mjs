@@ -1,4 +1,4 @@
-import { getAddress, keccak256 } from 'viem'
+import { encodeFunctionData, getAddress, keccak256 } from 'viem'
 
 import { normalizeEarnOnHoodCatalog } from './earnonhood-graph.mjs'
 import {
@@ -14,6 +14,7 @@ const NORMALIZED_WEIGHT_ONE = 1_000_000_000_000_000_000n
 const MULTICALL3 = getAddress('0xcA11bde05977b3631167028862bE2a173976CA11')
 const MULTICALL3_RUNTIME_CODE_HASH = '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891'
 const MULTICALL_SUBCALL_LIMIT = 12
+const PERMIT2 = getAddress('0x000000000022D473030F116dDEE9F6B43aC78BA3')
 
 const factoryAbi = [
   {
@@ -90,6 +91,18 @@ const metadataAbi = [
     outputs: [{ name: 'symbol', type: 'string' }],
   },
 ]
+const approvalAbi = [
+  {
+    type: 'function',
+    name: 'approve',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: 'approved', type: 'bool' }],
+  },
+]
 
 function key(address) {
   return String(address).toLowerCase()
@@ -140,6 +153,11 @@ function publicError(error) {
   return message.replace(/https?:\/\/[^\s]+/gi, '[endpoint]').slice(0, 240)
 }
 
+function successfulOptionalBoolean(data) {
+  if (!data || data === '0x') return true
+  return /^0x[0-9a-f]{64}$/i.test(data) && BigInt(data) === 1n
+}
+
 /**
  * Convert canonical onchain weighted-pool state into the discovery model.
  * Balances are deliberately kept in the Vault's common scaled-18 domain. The
@@ -171,6 +189,20 @@ export function buildEarnOnHoodCatalogFromOnchain({ records, blockNumber, factor
       if (BigInt(dynamicData.staticSwapFeePercentage) !== EXPECTED_STATIC_SWAP_FEE) {
         throw new Error('unexpected onchain swap fee')
       }
+      const sourceTokens = tokens.map((token, index) => {
+        const tokenAddress = getAddress(token)
+        const permit2Record = record.tokenPermit2Compatibility?.[key(tokenAddress)]
+        return {
+          address: tokenAddress,
+          symbol: record.tokenSymbols?.[key(tokenAddress)] || shortAddress(tokenAddress),
+          decimals: 18,
+          balance: BigInt(balances[index]).toString(),
+          weight: Number(BigInt(weights[index])) / 1e16,
+          priceUsd: null,
+          permit2Compatible: permit2Record ? permit2Record.compatible === true : true,
+        }
+      })
+      const blockedInputs = sourceTokens.filter((token) => !token.permit2Compatible)
       sourcePools.push({
         address,
         name: record.name || shortAddress(address),
@@ -179,17 +211,12 @@ export function buildEarnOnHoodCatalogFromOnchain({ records, blockNumber, factor
         recoveryMode: dynamicData.isPoolInRecoveryMode === true,
         tvlUsd: 0,
         swapFee: Number(BigInt(dynamicData.staticSwapFeePercentage)) / 1e16,
-        tokens: tokens.map((token, index) => {
-          const tokenAddress = getAddress(token)
-          return {
-            address: tokenAddress,
-            symbol: record.tokenSymbols?.[key(tokenAddress)] || shortAddress(tokenAddress),
-            decimals: 18,
-            balance: BigInt(balances[index]).toString(),
-            weight: Number(BigInt(weights[index])) / 1e16,
-            priceUsd: null,
-          }
-        }),
+        tokens: sourceTokens,
+        addLiquidityExecutable: blockedInputs.length === 0,
+        addLiquidityReason:
+          blockedInputs.length === 0
+            ? null
+            : `canonical Permit2 approval rejected by ${blockedInputs.map((token) => token.symbol).join(', ')}`,
       })
     } catch (error) {
       rejected.push({
@@ -307,8 +334,33 @@ export async function loadEarnOnHoodOnchainCatalog(client, blockNumber, options 
           : shortAddress(address),
     ]),
   )
+  const approvalData = encodeFunctionData({ abi: approvalAbi, functionName: 'approve', args: [PERMIT2, 0n] })
+  const permit2Checks = await mapWithConcurrency(tokenAddresses, 4, async (address) => {
+    try {
+      const result = await client.call({ account: EARN_VAULT, to: address, data: approvalData, blockNumber })
+      return {
+        compatible: successfulOptionalBoolean(result?.data),
+        evidence: 'FIXED_BLOCK_ETH_CALL_APPROVE_ZERO_TO_CANONICAL_PERMIT2',
+      }
+    } catch (error) {
+      return {
+        compatible: false,
+        evidence: 'FIXED_BLOCK_ETH_CALL_REVERTED',
+        reason: publicError(error),
+      }
+    }
+  })
+  const tokenPermit2Compatibility = Object.fromEntries(
+    tokenAddresses.map((address, index) => [key(address), permit2Checks[index]]),
+  )
   const records = poolReads.map((record) =>
-    record.error ? record : { ...record, tokenSymbols: Object.fromEntries(tokenLabels) },
+    record.error
+      ? record
+      : {
+          ...record,
+          tokenSymbols: Object.fromEntries(tokenLabels),
+          tokenPermit2Compatibility,
+        },
   )
   const catalog = buildEarnOnHoodCatalogFromOnchain({ records, blockNumber, factoryDisabled })
   return {

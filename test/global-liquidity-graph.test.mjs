@@ -115,6 +115,29 @@ test('catalog quarantines factory entries that have no executable liquidity', as
   assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V3' && item.reason === 'zero active liquidity'))
 })
 
+test('Permit2-incompatible Earn tokens disable only their input edges and add hyperedge', () => {
+  const graph = buildUnifiedLiquidityGraph({
+    earnPools: [
+      {
+        address: BPT,
+        initialized: true,
+        addLiquidityExecutable: false,
+        addLiquidityReason: 'blocked token approval',
+        tokens: [
+          { address: USDG, symbol: 'USDG', decimals: 6, permit2Compatible: true },
+          { address: STOCK, symbol: 'BLOCKED', decimals: 18, permit2Compatible: false },
+        ],
+      },
+    ],
+  })
+  assert.ok(graph.edges.some((edge) => edge.tokenIn === USDG && edge.tokenOut === STOCK))
+  assert.ok(!graph.edges.some((edge) => edge.tokenIn === STOCK && edge.venue === 'EARN'))
+  assert.ok(graph.hyperedges.some((edge) => edge.kind === 'EARN_REMOVE_PROPORTIONAL'))
+  assert.ok(!graph.hyperedges.some((edge) => edge.kind === 'EARN_ADD_UNBALANCED'))
+  assert.ok(graph.rejected.some((item) => item.venue === 'EARN_ADD' && item.reason === 'blocked token approval'))
+  assert.ok(graph.rejected.some((item) => item.venue === 'EARN_INPUT' && item.token === STOCK))
+})
+
 test('managed exact work keeps one best amount per route and fair settlement coverage', () => {
   const candidate = (settlementToken, templateId, quoteDelta, fundingMode = 'MORPHO_FLASH') => ({
     settlementToken,

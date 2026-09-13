@@ -16,8 +16,16 @@ import {
   parseUnits,
 } from 'viem'
 
-import { buildBptExecutionPlan, equalPremiumAllocations } from '../src/global-execution-plan.mjs'
-import { buildEarnBptArbitrageTemplates, buildUnifiedLiquidityGraph } from '../src/global-liquidity-graph.mjs'
+import {
+  buildBptExecutionPlan,
+  equalPremiumAllocations,
+  executionActionFromEdge,
+} from '../src/global-execution-plan.mjs'
+import {
+  buildEarnBptArbitrageTemplates,
+  buildUnifiedLiquidityGraph,
+  shortestSwapPaths,
+} from '../src/global-liquidity-graph.mjs'
 import { ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import { diagnosticErrorText } from '../src/policy.mjs'
 import { loadRuntimeConfig } from '../src/config.mjs'
@@ -36,7 +44,9 @@ const CATALOG_PATH = path.resolve(
 )
 const DIAGNOSTIC_FIRST_PREFIX = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_FIRST_PREFIX === '1'
 const DIAGNOSTIC_FIRST_TEMPLATE = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_FIRST_TEMPLATE === '1'
+const DIAGNOSTIC_TEMPLATE_KIND = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_TEMPLATE_KIND || null
 const EARN_OMNIPOOL = getAddress('0x070F0Bcf458c2A836cF68c986df3BA86586e64FD')
+const EARN_ETHUSD_POOL = getAddress('0x4114bC5fcF2272B3147d079821182303C0A0733C')
 const erc20Abi = parseAbi(['function decimals() view returns (uint8)'])
 const chain = defineChain({
   id: 4_663,
@@ -116,6 +126,66 @@ function weightedAllocations(principal, pool) {
     : allocations
 }
 
+function buildEarnAdapterRoundTrip(graph, catalog, settlementToken, principal, deadline) {
+  const pool = catalog.earn.pools.find((item) => item.address.toLowerCase() === EARN_ETHUSD_POOL.toLowerCase())
+  if (!pool || pool.tokens.length !== 2 || pool.addLiquidityExecutable === false) {
+    throw new Error('reviewed ETHUSD Earn add/remove adapter pool is not executable')
+  }
+  const settlementKey = settlementToken.toLowerCase()
+  const other = pool.tokens.find((token) => token.address.toLowerCase() !== settlementKey)?.address
+  if (!pool.tokens.some((token) => token.address.toLowerCase() === settlementKey) || !other) {
+    throw new Error('reviewed ETHUSD pool does not contain the settlement pair')
+  }
+  const outbound = shortestSwapPaths(graph, settlementToken, other, { maximumHops: 2, excludedVenue: 'EARN' })[0]
+  const inbound = shortestSwapPaths(graph, other, settlementToken, { maximumHops: 2, excludedVenue: 'EARN' })[0]
+  if (!outbound || !inbound) throw new Error('reviewed ETHUSD pool lacks external settlement paths')
+  const half = principal / 2n
+  if (half <= 0n) throw new Error('adapter principal is too small')
+  const actions = [
+    ...outbound.map((edge, index) => executionActionFromEdge(edge, index === 0 ? half : 0n)),
+    {
+      kind: 4,
+      tokenIn: '0x0000000000000000000000000000000000000000',
+      tokenOut: EARN_ETHUSD_POOL,
+      pool: EARN_ETHUSD_POOL,
+      amountIn: 0n,
+      minimumAmountOut: 1n,
+      fee: 0,
+      v4Pool: {
+        currency0: '0x0000000000000000000000000000000000000000',
+        currency1: '0x0000000000000000000000000000000000000000',
+        fee: 0,
+        tickSpacing: 0,
+        hooks: '0x0000000000000000000000000000000000000000',
+      },
+    },
+    {
+      kind: 5,
+      tokenIn: EARN_ETHUSD_POOL,
+      tokenOut: '0x0000000000000000000000000000000000000000',
+      pool: EARN_ETHUSD_POOL,
+      amountIn: 0n,
+      minimumAmountOut: 0n,
+      fee: 0,
+      v4Pool: {
+        currency0: '0x0000000000000000000000000000000000000000',
+        currency1: '0x0000000000000000000000000000000000000000',
+        fee: 0,
+        tickSpacing: 0,
+        hooks: '0x0000000000000000000000000000000000000000',
+      },
+    },
+    ...inbound.map((edge) => executionActionFromEdge(edge, 0n)),
+  ]
+  return {
+    settlementToken,
+    trackedTokens: [settlementToken, other, EARN_ETHUSD_POOL].map((token) => ({ token, maximumResidual: 1n })),
+    actions,
+    minimumProfit: 1n,
+    deadline,
+  }
+}
+
 async function main() {
   if (!fs.existsSync(CATALOG_PATH)) throw new Error('refresh the canonical global catalog before the fork test')
   fs.mkdirSync(FORK_CACHE_DIR, { recursive: true, mode: 0o700 })
@@ -163,17 +233,36 @@ async function main() {
         await publicClient.readContract({ address: settlementToken, abi: erc20Abi, functionName: 'decimals' }),
       )
       const principal = decimals === 18 ? parseUnits('0.001', decimals) : parseUnits('10', decimals)
-      const templates = buildEarnBptArbitrageTemplates(graph, settlementToken).filter(
-        (template) => template.pool.toLowerCase() === EARN_OMNIPOOL.toLowerCase(),
+      const allTemplates = buildEarnBptArbitrageTemplates(graph, settlementToken)
+      const templates = allTemplates.filter(
+        (template) =>
+          template.pool.toLowerCase() === EARN_OMNIPOOL.toLowerCase() &&
+          (DIAGNOSTIC_TEMPLATE_KIND
+            ? template.kind === DIAGNOSTIC_TEMPLATE_KIND
+            : template.kind === 'BPT_DISCOUNT_REMOVE_AND_SELL'),
       )
-      const pool = catalog.earn.pools.find((item) => item.address.toLowerCase() === EARN_OMNIPOOL.toLowerCase())
-      for (const template of templates) {
-        const plan = buildBptExecutionPlan(template, {
-          principal,
-          minimumProfit: 1n,
-          deadline: block.timestamp + 300n,
-          allocations: template.kind === 'BPT_PREMIUM_BUY_AND_ADD' ? weightedAllocations(principal, pool) : undefined,
+      const cases = templates.map((template) => {
+        const pool = catalog.earn.pools.find((item) => item.address.toLowerCase() === template.pool.toLowerCase())
+        return {
+          templateId: template.id,
+          kind: template.kind,
+          plan: buildBptExecutionPlan(template, {
+            principal,
+            minimumProfit: 1n,
+            deadline: block.timestamp + 300n,
+            allocations: template.kind === 'BPT_PREMIUM_BUY_AND_ADD' ? weightedAllocations(principal, pool) : undefined,
+          }),
+        }
+      })
+      if (!DIAGNOSTIC_FIRST_PREFIX && !DIAGNOSTIC_FIRST_TEMPLATE) {
+        cases.push({
+          templateId: `EARN_ADD_REMOVE_ADAPTER_${EARN_ETHUSD_POOL.toLowerCase()}`,
+          kind: 'EARN_ADD_REMOVE_ADAPTER_ROUND_TRIP',
+          plan: buildEarnAdapterRoundTrip(graph, catalog, settlementToken, principal, block.timestamp + 300n),
         })
+      }
+      for (const candidate of cases) {
+        const { plan } = candidate
         if (DIAGNOSTIC_FIRST_PREFIX || DIAGNOSTIC_FIRST_TEMPLATE) {
           const diagnosticPlan = DIAGNOSTIC_FIRST_PREFIX ? { ...plan, actions: plan.actions.slice(0, 1) } : plan
           const actionPrefixes = await diagnoseActionPrefixes({
@@ -192,7 +281,7 @@ async function main() {
                   : 'UNIVERSAL_MAINNET_FORK_FIRST_TEMPLATE_DIAGNOSTIC',
                 evidence: 'LOCAL_FORK_REAL_PROTOCOL_STATE_NO_MAINNET_BROADCAST',
                 forkBlock: block.number.toString(),
-                templateId: template.id,
+                templateId: candidate.templateId,
                 firstAction: plan.actions[0],
                 actionPrefixes,
               },
@@ -226,8 +315,8 @@ async function main() {
         results.push({
           settlementToken,
           decimals,
-          templateId: template.id,
-          kind: template.kind,
+          templateId: candidate.templateId,
+          kind: candidate.kind,
           principal: formatUnits(principal, decimals),
           quoteDeltaWei: delta?.toString() || null,
           failure,

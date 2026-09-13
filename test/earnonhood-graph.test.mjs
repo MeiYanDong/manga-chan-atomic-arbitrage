@@ -151,6 +151,10 @@ test('canonical onchain factory catalog discovers non-AI cycles without the Earn
         }),
       )
     },
+    async call({ to }) {
+      if (to.toLowerCase() === EARN.toLowerCase()) throw new Error('Permit2 blocked')
+      return { data: `0x${'0'.repeat(63)}1` }
+    },
     async readContract({ address, functionName }) {
       if (address.toLowerCase() === EARN_OMNIPOOL_FACTORY.toLowerCase()) {
         if (functionName === 'getVault') return EARN_VAULT
@@ -193,6 +197,14 @@ test('canonical onchain factory catalog discovers non-AI cycles without the Earn
   assert.equal(onchain.discoveredFactoryPools, 2)
   assert.equal(onchain.reviewedLegacyPools, 1)
   assert.equal(onchain.rejected.length, 0)
+  const legacy = onchain.pools.find(
+    (pool) => pool.address.toLowerCase() === EARN_REVIEWED_LEGACY_OMNIPOOLS[0].toLowerCase(),
+  )
+  assert.equal(legacy.addLiquidityExecutable, false)
+  assert.equal(
+    legacy.tokens.find((token) => token.address.toLowerCase() === EARN.toLowerCase()).permit2Compatible,
+    false,
+  )
   assert.ok(routes.some((route) => route.symbols.join('>') === 'WETH>PONS>WETH'))
   await assert.rejects(() => loadEarnOnHoodOnchainCatalog(client, 123n), /Multicall3 bytecode mismatch/)
 })
