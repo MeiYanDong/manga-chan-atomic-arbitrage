@@ -13,7 +13,7 @@ import {
 } from '../src/portfolio-monitor.mjs'
 
 const baseOperator = getAddress('0xb756c304B5411B6dC3e7A6CBCD512Fad8eB6Dca7')
-const baseExecutor = getAddress('0xb7e829E5146F613A3E8632515573C292dF82A7E2')
+const baseExecutor = getAddress('0x002ccD95D1304C6fB88f67183DC1e7d1b90A577F')
 const robinhoodOperator = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
 const robinhoodUsdg = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 const robinhoodWeth = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')

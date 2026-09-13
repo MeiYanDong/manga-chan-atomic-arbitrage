@@ -66,7 +66,7 @@ export const MONITORED_ACCOUNTS = Object.freeze([
     kind: 'CONTRACT',
     monitoringState: 'ACTIVE',
     primaryAsset: 'WETH',
-    address: getAddress('0xb7e829E5146F613A3E8632515573C292dF82A7E2'),
+    address: getAddress('0x002ccD95D1304C6fB88f67183DC1e7d1b90A577F'),
     expectedOperator: BASE_OPERATOR,
   },
   {
