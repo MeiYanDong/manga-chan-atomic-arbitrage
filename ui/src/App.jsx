@@ -1245,6 +1245,18 @@ function StrategyPage({ data, opportunityData, onOpenOpportunity }) {
             </dd>
           </div>
           <div>
+            <dt>全局跨池执行</dt>
+            <dd>{humanStatus(business?.strategy?.global?.status)}</dd>
+          </div>
+          <div>
+            <dt>全局本轮已确认</dt>
+            <dd>
+              {business?.strategy?.global
+                ? `${number(business.strategy.global.lastNormalizedNetProfitUsdg, 2, true)} USDG · ${business.strategy.global.confirmedExecutions ?? '—'} 笔`
+                : '未接入'}
+            </dd>
+          </div>
+          <div>
             <dt>飞书日报</dt>
             <dd>{humanStatus(business?.delivery?.status)}</dd>
           </div>

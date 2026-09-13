@@ -102,6 +102,53 @@ The dual reconciler delegates only the `earnonhood-execute` mutation to the Earn
 persisted raw transaction, receipt finality, the exact committed Swap sequence, canonical Gas and exact-block wallet
 delta. It never rebuilds, reprices or replaces the signed transaction.
 
+## Universal cross-protocol promotion
+
+The universal executor is a fourth execution generation inside the existing dual watcher and single wallet nonce lane.
+It admits only typed Earn and Uniswap v2/v3/v4 actions. Deployment creates code but grants no continuing authority;
+v7 arming separately binds its identity, settlement allowlist, funding/graph/route policy, Sequencer Feed and quote-work
+bounds.
+
+Before deployment:
+
+1. merge an immutable release only after GitHub `quality` passes, then stop and durably disarm the existing dual watcher;
+2. run `npm run dual:reconcile` and require no unresolved mutation plus equal latest/pending wallet nonce;
+3. refresh `global-catalog.json` from public chain state and run `npm run global:fork-test` with the configured managed
+   reader. The smoke must deploy the exact bytecode on a local mainnet fork and quote real Morpho, Earn and Uniswap
+   state; a public-RPC timeout is not a pass;
+4. run Linux `systemd-analyze verify`, `npm run global:deploy-preflight`, and inspect wallet reserve, Gas envelope and
+   all three compile hashes; and
+5. start the dedicated credential-bearing one-shot unit. Never copy the private key into an interactive shell.
+
+```bash
+cd /opt/manga-chan-arbitrage/current
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run global:catalog:refresh
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run global:fork-test
+sudo -u manga-chan-arb env \
+  MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/live.env \
+  MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage \
+  npm run global:deploy-preflight
+sudo systemctl start manga-global-deploy.service
+sudo systemctl --no-pager --full status manga-global-deploy.service
+```
+
+Require `UNIVERSAL_DEPLOYMENT_CONFIRMED`, a successful canonical receipt, exact runtime hash, operator and Morpho
+readback, and equal latest/pending nonce. Then run `npm run global:preflight` without a signer. A positive quote is still
+not profit and a negative result must not be turned into a Gas-spending probe. Start `manga-dual-arm.service` only after
+`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v7 watcher may
+then execute a route only after current exact simulation; accepted effects require receipt, `Executed` event and balance
+delta.
+
+If deployment or execution becomes UNKNOWN, leave the watcher stopped and run `npm run global:reconcile` (or the parent
+`dual:reconcile`). Reconciliation may replay only the exact persisted raw transaction. Never deploy a second universal
+executor while the first deployment mutation is unresolved.
+
 ## Rollback
 
 1. disarm and stop the watcher;

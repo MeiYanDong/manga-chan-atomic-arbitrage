@@ -186,6 +186,7 @@ async function currentBusinessSnapshot(delivery = deliveryState()) {
     runtime,
     usdgState: readJson(path.join(RUN_DIR, 'generic-state.json')),
     wethState: readJson(path.join(RUN_DIR, 'weth-state.json')),
+    universalState: readJson(path.join(RUN_DIR, 'universal-state.json')),
     auditRecords: readJsonLines(path.join(RUN_DIR, 'audit.jsonl')),
     collectionRecords: readJsonLines(path.join(RUN_DIR, 'legacy-collection-audit.jsonl')),
     earnOnHoodRecords: readJsonLines(path.join(RUN_DIR, 'earnonhood-audit.jsonl')),

@@ -1,12 +1,14 @@
 import { keccak256, toHex } from 'viem'
 import { EARN_SIZING_ALGORITHM } from './earnonhood-live-policy.mjs'
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from './earnonhood-routes.mjs'
+import { GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE } from './global-liquidity-graph.mjs'
 import { stableStringify } from './journal.mjs'
 import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v6'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v7'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6 = 'dual-base-loopback-escalation-v6'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5 = 'dual-base-loopback-escalation-v5'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4 = 'dual-base-loopback-escalation-v4'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v1'
@@ -23,7 +25,7 @@ const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3 = 'dual-base-loopback-escalati
 export function isDualOpportunityMiss(error) {
   return (
     isGenericOpportunityMiss(error) ||
-    /no dual-base candidate passed exact|no fresh typed dual-base|triggered dual-base candidate left|candidate exceeds realized authorized principal|principal is below candidate amount|exact normalized net profit is below|exact WETH simulation does not meet|WETH gross profit cannot fund|protected WETH max fee is below|worst-case Gas breaks|current gas price moved above|fee increased beyond the protected preflight cap|quote fell below the protected output floor|left the current dynamic Earn graph|absent from the current official catalog/i.test(
+    /no dual-base candidate passed exact|no fresh typed dual-base|triggered dual-base candidate left|candidate exceeds realized authorized principal|principal is below candidate amount|exact normalized net profit is below|exact WETH simulation does not meet|WETH gross profit cannot fund|protected WETH max fee is below|worst-case Gas breaks|current gas price moved above|fee increased beyond the protected preflight cap|quote fell below the protected output floor|left the current dynamic Earn graph|absent from the current official catalog|selected opportunity decayed before signing|gross quote does not fund worst-case Gas plus net floor|protected gas limit is below the final exact estimate/i.test(
       errorText(error),
     )
   )
@@ -205,6 +207,7 @@ export function dualAuthorizationCommitment(arm) {
     escalationRpcBehavior: arm.escalationRpcBehavior,
     rpcSource: arm.rpcSource,
     earnOnHood: arm.earnOnHood,
+    global: arm.global,
   }
 }
 
@@ -243,19 +246,22 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
     (record) =>
       record.event === 'mutation_signed' &&
       record.authorizationId === arm.authorizationId &&
-      ['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(record.kind),
+      ['generic-execute', 'weth-execute', 'earnonhood-execute', 'global-execute'].includes(record.kind),
   ).length
   const exactPreflights = records.filter(
     (record) =>
-      ['dual_watch_exact_preflight_started', 'earn_watch_exact_preflight_started'].includes(record.event) &&
-      record.authorizationId === arm.authorizationId,
+      [
+        'dual_watch_exact_preflight_started',
+        'earn_watch_exact_preflight_started',
+        'global_watch_exact_preflight_started',
+      ].includes(record.event) && record.authorizationId === arm.authorizationId,
   ).length
   const failedGasWei = records
     .filter(
       (record) =>
         record.event === 'mutation_reverted' &&
         record.authorizationId === arm.authorizationId &&
-        ['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(record.kind),
+        ['generic-execute', 'weth-execute', 'earnonhood-execute', 'global-execute'].includes(record.kind),
     )
     .reduce((total, record) => total + BigInt(record.gasSpentWei || 0), 0n)
   const earnEffects = records.filter(
@@ -265,6 +271,17 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
       record.kind === 'earnonhood-execute',
   )
   const earnConfirmed = new Set(earnEffects.map((record) => record.hash).filter(Boolean)).size
+  const globalEffects = records.filter(
+    (record) =>
+      record.event === 'mutation_effect' &&
+      record.authorizationId === arm.authorizationId &&
+      record.kind === 'global-execute',
+  )
+  const globalConfirmed = new Set(globalEffects.map((record) => record.hash).filter(Boolean)).size
+  const globalRealizedNetProfitUsdgWei = globalEffects.reduce(
+    (total, record) => total + BigInt(record.normalizedNetProfitUsdgWei || 0),
+    0n,
+  )
   const earnRealizedNetProfitWei = earnEffects.reduce(
     (total, record) => total + BigInt(record.realizedNetProfitWei || 0),
     0n,
@@ -285,13 +302,15 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
     usdgConfirmed,
     wethConfirmed,
     earnConfirmed,
-    confirmedExecutions: usdgConfirmed + wethConfirmed + earnConfirmed,
+    globalConfirmed,
+    confirmedExecutions: usdgConfirmed + wethConfirmed + earnConfirmed + globalConfirmed,
     signedAttempts,
     exactPreflights,
     failedGasWei,
     earnRealizedNetProfitWei,
     earnFailedGasWei,
     earnGasSurplusWei,
+    globalRealizedNetProfitUsdgWei,
   }
 }
 
@@ -308,6 +327,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3,
@@ -319,6 +339,34 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.expiresAt !== undefined
   ) {
     return { allowed: false, reason: 'invalid-authorization-policy' }
+  }
+  if (
+    arm.policyVersion === DUAL_AUTHORIZATION_POLICY_VERSION &&
+    (arm.global?.enabled !== true ||
+      arm.global?.lane !== 'global-v1' ||
+      !/^0x[0-9a-f]{40}$/i.test(String(arm.global?.executor || '')) ||
+      !/^0x[0-9a-f]{64}$/i.test(String(arm.global?.sourceHash || '')) ||
+      !/^0x[0-9a-f]{64}$/i.test(String(arm.global?.runtimeCodeHash || '')) ||
+      !Array.isArray(arm.global?.settlementAssets) ||
+      arm.global.settlementAssets.length < 2 ||
+      arm.global.settlementAssets.length > 16 ||
+      arm.global.settlementAssets.some((asset) => !/^0x[0-9a-f]{40}$/i.test(String(asset))) ||
+      new Set(arm.global.settlementAssets.map((asset) => String(asset).toLowerCase())).size !==
+        arm.global.settlementAssets.length ||
+      arm.global?.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
+      arm.global?.graphPolicy !== 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY' ||
+      arm.global?.routePolicy !== 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS' ||
+      !Number.isSafeInteger(arm.global?.maximumRoutesPerWake) ||
+      arm.global.maximumRoutesPerWake < 4 ||
+      arm.global.maximumRoutesPerWake > 256 ||
+      !Number.isSafeInteger(arm.global?.quoteConcurrency) ||
+      arm.global.quoteConcurrency < 1 ||
+      arm.global.quoteConcurrency > 16 ||
+      arm.global?.managedMaximumCandidatesPerWake !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE ||
+      arm.global?.submissionPolicy !== 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK' ||
+      arm.global?.feedPolicy !== 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE')
+  ) {
+    return { allowed: false, reason: 'invalid-global-policy' }
   }
   let maxFailedGas
   let minimumNetProfitUsdg
@@ -368,7 +416,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       return { allowed: false, reason: 'invalid-earnonhood-economics' }
     }
     if (
-      arm.policyVersion === DUAL_AUTHORIZATION_POLICY_VERSION &&
+      [DUAL_AUTHORIZATION_POLICY_VERSION, LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6].includes(arm.policyVersion) &&
       (arm.earnOnHood?.sizingAlgorithm !== EARN_SIZING_ALGORITHM ||
         !Number.isSafeInteger(Number(arm.earnOnHood?.coarseProbePoints)) ||
         Number(arm.earnOnHood.coarseProbePoints) < 4 ||
@@ -412,9 +460,12 @@ export function validateDualSignedAttempt(arm, records, currentAttempt, unresolv
     (record) =>
       record.event === 'mutation_signed' &&
       record.authorizationId === arm.authorizationId &&
-      ['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(record.kind),
+      ['generic-execute', 'weth-execute', 'earnonhood-execute', 'global-execute'].includes(record.kind),
   )
-  if (!currentAttempt || !['generic-execute', 'weth-execute', 'earnonhood-execute'].includes(currentAttempt.kind)) {
+  if (
+    !currentAttempt ||
+    !['generic-execute', 'weth-execute', 'earnonhood-execute', 'global-execute'].includes(currentAttempt.kind)
+  ) {
     return { allowed: false, reason: 'signed-attempt-reservation-mismatch' }
   }
   if (

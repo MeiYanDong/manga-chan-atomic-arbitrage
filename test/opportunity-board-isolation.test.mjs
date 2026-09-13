@@ -447,8 +447,9 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const dualWatcher = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-watcher.service'), 'utf8')
   const dualArm = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-arm.service'), 'utf8')
   const wethDeploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-weth-deploy.service'), 'utf8')
+  const globalDeploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-global-deploy.service'), 'utf8')
 
-  for (const unit of [watcher, arm, deploy, dualWatcher, dualArm, wethDeploy]) {
+  for (const unit of [watcher, arm, deploy, dualWatcher, dualArm, wethDeploy, globalDeploy]) {
     assert.match(unit, /^User=manga-chan-arb$/m)
     assert.match(unit, /^LoadCredentialEncrypted=manga-private-key:/m)
     assert.match(unit, /^Environment=MANGA_RUN_DIR=\/var\/lib\/manga-chan-arbitrage$/m)
@@ -466,6 +467,15 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     deploy,
     /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service.*manga-dual-watcher\.service/m,
   )
+  assert.match(globalDeploy, /^Type=oneshot$/m)
+  assert.match(globalDeploy, /^ExecStart=\/usr\/bin\/env GLOBAL_DEPLOY_ARM=1 npm run global:deploy$/m)
+  assert.match(globalDeploy, /^TimeoutStartSec=240$/m)
+  assert.match(
+    globalDeploy,
+    /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service.*manga-dual-watcher\.service/m,
+  )
+  const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
+  assert.match(installer, /manga-global-deploy\.service/)
   assert.match(
     fixed,
     /^Conflicts=.*manga-generic-watcher\.service.*manga-dual-watcher\.service.*manga-dual-arm\.service.*manga-dual-weth-deploy\.service/m,
@@ -517,6 +527,17 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const executeEnd = dualSource.indexOf('async function reconcile(', executeStart)
   const executeSource = dualSource.slice(executeStart, executeEnd)
   assert.doesNotMatch(executeSource, /currentBoard = await boardCandidates/)
+
+  const globalSource = fs.readFileSync(path.join(root, 'scripts', 'global-arb.mjs'), 'utf8')
+  assert.match(globalSource, /manual global execution requires GLOBAL_LIVE_ARM=1/)
+  assert.match(globalSource, /BigInt\(arm\.global\.minimumNetProfitUsdgWei\) !== MINIMUM_NET_USDG/)
+  assert.match(globalSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== runtime\.globalMaxRoutesPerWake/)
+  assert.match(globalSource, /Number\(arm\.global\.quoteConcurrency\) !== runtime\.globalQuoteConcurrency/)
+  assert.match(globalSource, /managedMaximumCandidatesPerWake\) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE/)
+  assert.match(globalSource, /arm\.global\.settlementAssets\.length !== SETTLEMENT_TOKENS\.length/)
+  assert.match(dualSource, /arm\.global\.settlementAssets\.length !== configuredGlobalSettlementAssets\.length/)
+  assert.match(dualSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== RUNTIME_CONFIG\.globalMaxRoutesPerWake/)
+  assert.match(dualSource, /Number\(arm\.global\.quoteConcurrency\) !== RUNTIME_CONFIG\.globalQuoteConcurrency/)
 })
 
 test('legacy collection is a one-shot allowlisted signer with a shared wallet lane', () => {

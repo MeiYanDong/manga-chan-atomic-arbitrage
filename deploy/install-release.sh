@@ -66,6 +66,7 @@ install -o root -g root -m 0644 deploy/systemd/manga-generic-arm.service /etc/sy
 install -o root -g root -m 0644 deploy/systemd/manga-generic-deploy.service /etc/systemd/system/manga-generic-deploy.service
 install -o root -g root -m 0644 deploy/systemd/manga-generic-watcher.service /etc/systemd/system/manga-generic-watcher.service
 install -o root -g root -m 0644 deploy/systemd/manga-dual-weth-deploy.service /etc/systemd/system/manga-dual-weth-deploy.service
+install -o root -g root -m 0644 deploy/systemd/manga-global-deploy.service /etc/systemd/system/manga-global-deploy.service
 install -o root -g root -m 0644 deploy/systemd/manga-dual-arm.service /etc/systemd/system/manga-dual-arm.service
 install -o root -g root -m 0644 deploy/systemd/manga-dual-watcher.service /etc/systemd/system/manga-dual-watcher.service
 install -o root -g root -m 0644 deploy/systemd/manga-legacy-collect.service /etc/systemd/system/manga-legacy-collect.service

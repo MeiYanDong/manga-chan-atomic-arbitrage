@@ -90,7 +90,7 @@ function executionNetUsdgWei(record) {
 }
 
 function executionBase(record) {
-  return record?.baseAsset === 'WETH' ? 'WETH' : 'USDG'
+  return /^[A-Z0-9._-]{2,16}$/.test(String(record?.baseAsset || '')) ? record.baseAsset : 'USDG'
 }
 
 function executionDateKey(record) {
@@ -171,9 +171,10 @@ function executionSummary(records, earnExecutions, { periodKey = null, authoriza
     periodKey,
     confirmedExecutions: selected.length + selectedEarn.length,
     confirmedByBase: {
-      USDG: selected.filter((record) => executionBase(record) === 'USDG').length,
-      WETH: selected.filter((record) => executionBase(record) === 'WETH').length,
+      USDG: selected.filter((record) => record?.lane !== 'global-v1' && executionBase(record) === 'USDG').length,
+      WETH: selected.filter((record) => record?.lane !== 'global-v1' && executionBase(record) === 'WETH').length,
       EARN_ETH: selectedEarn.length,
+      GLOBAL: selected.filter((record) => record?.lane === 'global-v1').length,
     },
     verifiedExecutionNetUsdg: decimal(netUsdgWei, 6),
     verifiedExecutionNetEth: decimal(netEthWei, 18),
@@ -201,7 +202,11 @@ function failedGasSummary(auditRecords, periodKey = null) {
 
 function recentExecution(record) {
   const baseAsset = executionBase(record)
-  const baseDecimals = baseAsset === 'WETH' ? 18 : 6
+  const baseDecimals = Number.isSafeInteger(Number(record?.settlementDecimals))
+    ? Number(record.settlementDecimals)
+    : baseAsset === 'WETH'
+      ? 18
+      : 6
   return {
     transactionHash: record.hash || null,
     confirmedAt: record.confirmedAt || null,
@@ -255,6 +260,7 @@ export function buildBusinessSnapshot({
   runtime = null,
   usdgState = null,
   wethState = null,
+  universalState = null,
   auditRecords = [],
   board = /** @type {Record<string, any>} */ ({}),
   delivery = null,
@@ -267,7 +273,11 @@ export function buildBusinessSnapshot({
   earnOnHoodRecords = [],
 }) {
   const timestamp = asDate(now)
-  const executions = [...(usdgState?.executions || []), ...(wethState?.executions || [])]
+  const executions = [
+    ...(usdgState?.executions || []),
+    ...(wethState?.executions || []),
+    ...(universalState?.executions || []),
+  ]
   const earnExecutions = canonicalEarnExecutions(earnOnHoodRecords)
   const authorizationId = arm?.authorizationId || null
   const today = shanghaiDateKey(timestamp)
@@ -313,6 +323,16 @@ export function buildBusinessSnapshot({
             lastResult: runtime?.earnOnHood?.lastResult || null,
             lastDynamicMaximumPrincipalEth: runtime?.earnOnHood?.lastDynamicMaximumPrincipalEth || null,
             nextPeriodicAt: runtime?.earnOnHood?.nextPeriodicAt || null,
+          }
+        : null,
+      global: arm?.global
+        ? {
+            status: runtime?.global?.status || 'UNKNOWN',
+            confirmedExecutions: Number(runtime?.usage?.confirmedByBase?.GLOBAL || 0),
+            lastResult: runtime?.global?.lastResult || null,
+            lastNormalizedNetProfitUsdg: runtime?.global?.lastNormalizedNetProfitUsdg || null,
+            nextPeriodicAt: runtime?.global?.nextPeriodicAt || null,
+            settlementAssets: arm.global.settlementAssets?.length || 0,
           }
         : null,
     },
@@ -458,7 +478,7 @@ export function formatFeishuDailyReport(snapshot, periodKey) {
   return [
     `【MANGA 套利经营日报｜${periodKey}】`,
     `昨日结果：已确认净收益 ${signed(period.verifiedExecutionNetUsdg)} USDG；${signed(period.verifiedExecutionNetEth, 6)} ETH`,
-    `成交：${period.confirmedExecutions} 笔（USDG 本金 ${period.confirmedByBase.USDG} 笔，WETH 本金 ${period.confirmedByBase.WETH} 笔，Earn ETH ${period.confirmedByBase.EARN_ETH} 笔）`,
+    `成交：${period.confirmedExecutions} 笔（USDG 本金 ${period.confirmedByBase.USDG} 笔，WETH 本金 ${period.confirmedByBase.WETH} 笔，Earn ETH ${period.confirmedByBase.EARN_ETH} 笔，全局跨池 ${period.confirmedByBase.GLOBAL || 0} 笔）`,
     `失败成本：${display(period.failedGasEth, 6)} ETH（${period.failedTransactions} 笔失败交易）`,
     `当前策略：${systemLabel}，累计净收益 ${signed(active?.verifiedExecutionNetUsdg || 0)} USDG；${signed(active?.verifiedExecutionNetEth || 0, 6)} ETH，共 ${active?.confirmedExecutions || 0} 笔`,
     `可复投资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,

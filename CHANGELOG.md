@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add a typed-only universal atomic executor and one asset graph across Earn plus Uniswap v2/v3/v4. Support USDG,
+  WETH and explicitly allowlisted settlement assets backed by zero-fee Morpho flash liquidity or protected executor
+  inventory. Enumerate bounded BPT premium/discount templates and rotating 2–4 hop cross-venue cycles, refine positive
+  sizes without a fixed capital cap, and preserve exact pool, residual, repayment, minimum-profit and receipt-effect
+  checks.
+- Add the Robinhood Sequencer Feed as an address-filtered wake source and submit every persisted signed raw transaction
+  to the official Sequencer before falling back to the managed RPC with that identical raw. Bind the executor hashes,
+  settlement/funding/graph/route/feed/submission policies and quote-work bounds to a fresh v7 authorization, include
+  global effects in the single nonce ledger, daily-profit model and Chinese operations dashboard, and retain public
+  RPC for broad discovery.
 - Remove the Earn website API from the live signing dependency after Cloudflare challenged the production server with
   HTTP 403. Discover all pools directly from the canonical Omnipool Factory, retain one explicitly reviewed pre-factory
   pool, and read each pool's immutable tokens/weights plus current scaled balances/status at one chain block. Quarantine
