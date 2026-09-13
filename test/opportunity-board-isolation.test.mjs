@@ -538,6 +538,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualSource, /arm\.global\.settlementAssets\.length !== configuredGlobalSettlementAssets\.length/)
   assert.match(dualSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== RUNTIME_CONFIG\.globalMaxRoutesPerWake/)
   assert.match(dualSource, /Number\(arm\.global\.quoteConcurrency\) !== RUNTIME_CONFIG\.globalQuoteConcurrency/)
+
+  const forkSource = fs.readFileSync(path.join(root, 'scripts', 'universal-mainnet-fork-test.mjs'), 'utf8')
+  assert.match(forkSource, /runtime\.runDir \? path\.resolve\(runtime\.runDir\) : path\.join\(ROOT, 'runs'\)/)
+  assert.match(forkSource, /path\.join\(DEFAULT_RUNTIME_DIR, 'global-catalog\.json'\)/)
+  assert.match(forkSource, /path\.join\(DEFAULT_RUNTIME_DIR, 'hardhat-fork-cache'\)/)
+  assert.match(forkSource, /MANGA_HARDHAT_CACHE: FORK_CACHE_DIR/)
 })
 
 test('legacy collection is a one-shot allowlisted signer with a shared wallet lane', () => {

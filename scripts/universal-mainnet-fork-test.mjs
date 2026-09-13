@@ -27,8 +27,10 @@ const FORK_SOURCE =
   process.env.MANGA_UNIVERSAL_FORK_SOURCE || runtime.rpcUrl || 'https://rpc.mainnet.chain.robinhood.com'
 const RPC_PORT = Number(process.env.MANGA_UNIVERSAL_FORK_PORT || 18_552)
 const RPC_URL = `http://127.0.0.1:${RPC_PORT}`
+const DEFAULT_RUNTIME_DIR = runtime.runDir ? path.resolve(runtime.runDir) : path.join(ROOT, 'runs')
+const FORK_CACHE_DIR = path.join(DEFAULT_RUNTIME_DIR, 'hardhat-fork-cache')
 const CATALOG_PATH = path.resolve(
-  process.env.MANGA_UNIVERSAL_FORK_CATALOG || path.join(ROOT, 'runs', 'global-catalog.json'),
+  process.env.MANGA_UNIVERSAL_FORK_CATALOG || path.join(DEFAULT_RUNTIME_DIR, 'global-catalog.json'),
 )
 const EARN_OMNIPOOL = getAddress('0x070F0Bcf458c2A836cF68c986df3BA86586e64FD')
 const erc20Abi = parseAbi(['function decimals() view returns (uint8)'])
@@ -88,13 +90,19 @@ function weightedAllocations(principal, pool) {
 
 async function main() {
   if (!fs.existsSync(CATALOG_PATH)) throw new Error('refresh the canonical global catalog before the fork test')
+  fs.mkdirSync(FORK_CACHE_DIR, { recursive: true, mode: 0o700 })
+  fs.chmodSync(FORK_CACHE_DIR, 0o700)
   const catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8'))
   const hardhat = path.join(ROOT, 'node_modules', '.bin', 'hardhat')
   const diagnostics = []
   const child = spawn(
     hardhat,
     ['node', '--hostname', '127.0.0.1', '--port', String(RPC_PORT), '--chain-id', '4663', '--fork', FORK_SOURCE],
-    { cwd: ROOT, env: { ...process.env, NO_COLOR: '1' }, stdio: ['ignore', 'pipe', 'pipe'] },
+    {
+      cwd: ROOT,
+      env: { ...process.env, MANGA_HARDHAT_CACHE: FORK_CACHE_DIR, NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
   )
   child.stdout.on('data', (chunk) => diagnostics.push(chunk.toString()))
   child.stderr.on('data', (chunk) => diagnostics.push(chunk.toString()))
