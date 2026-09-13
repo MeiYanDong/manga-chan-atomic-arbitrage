@@ -1,5 +1,6 @@
 export const PAGES = Object.freeze([
   { id: 'overview', label: '概览' },
+  { id: 'opportunities', label: '机会' },
   { id: 'activity', label: '交易' },
   { id: 'portfolio', label: '资金' },
   { id: 'strategy', label: '策略' },
@@ -35,15 +36,40 @@ export function currentPage(hash) {
   const aliases = {
     execution: 'activity',
     ledger: 'activity',
-    opportunities: 'strategy',
-    radar: 'strategy',
-    episodes: 'strategy',
+    radar: 'opportunities',
+    episodes: 'opportunities',
     more: 'strategy',
     sources: 'strategy',
     system: 'strategy',
   }
   const normalized = aliases[candidate] || candidate
   return PAGES.some((page) => page.id === normalized) ? normalized : 'overview'
+}
+
+export function opportunityStageLabel(stage) {
+  const labels = {
+    NOW: '现在能做',
+    NEAR: '接近门槛',
+    FILTERED: '已过滤',
+    UNKNOWN: '错过与未知',
+  }
+  return labels[stage] || '待核验'
+}
+
+export function opportunityStageTone(stage) {
+  if (stage === 'NOW') return 'READY'
+  if (stage === 'NEAR') return 'PARTIAL'
+  if (stage === 'FILTERED') return 'NO_SHOT'
+  return 'UNKNOWN'
+}
+
+export function crossChainRouteResult(route) {
+  const net = Number.parseFloat(String(route?.estimatedNetProfit || ''))
+  if (!Number.isFinite(net)) return { stage: 'UNKNOWN', label: '结果待核验' }
+  if (net > 0) return { stage: 'NEAR', label: '只读净正，待执行准入' }
+  const gross = Number.parseFloat(String(route?.grossProfit || ''))
+  if (Number.isFinite(gross) && gross > 0) return { stage: 'NEAR', label: 'Gas 与风险储备吞掉价差' }
+  return { stage: 'FILTERED', label: '闭环毛利不为正' }
 }
 
 export function formatMetric(value, digits = 2) {
@@ -82,6 +108,7 @@ export function toneForStatus(status) {
       'REALIZED_NET_VERIFIED',
       'VERIFIED',
       'RUNNING',
+      'READY',
     ].includes(status)
   ) {
     return 'verified'
@@ -91,6 +118,7 @@ export function toneForStatus(status) {
       'FRESH_PROXY_POSITIVE',
       'SCREENED_PROXY',
       'BACKFILL_PARTIAL',
+      'BACKFILLING',
       'PARTIAL',
       'PENDING',
       'PARKED',
@@ -236,6 +264,7 @@ export function humanStatus(status) {
     CONFIRMED: '已确认',
     REVERTED: '已回滚',
     CURRENT: '正常',
+    BACKFILLING: '回溯中',
     LIMITED: '覆盖有限',
     PASSED: '已通过',
     NONE: '尚未执行',

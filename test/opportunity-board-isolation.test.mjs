@@ -227,6 +227,23 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   assert.doesNotMatch(example, /MANGA_PRIVATE_KEY|MANGA_RPC_URL=|MANGA_WS_URL=/)
 })
 
+test('competitor census is a public-RPC receipt reader without a signer lane', () => {
+  const unit = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-opportunity-census.service'), 'utf8')
+  const source = fs.readFileSync(path.join(root, 'scripts', 'earn-competitor-census.mjs'), 'utf8')
+  const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
+  assert.match(unit, /^User=manga-board$/m)
+  assert.match(unit, /^Group=manga-board$/m)
+  assert.match(unit, /^StateDirectory=manga-opportunity-census$/m)
+  assert.match(unit, /^StateDirectoryMode=0755$/m)
+  assert.match(unit, /^ProtectSystem=strict$/m)
+  assert.match(unit, /^ReadWritePaths=\/var\/lib\/manga-opportunity-census$/m)
+  assert.doesNotMatch(unit, /EnvironmentFile|LoadCredential|MANGA_PRIVATE_KEY|MANGA_RPC_URL|MANGA_WS_URL/)
+  assert.doesNotMatch(source, /createWalletClient|privateKeyToAccount|eth_sendRawTransaction/)
+  assert.match(source, /https:\/\/rpc\.mainnet\.chain\.robinhood\.com/)
+  assert.match(source, /buildEarnCompetitorSnapshot/)
+  assert.match(installer, /manga-opportunity-census\.service/)
+})
+
 test('release installer rebuilds artifacts without repeating CI contract suites on production', () => {
   const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -343,6 +360,10 @@ test('public dashboard proxy exposes only the read-only presentation surface', (
     nginx,
     /^\s*location = \/api\/v1\/opportunities\/chains \{$[\s\S]*?^\s*alias \/var\/lib\/atomic-cycle-shadow\/public\.json;$/m,
   )
+  assert.match(
+    nginx,
+    /^\s*location = \/api\/v1\/competitors\/earn \{$[\s\S]*?^\s*alias \/var\/lib\/manga-opportunity-census\/public\.json;$/m,
+  )
   assert.match(nginx, /Access-Control-Allow-Origin "\*"/)
   assert.match(nginx, /^\s*proxy_pass http:\/\/127\.0\.0\.1:8788;$/m)
   assert.match(nginx, /^\s*location \^~ \/api\/v1\/ \{$/m)
@@ -361,10 +382,20 @@ test('public dashboard proxy exposes only the read-only presentation surface', (
   assert.match(installer, /systemctl reload nginx|systemctl start nginx/)
   assert.match(installer, /default_link_target=\$\(readlink "\$\{default_enabled\}"\)/)
   assert.match(installer, /--header 'Host: unrestricted-public-host\.invalid'/)
-  assert.match(
-    installer,
-    /api\/v1\/overview api\/v1\/opportunities api\/v1\/opportunities\/chains api\/v1\/sources api\/v1\/system api\/v1\/business api\/v1\/profit\/daily/,
-  )
+  for (const endpoint of [
+    'api/v1/overview',
+    'api/v1/opportunities?limit=1',
+    'api/v1/opportunity-ledger/summary',
+    'api/v1/opportunity-ledger/items?stage=NOW&limit=1',
+    'api/v1/opportunities/chains',
+    'api/v1/competitors/earn',
+    'api/v1/sources',
+    'api/v1/system',
+    'api/v1/business',
+    'api/v1/profit/daily',
+  ]) {
+    assert.match(installer, new RegExp(endpoint.replace(/[?&/]/g, '\\$&')))
+  }
   assert.match(installer, /\^X-Dashboard-Cache: HIT/)
   assert.match(installer, /for attempt in \{1\.\.10\}/)
   assert.match(installer, /if \(\(static_ready != 1\)\); then\s+rollback/)

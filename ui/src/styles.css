@@ -435,6 +435,113 @@ td small {
   font-size: 12px;
 }
 
+.opportunity-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.opportunity-tabs button {
+  min-height: 64px;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.opportunity-tabs button:last-child {
+  border-right: 0;
+}
+
+.opportunity-tabs button:hover,
+.opportunity-tabs button.active {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+
+.opportunity-tabs button.active {
+  border-bottom-color: var(--ink);
+}
+
+.opportunity-tabs span,
+.opportunity-tabs strong {
+  display: block;
+}
+
+.opportunity-tabs span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.opportunity-tabs strong {
+  margin-top: 5px;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
+.funnel-line {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.funnel-line > div {
+  position: relative;
+  min-width: 0;
+  padding: 16px;
+  border-right: 1px solid var(--line);
+}
+
+.funnel-line > div:last-child {
+  border-right: 0;
+}
+
+.funnel-line span,
+.funnel-line strong {
+  display: block;
+}
+
+.funnel-line span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.funnel-line strong {
+  margin-top: 7px;
+  color: var(--ink);
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.funnel-line i {
+  position: absolute;
+  top: 50%;
+  right: -5px;
+  z-index: 1;
+  width: 10px;
+  margin-top: -10px;
+  background: var(--surface);
+  color: var(--subtle);
+  font-style: normal;
+  text-align: center;
+}
+
+.opportunity-ledger-table td:last-child {
+  min-width: 220px;
+}
+
+.competitor-facts dd {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .text-button {
   padding: 0;
   border: 0;
@@ -708,6 +815,18 @@ td small {
   .fact-grid > div:nth-child(-n + 2) {
     border-bottom: 1px solid var(--line);
   }
+
+  .funnel-line {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .funnel-line > div:nth-child(3) {
+    border-right: 0;
+  }
+
+  .funnel-line > div:nth-child(-n + 3) {
+    border-bottom: 1px solid var(--line);
+  }
 }
 
 @media (max-width: 640px) {
@@ -769,6 +888,34 @@ td small {
   .filters {
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .opportunity-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .opportunity-tabs button:nth-child(2) {
+    border-right: 0;
+  }
+
+  .opportunity-tabs button:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .funnel-line {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .funnel-line > div:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .funnel-line > div:nth-child(3) {
+    border-right: 1px solid var(--line);
+  }
+
+  .funnel-line > div:nth-child(-n + 4) {
+    border-bottom: 1px solid var(--line);
   }
 
   .filters select {

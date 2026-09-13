@@ -5,6 +5,7 @@ import test from 'node:test'
 const app = fs.readFileSync(new URL('../ui/src/App.jsx', import.meta.url), 'utf8')
 const html = fs.readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8')
 const styles = fs.readFileSync(new URL('../ui/src/styles.css', import.meta.url), 'utf8')
+const viewModel = fs.readFileSync(new URL('../ui/src/view-model.mjs', import.meta.url), 'utf8')
 
 test('primary dashboard is a Chinese-first data product without presentation copy', () => {
   for (const banned of [
@@ -27,6 +28,10 @@ test('primary dashboard is a Chinese-first data product without presentation cop
   assert.match(app, /可以执行/)
   assert.match(app, /接近门槛/)
   assert.match(app, /继续观察/)
+  assert.match(app, /机会漏斗/)
+  assert.match(app + viewModel, /错过与未知/)
+  assert.match(app, /竞争者与被抢证据/)
+  assert.match(app, /未知不会被写成零机会/)
   assert.match(app, /verifiedExecutionNetEth/)
   assert.match(app, /Earn 本轮已确认/)
   assert.doesNotMatch(app, /你转入的 0\.01 ETH|Base 首笔入金|BASE_BOOTSTRAP_RECEIPT/)
@@ -43,6 +48,14 @@ test('addresses and technical evidence stay behind explicit disclosures', () => 
 test('route changes dismiss every open detail drawer', () => {
   assert.match(app, /const update = \(\) => \{\s*closeDrawers\(\)\s*setPage\(currentPage\(window\.location\.hash\)\)/)
   assert.match(app, /\}, \[closeDrawers\]\)/)
+})
+
+test('global polling does not materialize the heavy opportunity projection', () => {
+  const start = app.indexOf('function useOperationsData()')
+  const end = app.indexOf('function useStrategyOpportunities', start)
+  const globalPoller = app.slice(start, end)
+  assert.doesNotMatch(globalPoller, /\/api\/v1\/opportunities(?:['"?])/)
+  assert.match(app.slice(end), /\/api\/v1\/opportunities\?limit=12/)
 })
 
 test('document and stylesheet enforce a restrained light operations interface', () => {

@@ -116,7 +116,9 @@
     "board:catalog:verify": "node --expose-gc scripts/compact-source-catalog.mjs verify",
     "business:report:tick": "node scripts/business-report.mjs tick",
     "business:report:preview": "node scripts/business-report.mjs preview",
-    "business:report:status": "node scripts/business-report.mjs status"
+    "business:report:status": "node scripts/business-report.mjs status",
+    "competitor:census": "node scripts/earn-competitor-census.mjs watch",
+    "competitor:census:once": "node scripts/earn-competitor-census.mjs once"
   },
   "dependencies": {
     "react": "19.2.8",

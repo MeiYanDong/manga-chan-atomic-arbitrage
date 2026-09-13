@@ -173,6 +173,22 @@ sudo systemctl start manga-business-report.path
 Keep the timer disabled if the release identity or health readback disagrees. A board-only promotion must not restart,
 re-arm or otherwise mutate the trading watcher.
 
+The Earn competitor census is a separate signer-free reader. It uses Robinhood's official public RPC by default,
+finds the seven-day start block by timestamp, scans only the three reviewed Vault pools and publishes exact route
+receipts after a five-minute delay. Start it after the immutable release is installed and before installing the Nginx
+surface that aliases its public snapshot:
+
+```bash
+sudo systemctl enable --now manga-opportunity-census.service
+sudo systemctl show manga-opportunity-census.service --property=ActiveState,SubState,MainPID,MemoryCurrent,NRestarts
+jq '{status,summary,coverage}' /var/lib/manga-opportunity-census/public.json
+```
+
+`BACKFILLING` is a healthy partial-coverage state. It must converge to `CURRENT` at the safe head; until then, all
+counts apply only to `startBlock..scannedThroughBlock`. The service has no EnvironmentFile or credential directory and
+must never be added to the signer group. Stop it independently during a board build if the shared-host resource gate
+requires headroom; stopping it cannot stop or authorize the live watcher.
+
 The Node HTTP service deliberately listens only on loopback. Public presentation access terminates at the reviewed
 Nginx port-80 proxy; never bind the Node process itself to a public address and never open port 8788 in the cloud
 firewall. The supplied SSH drop-in continues to permit client-local forwarding to `127.0.0.1:8788`; validate it with
@@ -216,7 +232,7 @@ curl --fail --silent --show-error http://127.0.0.1/healthz
 Open only TCP port 80 in the SWAS firewall with source `0.0.0.0/0`. The Nginx server is the catch-all virtual host: it
 serves the built UI directly, allows GET/HEAD for uncached `/healthz` and the short-lived cached `/api/v1/*`
 presentation surface, returns 404 for raw `/api/*` endpoints and rejects mutation methods. The installer disables only
-the stock enabled-site symlink, warms all five UI API reads and proves a cache hit; it restores the previous site and
+the stock enabled-site symlink, warms every UI API dependency and proves a cache hit; it restores the previous site and
 configuration if validation fails. Verify the public IP from a separate client, including a sub-second static root,
 security headers, a current business snapshot, a rejected POST and an inaccessible `/api/event-metrics`. A stale cache
 fallback preserves the last timestamped read model during a board event-loop delay; it is availability evidence, not a

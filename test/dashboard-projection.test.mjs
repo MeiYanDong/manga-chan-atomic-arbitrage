@@ -375,6 +375,8 @@ test('control-plane projection computes overview without materializing opportuni
 
 test('dashboard API declares whether a route needs summaries or claim-level details', () => {
   assert.equal(dashboardApiNeedsOpportunityProjection('/api/v1/system'), false)
+  assert.equal(dashboardApiNeedsOpportunityProjection('/api/v1/opportunity-ledger/summary'), false)
+  assert.equal(dashboardApiNeedsOpportunityProjection('/api/v1/opportunity-ledger/items'), false)
   assert.equal(dashboardApiNeedsOpportunityProjection('/api/v1/opportunities'), true)
   assert.equal(dashboardApiNeedsOpportunityDetails('/api/v1/opportunities'), false)
   assert.equal(dashboardApiNeedsOpportunityDetails(`/api/v1/opportunities/${NINECAT}`), true)
@@ -388,6 +390,14 @@ test('read-only API router exposes all v1 projections and rejects malformed deta
   assert.equal(query.payload.count, 1)
   assert.equal(query.payload.view, 'SUMMARY')
   assert.equal(query.payload.items[0].evidenceTimeline, undefined)
+  const paged = routeDashboardApi(
+    '/api/v1/opportunities',
+    new URLSearchParams({ platform: 'LONG_ROUTE', limit: '1', cursor: '0' }),
+    model,
+  )
+  assert.equal(paged.status, 200)
+  assert.equal(paged.payload.items.length, 1)
+  assert.equal(routeDashboardApi('/api/v1/opportunities', new URLSearchParams({ limit: '101' }), model).status, 400)
   const detail = routeDashboardApi(
     `/api/v1/opportunities/${encodeURIComponent(query.payload.items[0].opportunityId)}`,
     new URLSearchParams(),
@@ -400,6 +410,22 @@ test('read-only API router exposes all v1 projections and rejects malformed deta
     true,
   )
   assert.equal(routeDashboardApi('/api/v1/overview', new URLSearchParams(), model).status, 200)
+  const ledger = routeDashboardApi('/api/v1/opportunity-ledger/summary', new URLSearchParams(), model)
+  assert.equal(ledger.status, 200)
+  assert.equal(ledger.payload.counts.UNKNOWN, 0)
+  assert.equal('items' in ledger.payload, false)
+  const ledgerItems = routeDashboardApi(
+    '/api/v1/opportunity-ledger/items',
+    new URLSearchParams({ stage: 'UNKNOWN', limit: '10' }),
+    model,
+  )
+  assert.equal(ledgerItems.status, 200)
+  assert.equal(ledgerItems.payload.items.length, 0)
+  assert.equal(
+    routeDashboardApi('/api/v1/opportunity-ledger/items', new URLSearchParams({ stage: 'INVALID' }), model).status,
+    400,
+  )
+  assert.equal(routeDashboardApi('/api/v1/opportunity-ledger/episodes', new URLSearchParams(), model).status, 200)
   const sources = routeDashboardApi('/api/v1/sources', new URLSearchParams(), model)
   assert.equal(sources.status, 200)
   assert.equal(sources.payload.summary.dopplerTargetsDiscovered, 1)

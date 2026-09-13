@@ -6,6 +6,7 @@ import {
   baseLiveSummary,
   businessHeadline,
   compactAddress,
+  crossChainRouteResult,
   currentPage,
   decisionLabel,
   economicHeadline,
@@ -16,6 +17,8 @@ import {
   noTradeReason,
   opportunityLane,
   opportunityReason,
+  opportunityStageLabel,
+  opportunityStageTone,
   portfolioMoneyMap,
   relativeAge,
   runtimeBadge,
@@ -56,16 +59,34 @@ test('funds map keeps live balances separate', () => {
 })
 
 test('dashboard navigation only accepts known workspaces', () => {
-  assert.equal(PAGES.length, 4)
+  assert.equal(PAGES.length, 5)
   assert.deepEqual(
     PAGES.map((page) => page.label),
-    ['概览', '交易', '资金', '策略'],
+    ['概览', '机会', '交易', '资金', '策略'],
   )
   assert.equal(currentPage('#/portfolio'), 'portfolio')
-  assert.equal(currentPage('#/radar'), 'strategy')
+  assert.equal(currentPage('#/opportunities'), 'opportunities')
+  assert.equal(currentPage('#/radar'), 'opportunities')
+  assert.equal(currentPage('#/episodes'), 'opportunities')
   assert.equal(currentPage('#/sources'), 'strategy')
   assert.equal(currentPage('#/execution/detail'), 'activity')
   assert.equal(currentPage('#/not-a-page'), 'overview')
+})
+
+test('opportunity presentation keeps live, near, filtered and unknown stages distinct', () => {
+  assert.equal(opportunityStageLabel('NOW'), '现在能做')
+  assert.equal(opportunityStageLabel('UNKNOWN'), '错过与未知')
+  assert.equal(opportunityStageTone('NOW'), 'READY')
+  assert.equal(opportunityStageTone('NEAR'), 'PARTIAL')
+  assert.deepEqual(crossChainRouteResult({ estimatedNetProfit: '0.1 WETH' }), {
+    stage: 'NEAR',
+    label: '只读净正，待执行准入',
+  })
+  assert.deepEqual(crossChainRouteResult({ grossProfit: '0.1 WETH', estimatedNetProfit: '-0.01 WETH' }), {
+    stage: 'NEAR',
+    label: 'Gas 与风险储备吞掉价差',
+  })
+  assert.equal(crossChainRouteResult({ grossProfit: '-0.1 WETH', estimatedNetProfit: '-0.2 WETH' }).stage, 'FILTERED')
 })
 
 test('display helpers keep unknown values explicit', () => {
