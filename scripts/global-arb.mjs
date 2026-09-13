@@ -42,10 +42,10 @@ import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/j
 import { classifyReconciliation, errorText, latestUnresolvedMutation } from '../src/policy.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import {
-  compileUniversalContract,
+  loadUniversalContractArtifact,
   materializeUniversalRuntime,
   verifyUniversalRuntimeEvidence,
-} from './universal-contract-compile.mjs'
+} from '../src/universal-contract-artifact.mjs'
 
 const CHAIN_ID = 4_663
 const PUBLIC_RPC = 'https://rpc.mainnet.chain.robinhood.com'
@@ -242,7 +242,7 @@ async function mapWithConcurrency(items, concurrency, task) {
   return output
 }
 
-async function assertDeployment(compiled = compileUniversalContract()) {
+async function assertDeployment(compiled = loadUniversalContractArtifact()) {
   const state = readJson(STATE_PATH)
   if (
     state?.schemaVersion !== 1 ||
@@ -866,7 +866,7 @@ async function deployPreflight({ print = true } = {}) {
   if (holder.alive) throw new Error(`dual watcher is active as PID ${holder.pid}`)
   const unresolved = latestUnresolvedMutation(readAuditRecords())
   if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
-  const compiled = compileUniversalContract()
+  const compiled = loadUniversalContractArtifact()
   const runtimeCodeHash = keccak256(materializeUniversalRuntime(compiled, WALLET))
   const snapshot = await walletSnapshot()
   if (snapshot.latestNonce !== snapshot.pendingNonce) throw new Error('wallet has a pending nonce')
@@ -1464,12 +1464,12 @@ async function reconcile() {
     if (outcome.state === 'CONFIRMED_SUCCESS') {
       const effect =
         unresolved.kind === 'global-deploy'
-          ? await deploymentStateFromReceipt(plan, unresolved.hash, outcome.receipt, compileUniversalContract())
+          ? await deploymentStateFromReceipt(plan, unresolved.hash, outcome.receipt, loadUniversalContractArtifact())
           : await executionStateFromReceipt(
               plan,
               unresolved.hash,
               outcome.receipt,
-              compileUniversalContract(),
+              loadUniversalContractArtifact(),
               'RECONCILED_FROM_CANONICAL_RECEIPT',
             )
       const output = { status: 'RECONCILED_SUCCESS', hash: unresolved.hash, effect }
@@ -1497,8 +1497,10 @@ async function reconcile() {
 }
 
 const command = process.argv[2] || 'status'
-if (command === 'compile') console.log(stringify(compileUniversalContract()))
-else if (command === 'deploy-preflight') await deployPreflight()
+if (command === 'compile') {
+  const { compileUniversalContract } = await import('./universal-contract-compile.mjs')
+  console.log(stringify(compileUniversalContract()))
+} else if (command === 'deploy-preflight') await deployPreflight()
 else if (command === 'deploy') await deploy()
 else if (command === 'preflight') await globalPreflight()
 else if (command === 'execute') await execute()
