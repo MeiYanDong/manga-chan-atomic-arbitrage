@@ -49,6 +49,11 @@ gate and one allowlisted blocking explanation, so the operator-facing page no lo
 executable opportunity. The private attempt ledger, route details, signer and RPC configuration remain outside this
 projection.
 
+The principal subsequently moved once more to `0x002ccD95D1304C6fB88f67183DC1e7d1b90A577F` so the immutable contract
+gross floor and the watcher net floor could both be reduced to one wei. The portfolio registry follows only the funded,
+armed destination; the earlier executor remains disarmed with zero WETH. This dashboard-only registry update does not
+restart either signer service or grant the board any execution authority.
+
 ## Production acceptance
 
 - Both repositories pass their full local quality gates.
