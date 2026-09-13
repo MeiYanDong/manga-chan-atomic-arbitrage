@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Remove the Earn website API from the live signing dependency after Cloudflare challenged the production server with
+  HTTP 403. Discover all pools directly from the canonical Omnipool Factory, retain one explicitly reviewed pre-factory
+  pool, and read each pool's immutable tokens/weights plus current scaled balances/status at one chain block. Quarantine
+  a malformed permissionless pool instead of stopping unrelated routes. Authorization policy v6 now binds the onchain
+  source, factory, scope, 2–4 hop graph and existing quote/Gas limits.
 - Replace the Earn live executor's four AI/MOO routes with a dynamic graph over every initialized Omnipool returned by
   the official catalog. Enumerate all simple WETH-settled cycles up to four swaps, rank the full graph locally with a
   Gas-aware weighted-pool model, then buy exact quotes for at most 24 hop-diverse routes and refine at most eight. Any

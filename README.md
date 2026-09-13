@@ -12,8 +12,9 @@ The repository retains three deployed execution generations:
 - dual-v3, which retains generic-v2 and adds a separately bounded WETH-principal executor behind one shared signer and
   nonce lane. Dual-v3 is the active production signer under an explicit until-revoked authorization.
 
-It also contains an EarnOnHood standing keeper inside the same dual signer. Live discovery is token-agnostic: it builds
-a current graph from every initialized official Omnipool, enumerates WETH-settled simple cycles of two to four swaps,
+It also contains an EarnOnHood standing keeper inside the same dual signer. Live discovery is token-agnostic: it reads
+the canonical Omnipool Factory and pool state onchain, builds a current graph from every eligible official Omnipool,
+enumerates WETH-settled simple cycles of two to four swaps,
 and locally ranks the full graph before requesting a bounded set of exact quotes. AI and MOO are historical examples,
 not an allowlist. Any canonical Vault Swap plus a five-minute recovery tick can wake balance-scaled probes with no fixed
 principal cap. The managed endpoint is used only after a public screen is net-positive; the exact dynamic route is then
@@ -21,13 +22,14 @@ frozen into the mutation plan, revalidated on chain, and worst-case failed Gas m
 net positive. It is not a second autonomous signer. See
 [the mechanism and live validation](docs/research/2026-09-12-earnonhood-mechanism-arbitrage-live-validation.md) and
 [ADR 0046](docs/decisions/0046-unified-earnonhood-standing-keeper.md) plus
-[ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md).
+[ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md) and
+[ADR 0059](docs/decisions/0059-earn-onchain-factory-catalog.md).
 
-The v0.13 policy keeps the balance-scaled coarse-to-fine sizing but separates cheap graph coverage from expensive
+The v0.13.1 policy keeps the balance-scaled coarse-to-fine sizing but separates cheap graph coverage from expensive
 execution truth. At most 24 routes receive three exact public quotes each; at most eight routes receive six local
 refinements, for a 120-call public ceiling. A public-positive result hands only its committed route and immediate sizing
 bracket to at most nine managed quotes, while final quote, call, Gas, reserve, nonce and receipt guards remain unchanged.
-Authorization v5 commits this graph and both quote ceilings. See
+Authorization v6 commits the onchain source, Factory, graph and both quote ceilings. See
 [ADR 0050](docs/decisions/0050-earn-coarse-to-fine-sizing-hot-path.md) and
 [the dynamic-graph story](docs/stories/dynamic-earn-omnipool-live-graph.md).
 

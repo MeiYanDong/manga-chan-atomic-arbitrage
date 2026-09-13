@@ -7,7 +7,14 @@ import {
   enumerateEarnOnHoodCycles,
   normalizeEarnOnHoodCatalog,
 } from '../src/earnonhood-graph.mjs'
-import { EARN_ROUTE_DISCOVERY_POLICY, EARN_WETH } from '../src/earnonhood-routes.mjs'
+import { buildEarnOnHoodCatalogFromOnchain, loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
+import {
+  EARN_OMNIPOOL_FACTORY,
+  EARN_REVIEWED_LEGACY_OMNIPOOLS,
+  EARN_ROUTE_DISCOVERY_POLICY,
+  EARN_VAULT,
+  EARN_WETH,
+} from '../src/earnonhood-routes.mjs'
 
 const EARN = '0xa3b6aee90017b72c0812dc1e013de70eb2917ba3'
 const PONS = '0x39dbed3a2bd333467115de45665cc57f813c4571'
@@ -119,4 +126,111 @@ test('route shape rejects discontinuity, repeated pools, and non-final settlemen
     /repeats a pool/,
   )
   assert.throws(() => assertEarnRouteShape({ ...route, steps: route.steps.slice(0, 2) }), /close only at the final hop/)
+})
+
+test('canonical onchain factory catalog discovers non-AI cycles without the Earn web API', async () => {
+  const poolA = '0x0000000000000000000000000000000000000011'
+  const poolB = '0x0000000000000000000000000000000000000012'
+  const poolTokens = new Map([
+    [poolA.toLowerCase(), [EARN_WETH, PONS]],
+    [poolB.toLowerCase(), [EARN_WETH, PONS]],
+    [EARN_REVIEWED_LEGACY_OMNIPOOLS[0].toLowerCase(), [EARN_WETH, EARN]],
+  ])
+  const client = {
+    async getCode() {
+      return '0x6000'
+    },
+    async multicall({ contracts }) {
+      return Promise.all(
+        contracts.map(async (contract) => {
+          try {
+            return { status: 'success', result: await this.readContract(contract) }
+          } catch (error) {
+            return { status: 'failure', error }
+          }
+        }),
+      )
+    },
+    async readContract({ address, functionName }) {
+      if (address.toLowerCase() === EARN_OMNIPOOL_FACTORY.toLowerCase()) {
+        if (functionName === 'getVault') return EARN_VAULT
+        if (functionName === 'isDisabled') return false
+        if (functionName === 'getPools') return [poolA, poolB]
+      }
+      const tokens = poolTokens.get(address.toLowerCase())
+      if (functionName === 'getWeightedPoolImmutableData') {
+        return {
+          tokens,
+          decimalScalingFactors: tokens.map(() => 1n),
+          normalizedWeights: tokens.map(() => 500_000_000_000_000_000n),
+          minTokenBalances: tokens.map(() => 1n),
+        }
+      }
+      if (functionName === 'getWeightedPoolDynamicData') {
+        return {
+          balancesLiveScaled18: tokens.map(() => 1_000_000_000_000_000_000_000n),
+          tokenRates: tokens.map(() => 1_000_000_000_000_000_000n),
+          staticSwapFeePercentage: 3_000_000_000_000_000n,
+          totalSupply: 1n,
+          isPoolInitialized: true,
+          isPoolPaused: false,
+          isPoolInRecoveryMode: false,
+        }
+      }
+      if (functionName === 'symbol') {
+        if (address.toLowerCase() === EARN_WETH.toLowerCase()) return 'WETH'
+        if (address.toLowerCase() === PONS.toLowerCase()) return 'PONS'
+        if (address.toLowerCase() === EARN.toLowerCase()) return 'EARN'
+        return 'POOL'
+      }
+      throw new Error(`unexpected ${functionName}`)
+    },
+  }
+
+  const onchain = await loadEarnOnHoodOnchainCatalog(client, 123n, { expectedMulticallCodeHash: null })
+  const routes = enumerateEarnOnHoodCycles(onchain.pools)
+  assert.equal(onchain.source, 'CANONICAL_FACTORY_AND_POOL_STATE_ONCHAIN')
+  assert.equal(onchain.discoveredFactoryPools, 2)
+  assert.equal(onchain.reviewedLegacyPools, 1)
+  assert.equal(onchain.rejected.length, 0)
+  assert.ok(routes.some((route) => route.symbols.join('>') === 'WETH>PONS>WETH'))
+  await assert.rejects(() => loadEarnOnHoodOnchainCatalog(client, 123n), /Multicall3 bytecode mismatch/)
+})
+
+test('onchain catalog quarantines a paused pool and rejects inconsistent weighted state', () => {
+  const records = [
+    {
+      address: '0x0000000000000000000000000000000000000011',
+      immutableData: {
+        tokens: [EARN_WETH, PONS],
+        normalizedWeights: [500_000_000_000_000_000n, 500_000_000_000_000_000n],
+      },
+      dynamicData: {
+        balancesLiveScaled18: [1_000n, 1_000n],
+        staticSwapFeePercentage: 3_000_000_000_000_000n,
+        isPoolInitialized: true,
+        isPoolPaused: true,
+        isPoolInRecoveryMode: false,
+      },
+    },
+    {
+      address: '0x0000000000000000000000000000000000000012',
+      immutableData: {
+        tokens: [EARN_WETH, PONS],
+        normalizedWeights: [400_000_000_000_000_000n, 400_000_000_000_000_000n],
+      },
+      dynamicData: {
+        balancesLiveScaled18: [1_000n, 1_000n],
+        staticSwapFeePercentage: 3_000_000_000_000_000n,
+        isPoolInitialized: true,
+        isPoolPaused: false,
+        isPoolInRecoveryMode: false,
+      },
+    },
+  ]
+  const catalog = buildEarnOnHoodCatalogFromOnchain({ records, blockNumber: 123n })
+  assert.equal(catalog.pools.length, 0)
+  assert.equal(catalog.rejected.length, 2)
+  assert.ok(catalog.rejected.some((record) => /paused/.test(record.reason)))
+  assert.ok(catalog.rejected.some((record) => /sum to one/.test(record.reason)))
 })

@@ -949,6 +949,8 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     arm.earnOnHood.vault?.toLowerCase() !== EARN_VAULT.toLowerCase() ||
     arm.earnOnHood.batchRouter?.toLowerCase() !== EARN_BATCH_ROUTER.toLowerCase() ||
     arm.earnOnHood.poolScope !== EARN_ROUTE_DISCOVERY_POLICY.poolScope ||
+    arm.earnOnHood.catalogSource !== EARN_ROUTE_DISCOVERY_POLICY.catalogSource ||
+    arm.earnOnHood.factory?.toLowerCase() !== EARN_ROUTE_DISCOVERY_POLICY.factory.toLowerCase() ||
     Number(arm.earnOnHood.maximumHops) !== EARN_ROUTE_DISCOVERY_POLICY.maximumHops ||
     BigInt(arm.earnOnHood.minimumNetProfitWei) !== configuredEarnMinimumNet ||
     BigInt(arm.earnOnHood.minimumQuoteHeadroomWei) !== configuredEarnHeadroom ||
@@ -1996,6 +1998,8 @@ async function armDualWatcher() {
         vault: EARN_VAULT,
         batchRouter: EARN_BATCH_ROUTER,
         poolScope: EARN_ROUTE_DISCOVERY_POLICY.poolScope,
+        catalogSource: EARN_ROUTE_DISCOVERY_POLICY.catalogSource,
+        factory: EARN_ROUTE_DISCOVERY_POLICY.factory,
         maximumHops: EARN_ROUTE_DISCOVERY_POLICY.maximumHops,
         minimumNetProfitWei: earnMinimumNetProfitWei.toString(),
         minimumQuoteHeadroomWei: earnMinimumHeadroomWei.toString(),
@@ -2068,6 +2072,9 @@ async function armDualWatcher() {
       earnOnHood: {
         principalPolicy: arm.earnOnHood.principalPolicy,
         fixedPrincipalCap: null,
+        catalogSource: arm.earnOnHood.catalogSource,
+        poolScope: arm.earnOnHood.poolScope,
+        maximumHops: arm.earnOnHood.maximumHops,
         initialGasSurplusEth: formatEther(BigInt(arm.earnOnHood.initialGasSurplusWei)),
         perAttemptGasCeilingEth: formatEther(BigInt(arm.earnOnHood.perAttemptGasCeilingWei)),
         sizingAlgorithm: arm.earnOnHood.sizingAlgorithm,

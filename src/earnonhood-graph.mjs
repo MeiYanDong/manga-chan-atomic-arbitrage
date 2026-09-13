@@ -21,8 +21,10 @@ function finiteNumber(value, label) {
 }
 
 /**
- * Treat the public EARN API as a discovery index only. Malformed entries are
- * rejected here; canonical Vault checks remain mandatory before signing.
+ * Normalize a bounded discovery snapshot into the route-graph model. The live
+ * signer supplies canonical onchain Factory/Vault state; fixtures and research
+ * tooling can still provide an equivalent snapshot. Malformed entries are
+ * quarantined here, and canonical Vault checks remain mandatory before signing.
  */
 export function normalizeEarnOnHoodCatalog(snapshot, options = {}) {
   if (!snapshot?.ready || !Array.isArray(snapshot.pools)) throw new Error('EarnOnHood pool catalog is not ready')
@@ -38,6 +40,8 @@ export function normalizeEarnOnHoodCatalog(snapshot, options = {}) {
   for (const source of snapshot.pools) {
     try {
       if (!source?.initialized) throw new Error('not initialized')
+      if (source.paused) throw new Error('pool is paused')
+      if (source.recoveryMode) throw new Error('pool is in recovery mode')
       if (!ADDRESS.test(String(source.address || ''))) throw new Error('invalid pool address')
       const address = getAddress(source.address)
       if (seenPools.has(key(address))) throw new Error('duplicate pool address')
