@@ -4,14 +4,19 @@ import { stableStringify } from './journal.mjs'
 export const EARN_VAULT = getAddress('0x28082618Ba2073E602230188E4F4C46e9b2169EB')
 export const EARN_BATCH_ROUTER = getAddress('0x2d6DD5A990a643A8B11CD06554FBC290a1a82bA6')
 export const EARN_WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
+export const EARN_TOKEN = getAddress('0xA3b6AEe90017b72c0812dC1e013De70eB2917ba3')
 export const EARN_AI = getAddress('0x2E8c31162b855A2ffa90F6F8634643Ad6F111e18')
 export const EARN_MOO = getAddress('0xD9dB30BB0D2b8d2eae3826A1372117E058791e18')
+export const EARN_POOLS_URL = 'https://earnonhood.com/api/omni/pools'
 
 export const EARN_HOOD_ECOSYSTEM_POOL = getAddress('0x4188656eAFdD7634d35Ca3f98ddfBf4b403A41fA')
 export const EARN_STOCK_MEMES_POOL = getAddress('0x00e7B76d0C0F0370C28A07aA9d9fDF92736238A6')
 export const EARN_LONG_ECO_POOL = getAddress('0xcDe242535A75F8ccB5D4b14686e312c196B28855')
 
-export const EARN_ROUTES = [
+// Historical reviewed routes are retained only for replaying old receipts and
+// plans. Live discovery no longer treats these token names or three pools as
+// the opportunity universe.
+export const EARN_LEGACY_REVIEWED_ROUTES = [
   {
     id: 'WETH_AI_WETH_STOCK_LONG',
     symbols: ['WETH', 'AI', 'WETH'],
@@ -48,6 +53,8 @@ export const EARN_ROUTES = [
   },
 ]
 
+export const EARN_ROUTES = EARN_LEGACY_REVIEWED_ROUTES
+
 export const EARN_ROUTE_STEPS = [
   ...new Map(
     EARN_ROUTES.flatMap((route) => route.steps).map((step) => [
@@ -59,15 +66,55 @@ export const EARN_ROUTE_STEPS = [
 export const EARN_POOL_ADDRESSES = [
   ...new Map(EARN_ROUTE_STEPS.map((step) => [step.pool.toLowerCase(), step.pool])).values(),
 ]
+export const EARN_LEGACY_ROUTE_COMMITMENT = keccak256(
+  toHex(
+    stableStringify({
+      vault: EARN_VAULT,
+      batchRouter: EARN_BATCH_ROUTER,
+      routes: EARN_LEGACY_REVIEWED_ROUTES,
+    }),
+  ),
+)
+
+export const EARN_ROUTE_DISCOVERY_POLICY = Object.freeze({
+  version: 'EARN_OMNIPOOL_DYNAMIC_WETH_SIMPLE_CYCLES_V1',
+  poolScope: 'ALL_CURRENT_AND_FUTURE_OFFICIAL_OMNIPOOLS_ON_CANONICAL_VAULT',
+  catalogUrl: EARN_POOLS_URL,
+  settlementAsset: EARN_WETH,
+  maximumHops: 4,
+  maximumCatalogPools: 128,
+  maximumTokensPerPool: 8,
+  maximumEnumeratedRoutes: 20_000,
+  maximumShortlistRoutes: 24,
+  shortlistRoutesPerHop: 8,
+  coarseAmountsPerRoute: 3,
+  refinementRouteLimit: 8,
+  maximumGasCandidates: 8,
+})
+
+// The standing authorization commits to the discovery and execution policy,
+// not to token names. Every selected dynamic route is still committed in its
+// immutable mutation plan and checked against the canonical Vault immediately
+// before signing.
 export const EARN_ROUTE_COMMITMENT = keccak256(
   toHex(
     stableStringify({
       vault: EARN_VAULT,
       batchRouter: EARN_BATCH_ROUTER,
-      routes: EARN_ROUTES,
+      policy: EARN_ROUTE_DISCOVERY_POLICY,
     }),
   ),
 )
+
+export function maximumEarnPublicExactQuotes(refinementPoints) {
+  if (!Number.isSafeInteger(refinementPoints) || refinementPoints < 2 || refinementPoints > 16) {
+    throw new Error('Earn refinementPoints must be within 2..16')
+  }
+  return (
+    EARN_ROUTE_DISCOVERY_POLICY.maximumShortlistRoutes * EARN_ROUTE_DISCOVERY_POLICY.coarseAmountsPerRoute +
+    EARN_ROUTE_DISCOVERY_POLICY.refinementRouteLimit * refinementPoints
+  )
+}
 
 // Balancer-v3 Vault event used only as a wake signal. Exact quotes and the
 // final protected call remain the economic source of truth.
@@ -89,4 +136,12 @@ export function isEarnOnHoodRouteSwap(log) {
   if (log.topics?.[0]?.toLowerCase() !== EARN_SWAP_EVENT_TOPIC.toLowerCase()) return false
   const pool = earnPoolFromTopic(log.topics?.[1])
   return pool ? EARN_POOL_ADDRESSES.some((address) => address.toLowerCase() === pool.toLowerCase()) : false
+}
+
+/** Any canonical Vault Swap is a useful dynamic discovery wake signal. */
+export function isEarnOnHoodVaultSwap(log) {
+  return (
+    log.topics?.[0]?.toLowerCase() === EARN_SWAP_EVENT_TOPIC.toLowerCase() &&
+    Boolean(earnPoolFromTopic(log.topics?.[1]))
+  )
 }

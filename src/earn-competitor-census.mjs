@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto'
 import { decodeEventLog, formatEther } from 'viem'
 
 import { EARN_SWAP_ABI } from './earnonhood-receipt.mjs'
-import { EARN_ROUTES, EARN_VAULT } from './earnonhood-routes.mjs'
+import { EARN_AI, EARN_MOO, EARN_ROUTES, EARN_TOKEN, EARN_VAULT, EARN_WETH } from './earnonhood-routes.mjs'
 
-export const EARN_COMPETITOR_SCHEMA_VERSION = 1
+export const EARN_COMPETITOR_SCHEMA_VERSION = 2
 export const EARN_COMPETITOR_DISCLOSURE_DELAY_MS = 5 * 60 * 1_000
 
 function sameAddress(left, right) {
@@ -94,6 +94,90 @@ export function findReviewedEarnCycles(receipt) {
   return cycles
 }
 
+const KNOWN_TOKEN_LABELS = new Map(
+  [
+    [EARN_WETH, 'WETH'],
+    [EARN_TOKEN, 'EARN'],
+    [EARN_AI, 'AI'],
+    [EARN_MOO, 'MOO'],
+  ].map(([address, symbol]) => [address.toLowerCase(), symbol]),
+)
+
+function tokenLabel(address, tokenLabels) {
+  const addressKey = String(address).toLowerCase()
+  return (
+    tokenLabels?.get?.(addressKey) ||
+    tokenLabels?.[addressKey] ||
+    KNOWN_TOKEN_LABELS.get(addressKey) ||
+    `${String(address).slice(0, 6)}…${String(address).slice(-4)}`
+  )
+}
+
+/**
+ * Detect any contiguous, amount-linked closed Vault cycle. This is evidence of
+ * the transaction shape, independent of token names or our executable route
+ * policy. Non-WETH cycles remain unnormalised rather than being misreported as
+ * ETH profit.
+ */
+export function findEarnClosedCycles(receipt, options = {}) {
+  const swaps = decodeEarnSwapLogs(receipt?.logs || [])
+  const cycles = []
+  for (let offset = 0; offset < swaps.length; offset += 1) {
+    const first = swaps[offset]
+    const baseToken = first.tokenIn
+    let expectedAmountIn = first.amountIn
+    let currentToken = baseToken
+    const usedPools = new Set()
+    const usedTokens = new Set([String(baseToken).toLowerCase()])
+    const steps = []
+    for (let index = offset; index < swaps.length; index += 1) {
+      const swap = swaps[index]
+      if (
+        !sameAddress(swap.tokenIn, currentToken) ||
+        swap.amountIn !== expectedAmountIn ||
+        usedPools.has(String(swap.pool).toLowerCase())
+      ) {
+        break
+      }
+      const closes = sameAddress(swap.tokenOut, baseToken)
+      if (!closes && usedTokens.has(String(swap.tokenOut).toLowerCase())) break
+      steps.push(swap)
+      usedPools.add(String(swap.pool).toLowerCase())
+      expectedAmountIn = swap.amountOut
+      currentToken = swap.tokenOut
+      if (closes) {
+        if (steps.length >= 2) {
+          const path = [baseToken, ...steps.map((step) => step.tokenOut)]
+          const routeHash = createHash('sha256')
+            .update(
+              steps
+                .map(
+                  (step) => `${step.pool.toLowerCase()}:${step.tokenIn.toLowerCase()}:${step.tokenOut.toLowerCase()}`,
+                )
+                .join('|'),
+            )
+            .digest('hex')
+            .slice(0, 16)
+          cycles.push({
+            routeId: `EARN_CLOSED_${routeHash}`,
+            route: path.map((token) => tokenLabel(token, options.tokenLabels)).join(' → '),
+            baseToken,
+            swapCount: steps.length,
+            amountInRaw: first.amountIn,
+            amountOutRaw: expectedAmountIn,
+            grossProfitRaw: expectedAmountIn - first.amountIn,
+            offset,
+          })
+          offset = index
+        }
+        break
+      }
+      usedTokens.add(String(swap.tokenOut).toLowerCase())
+    }
+  }
+  return cycles
+}
+
 export function competitorAlias(actor, ownActors = []) {
   if (ownActors.some((candidate) => sameAddress(candidate, actor))) return '本策略'
   const digest = createHash('sha256')
@@ -104,13 +188,14 @@ export function competitorAlias(actor, ownActors = []) {
 }
 
 /** @param {Record<string, any>} receipt */
-export function reviewedReceiptRecord({ receipt, occurredAt, ownActors = [] }) {
-  const cycles = findReviewedEarnCycles(receipt)
+export function reviewedReceiptRecord({ receipt, occurredAt, ownActors = [], tokenLabels = null }) {
+  const cycles = findEarnClosedCycles(receipt, { tokenLabels })
   if (cycles.length === 0) return null
   const actor = receipt.from
-  const grossProfitWei = cycles.reduce((sum, cycle) => sum + cycle.grossProfitWei, 0n)
+  const wethCycles = cycles.filter((cycle) => sameAddress(cycle.baseToken, EARN_WETH))
+  const grossProfitWei = wethCycles.reduce((sum, cycle) => sum + cycle.grossProfitRaw, 0n)
   const gasCostWei = BigInt(receipt.gasUsed || 0) * BigInt(receipt.effectiveGasPrice || 0)
-  const estimatedNetWei = grossProfitWei - gasCostWei
+  const estimatedNetWei = wethCycles.length > 0 ? grossProfitWei - gasCostWei : null
   return {
     evidenceId: `earn-receipt:${String(receipt.transactionHash).toLowerCase()}`,
     transactionHash: receipt.transactionHash,
@@ -121,11 +206,14 @@ export function reviewedReceiptRecord({ receipt, occurredAt, ownActors = [] }) {
     actorAlias: competitorAlias(actor, ownActors),
     route: [...new Set(cycles.map((cycle) => cycle.route))].join(' + '),
     cycleCount: cycles.length,
-    amountInWeth: decimal(cycles.reduce((sum, cycle) => sum + cycle.amountInWei, 0n)),
-    grossProfitWeth: decimal(grossProfitWei),
+    wethCycleCount: wethCycles.length,
+    nonWethCycleCount: cycles.length - wethCycles.length,
+    settlementAssets: [...new Set(cycles.map((cycle) => cycle.baseToken))],
+    amountInWeth: wethCycles.length ? decimal(wethCycles.reduce((sum, cycle) => sum + cycle.amountInRaw, 0n)) : null,
+    grossProfitWeth: wethCycles.length ? decimal(grossProfitWei) : null,
     gasCostEth: decimal(gasCostWei),
-    estimatedNetEth: decimal(estimatedNetWei),
-    economicsState: 'ROUTE_RECEIPT_NET_ESTIMATE',
+    estimatedNetEth: estimatedNetWei === null ? null : decimal(estimatedNetWei),
+    economicsState: wethCycles.length ? 'WETH_CLOSED_CYCLE_RECEIPT_NET_ESTIMATE' : 'NON_WETH_CLOSED_CYCLE_UNNORMALIZED',
   }
 }
 
@@ -178,6 +266,8 @@ export function buildEarnCompetitorSnapshot({
       transactionsReviewed: state?.transactionsReviewed ?? null,
       reviewedCycleReceipts: visible.length,
       externalCycleReceipts: external.length,
+      wethSettledCycleReceipts: visible.filter((record) => Number(record.wethCycleCount || 0) > 0).length,
+      nonWethCycleReceipts: visible.filter((record) => Number(record.nonWethCycleCount || 0) > 0).length,
       distinctExternalActors: new Set(external.map((record) => record.actorAlias)).size,
       confirmedLostRaces: null,
     },

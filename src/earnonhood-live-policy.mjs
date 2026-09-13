@@ -203,13 +203,25 @@ export function earnOnHoodQuoteBracket(input) {
  * sample for that route. This prevents a lower-Gas two-hop route from being
  * hidden by several higher-gross but net-negative three-hop amounts.
  *
- * @param {Array<{route: {id: string}, amountIn: bigint, amountOut: bigint, error?: unknown}>} quotes
+ * @param {Array<{route: {id: string, steps?: Array<unknown>}, amountIn: bigint, amountOut: bigint, error?: unknown}>} quotes
  * @param {number} maximumCandidates
+ * @param {{observedFeePerGasWei?: bigint}} [options]
  */
-export function selectEarnOnHoodGasCandidates(quotes, maximumCandidates) {
+export function selectEarnOnHoodGasCandidates(quotes, maximumCandidates, options = {}) {
   if (!Array.isArray(quotes)) throw new Error('EarnOnHood Gas candidates must be an array')
   if (!Number.isSafeInteger(maximumCandidates) || maximumCandidates <= 0) {
     throw new Error('EarnOnHood Gas candidate limit must be a positive integer')
+  }
+  const observedFeePerGasWei = options.observedFeePerGasWei ?? null
+  if (observedFeePerGasWei !== null && (typeof observedFeePerGasWei !== 'bigint' || observedFeePerGasWei <= 0n)) {
+    throw new Error('observedFeePerGasWei must be a positive bigint')
+  }
+  const score = (quote) => {
+    const gross = BigInt(quote.amountOut) - BigInt(quote.amountIn)
+    if (observedFeePerGasWei === null) return gross
+    const hops = Number(quote.route?.steps?.length || 0)
+    const estimatedGas = 180_000n + BigInt(Math.max(2, hops)) * 100_000n
+    return gross - estimatedGas * observedFeePerGasWei
   }
   const positive = quotes
     .filter(
@@ -222,6 +234,9 @@ export function selectEarnOnHoodGasCandidates(quotes, maximumCandidates) {
         quote.amountOut > quote.amountIn,
     )
     .sort((left, right) => {
+      const leftScore = score(left)
+      const rightScore = score(right)
+      if (rightScore !== leftScore) return rightScore > leftScore ? 1 : -1
       const leftGross = left.amountOut - left.amountIn
       const rightGross = right.amountOut - right.amountIn
       return rightGross === leftGross ? 0 : rightGross > leftGross ? 1 : -1
@@ -229,6 +244,31 @@ export function selectEarnOnHoodGasCandidates(quotes, maximumCandidates) {
   const selected = []
   const selectedQuotes = new Set()
   const representedRoutes = new Set()
+  if (observedFeePerGasWei !== null) {
+    const representedHops = new Set()
+    for (const quote of positive) {
+      const hops = Number(quote.route?.steps?.length || 0)
+      if (representedHops.has(hops)) continue
+      selected.push(quote)
+      selectedQuotes.add(quote)
+      representedRoutes.add(quote.route.id)
+      representedHops.add(hops)
+      if (selected.length === maximumCandidates) return selected
+    }
+    for (const quote of positive) {
+      if (representedRoutes.has(quote.route.id)) continue
+      selected.push(quote)
+      selectedQuotes.add(quote)
+      representedRoutes.add(quote.route.id)
+      if (selected.length === maximumCandidates) return selected
+    }
+    for (const quote of positive) {
+      if (selectedQuotes.has(quote)) continue
+      selected.push(quote)
+      if (selected.length === maximumCandidates) break
+    }
+    return selected
+  }
   for (const quote of positive) {
     if (representedRoutes.has(quote.route.id)) continue
     selected.push(quote)

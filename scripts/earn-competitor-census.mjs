@@ -11,7 +11,7 @@ import {
   reviewedReceiptRecord,
 } from '../src/earn-competitor-census.mjs'
 import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
-import { EARN_POOL_ADDRESSES, EARN_VAULT } from '../src/earnonhood-routes.mjs'
+import { EARN_VAULT } from '../src/earnonhood-routes.mjs'
 
 const RPC_URL = process.env.MANGA_COMPETITOR_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com'
 const DATA_DIR = process.env.MANGA_COMPETITOR_DATA_DIR || '/var/lib/manga-opportunity-census'
@@ -128,7 +128,7 @@ async function initialState(client) {
   const cutoffTimestamp = BigInt(Math.floor(Date.now() / 1_000) - RETENTION_DAYS * 86_400)
   const start = await findRetentionStart(client, safeHead, cutoffTimestamp)
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: 'BACKFILLING',
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -200,7 +200,6 @@ async function scanChunk(client, state, records) {
     logs = await client.getLogs({
       address: EARN_VAULT,
       event: EARN_SWAP_ABI[0],
-      args: { pool: EARN_POOL_ADDRESSES },
       fromBlock,
       toBlock,
     })
@@ -268,7 +267,7 @@ async function main() {
   let records = readRecords()
   let state = readJson(STATE_PATH)
   if (fs.existsSync(STATE_PATH) && !state) throw new Error('competitor census state is invalid')
-  if (!state || state.schemaVersion !== 1) state = await initialState(client)
+  if (!state || state.schemaVersion !== 2) state = await initialState(client)
   ;({ state, records } = await verifyCursor(client, state, records))
   writeJson(STATE_PATH, state, 0o600)
   publish(state, records)

@@ -16,6 +16,7 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { EARN_SIZING_ALGORITHM } from '../src/earnonhood-live-policy.mjs'
+import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from '../src/earnonhood-routes.mjs'
 
 function arm(overrides = {}) {
   const value = {
@@ -57,9 +58,11 @@ function arm(overrides = {}) {
       perAttemptGasCeilingWei: '500',
       walletReserveWei: '250',
       sizingAlgorithm: EARN_SIZING_ALGORITHM,
+      poolScope: EARN_ROUTE_DISCOVERY_POLICY.poolScope,
+      maximumHops: EARN_ROUTE_DISCOVERY_POLICY.maximumHops,
       coarseProbePoints: 8,
       refinementPoints: 6,
-      publicMaximumExactQuotesPerWake: 56,
+      publicMaximumExactQuotesPerWake: maximumEarnPublicExactQuotes(6),
       managedMaximumExactQuotesPerWake: 9,
     },
     ...overrides,
@@ -77,6 +80,8 @@ test('last-moment fee and quote decay reject one candidate without halting the w
   assert.equal(isDualOpportunityMiss(new Error('fee increased beyond the protected preflight cap')), true)
   assert.equal(isDualOpportunityMiss(new Error('quote fell below the protected output floor')), true)
   assert.equal(isDualOpportunityMiss(new Error('exact simulation does not meet the net floor')), true)
+  assert.equal(isDualOpportunityMiss(new Error('candidate left the current dynamic Earn graph')), true)
+  assert.equal(isDualOpportunityMiss(new Error('candidate pool is absent from the current official catalog')), true)
   assert.equal(isDualOpportunityMiss(new Error('reconciled receipt and wallet balance disagree')), false)
   assert.equal(isDualOpportunityMiss(new Error('executor operator mismatch')), false)
 })
@@ -106,7 +111,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v4 authorization binds the coarse-to-fine sizing and managed quote ceilings', () => {
+test('v5 authorization binds the dynamic graph, coarse-to-fine sizing, and quote ceilings', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -117,6 +122,8 @@ test('v4 authorization binds the coarse-to-fine sizing and managed quote ceiling
     { ...valid.earnOnHood, sizingAlgorithm: 'UNREVIEWED' },
     { ...valid.earnOnHood, coarseProbePoints: 3 },
     { ...valid.earnOnHood, refinementPoints: 17 },
+    { ...valid.earnOnHood, poolScope: 'FIXED_POOLS' },
+    { ...valid.earnOnHood, maximumHops: 5 },
     { ...valid.earnOnHood, publicMaximumExactQuotesPerWake: 57 },
     { ...valid.earnOnHood, managedMaximumExactQuotesPerWake: 10 },
   ]) {
