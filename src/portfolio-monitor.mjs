@@ -13,6 +13,9 @@ const BASE_PUBLIC_HEARTBEAT_KEYS = Object.freeze([
   'executor',
   'routesChecked',
   'positiveGrossCandidates',
+  'bestGrossProfitEth',
+  'fullLiveGateCandidates',
+  'primaryBlockReason',
   'broadcastAttempted',
   'confirmedProfitTransactions',
   'confirmedRevertedTransactions',
@@ -63,7 +66,7 @@ export const MONITORED_ACCOUNTS = Object.freeze([
     kind: 'CONTRACT',
     monitoringState: 'ACTIVE',
     primaryAsset: 'WETH',
-    address: getAddress('0x5EA444843137c1d38D459a4862f3A3d798B49EeA'),
+    address: getAddress('0xb7e829E5146F613A3E8632515573C292dF82A7E2'),
     expectedOperator: BASE_OPERATOR,
   },
   {
@@ -370,6 +373,9 @@ function baseService(baseUnitStatus, heartbeat, now) {
     heartbeatAt: heartbeat?.generatedAt || null,
     routesChecked: heartbeat?.routesChecked ?? null,
     positiveGrossCandidates: heartbeat?.positiveGrossCandidates ?? null,
+    bestGrossProfitEth: heartbeat?.bestGrossProfitEth ?? null,
+    fullLiveGateCandidates: heartbeat?.fullLiveGateCandidates ?? null,
+    primaryBlockReason: heartbeat?.primaryBlockReason ?? null,
     broadcastAttempted: heartbeat?.broadcastAttempted ?? null,
     confirmedProfitTransactions: heartbeat?.confirmedProfitTransactions ?? null,
     confirmedRevertedTransactions: heartbeat?.confirmedRevertedTransactions ?? null,
@@ -456,7 +462,7 @@ export function readBasePublicHeartbeat(file, { now = Date.now(), maxAgeMs = 180
   if (
     keys.length !== BASE_PUBLIC_HEARTBEAT_KEYS.length ||
     keys.some((key) => !BASE_PUBLIC_HEARTBEAT_KEYS.includes(key)) ||
-    heartbeat?.schemaVersion !== 1 ||
+    heartbeat?.schemaVersion !== 2 ||
     heartbeat?.mode !== BASE_PUBLIC_HEARTBEAT_MODE ||
     !Number.isFinite(Date.parse(heartbeat?.generatedAt)) ||
     !['RUNNING', 'STARTING', 'HALTED', 'UNKNOWN'].includes(heartbeat?.runtimeStatus) ||
@@ -464,12 +470,19 @@ export function readBasePublicHeartbeat(file, { now = Date.now(), maxAgeMs = 180
     ![
       heartbeat?.routesChecked,
       heartbeat?.positiveGrossCandidates,
+      heartbeat?.fullLiveGateCandidates,
       heartbeat?.confirmedProfitTransactions,
       heartbeat?.confirmedRevertedTransactions,
     ].every((count) => count === null || (Number.isSafeInteger(count) && Number(count) >= 0)) ||
     !(heartbeat?.broadcastAttempted === null || typeof heartbeat?.broadcastAttempted === 'boolean') ||
-    ![heartbeat?.verifiedNetEth, heartbeat?.failedGasEth].every(
+    ![heartbeat?.bestGrossProfitEth, heartbeat?.verifiedNetEth, heartbeat?.failedGasEth].every(
       (amount) => amount === null || (typeof amount === 'string' && /^\d+(?:\.\d+)?$/.test(amount)),
+    ) ||
+    !(
+      heartbeat?.primaryBlockReason === null ||
+      (typeof heartbeat?.primaryBlockReason === 'string' &&
+        heartbeat.primaryBlockReason.length > 0 &&
+        heartbeat.primaryBlockReason.length <= 80)
     ) ||
     !(
       heartbeat?.latestObservedBlock === null ||

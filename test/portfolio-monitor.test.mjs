@@ -13,7 +13,7 @@ import {
 } from '../src/portfolio-monitor.mjs'
 
 const baseOperator = getAddress('0xb756c304B5411B6dC3e7A6CBCD512Fad8eB6Dca7')
-const baseExecutor = getAddress('0x5EA444843137c1d38D459a4862f3A3d798B49EeA')
+const baseExecutor = getAddress('0xb7e829E5146F613A3E8632515573C292dF82A7E2')
 const robinhoodOperator = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
 const robinhoodUsdg = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 const robinhoodWeth = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
@@ -79,14 +79,17 @@ function fixtureClients({ failTokenFor = null } = {}) {
 
 function baseHeartbeat() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mode: BASE_PUBLIC_HEARTBEAT_MODE,
     generatedAt: '2026-09-11T15:00:00.000Z',
     runtimeStatus: 'RUNNING',
     operator: baseOperator,
     executor: baseExecutor,
     routesChecked: 350,
-    positiveGrossCandidates: 0,
+    positiveGrossCandidates: 2,
+    bestGrossProfitEth: '0.0000003',
+    fullLiveGateCandidates: 0,
+    primaryBlockReason: '毛利低于合约利润底线',
     broadcastAttempted: false,
     confirmedProfitTransactions: 0,
     confirmedRevertedTransactions: 0,
@@ -116,6 +119,12 @@ test('tracks five active and two parked accounts without hiding parked USDG', as
   assert.equal(snapshot.networks.find((network) => network.id === 'ROBINHOOD').all.WETH, '0.0032')
   assert.equal(snapshot.networks.find((network) => network.id === 'BASE').all.WETH, '0.003')
   assert.equal(snapshot.services.find((service) => service.id === 'base-live').routesChecked, 350)
+  assert.equal(snapshot.services.find((service) => service.id === 'base-live').positiveGrossCandidates, 2)
+  assert.equal(snapshot.services.find((service) => service.id === 'base-live').fullLiveGateCandidates, 0)
+  assert.equal(
+    snapshot.services.find((service) => service.id === 'base-live').primaryBlockReason,
+    '毛利低于合约利润底线',
+  )
   assert.equal(JSON.stringify(snapshot).includes('expectedOperator'), false)
 })
 

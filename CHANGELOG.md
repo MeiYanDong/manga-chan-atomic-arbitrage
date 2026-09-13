@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Follow the funded Base executor migration to `0xb7e829E5146F613A3E8632515573C292dF82A7E2` and consume sanitized
+  heartbeat schema v2. The strategy page now distinguishes a merely gross-positive spread from a candidate that passed
+  latest-block re-quote, Gas and net-profit gates; no Base signer, capital policy or broadcast behavior is implemented
+  by the dashboard repository.
 - Publish a tiny allowlisted market-operations snapshot atomically beside the signer feed and make the business
   reporter consume that file before its bounded HTTP fallback. This removes the five-minute report from the scanner's
   busy event loop while preserving a three-minute freshness limit, systemd liveness check and explicit observation

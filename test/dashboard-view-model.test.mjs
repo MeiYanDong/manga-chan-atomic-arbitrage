@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   PAGES,
   assetClassLabel,
+  baseLiveSummary,
   businessHeadline,
   compactAddress,
   currentPage,
@@ -129,6 +130,20 @@ test('runtime badge reports the execution process independently from market-data
     status: 'ERROR',
     label: '运行状态待核验',
   })
+})
+
+test('Base live summary distinguishes dust gross spread from executable net profit', () => {
+  assert.equal(
+    baseLiveSummary({
+      status: 'RUNNING',
+      routesChecked: 525,
+      positiveGrossCandidates: 5,
+      bestGrossProfitEth: '0.000000298718090992',
+      fullLiveGateCandidates: 0,
+      primaryBlockReason: '毛利低于合约利润底线',
+    }),
+    '本轮检查 525 条路线，5 条只是毛利为正，0 条达到实盘净利润门槛；最高毛利 0.000000298718090992 ETH。未广播原因：毛利低于合约利润底线。',
+  )
 })
 
 test('opportunity stages explain what is still missing without exposing machine states', () => {
