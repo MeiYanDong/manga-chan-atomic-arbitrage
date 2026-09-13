@@ -220,14 +220,6 @@ async function main() {
             failure = {
               selector: decoded.selector,
               errorName: decoded.errorName,
-              actionPrefixes: await diagnoseActionPrefixes({
-                publicClient,
-                account: operator,
-                executor,
-                abi: compiled.abi,
-                plan,
-                principal,
-              }),
             }
           }
         }

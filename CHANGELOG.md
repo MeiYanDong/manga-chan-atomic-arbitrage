@@ -9,6 +9,9 @@
 - Require nonzero reserves for discovered Uniswap v2 pools and nonzero active liquidity for Uniswap v3 pools at the
   catalog block. Canonical factory existence alone no longer admits an inert pool into the executable asset graph;
   zero-liquidity records remain visible in the rejected evidence set.
+- Keep the mandatory four-template mainnet-fork gate bounded to its four exact calls. Per-action prefix replay remains
+  an explicit one-template diagnostic mode, preventing a failed gate from silently expanding into dozens of fork
+  calls and exhausting a small production host.
 - Make the universal mainnet-fork gate read its canonical catalog and place Hardhat's fork cache under `MANGA_RUN_DIR`
   by default, so the documented unprivileged production command validates protected runtime artifacts without path or
   filesystem-permission overrides.
