@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PAGES,
   assetClassLabel,
+  baseLiveSummary,
   currentPage,
   decisionLabel,
   evidenceClaimLabel,
@@ -750,6 +751,7 @@ function StrategyPage({ data, onOpenOpportunity }) {
   const business = data.business
   const overview = data.overview
   const services = business?.portfolio?.services || []
+  const baseLive = services.find((service) => service.id === 'base-live')
   const system = data.system
   return (
     <div className="page-stack">
@@ -763,6 +765,9 @@ function StrategyPage({ data, onOpenOpportunity }) {
         ))}
         {services.length === 0 && <span>服务状态待核验</span>}
       </section>
+      <Section title="Base 实盘执行" side={<Status value={baseLive?.status || 'UNKNOWN'} />}>
+        <Notice tone="plain">{baseLiveSummary(baseLive)}</Notice>
+      </Section>
       <Section title="跨平台机会">
         <CrossChainOpportunityTable snapshot={data.chainOpportunities} />
       </Section>

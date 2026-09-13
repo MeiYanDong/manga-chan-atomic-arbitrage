@@ -41,6 +41,14 @@ RPC work to the execution path.
   stopped service.
 - The public address registry must be updated whenever a new executor is funded or an old executor is fully collected.
 
+## 2026-09-13 amendment
+
+The Base principal moved from the retired executor to `0xb7e829E5146F613A3E8632515573C292dF82A7E2`. The registry now follows
+that funded contract. Sanitized heartbeat schema v2 adds the best gross-positive amount, count that passed the full live
+gate and one allowlisted blocking explanation, so the operator-facing page no longer presents dust gross spread as an
+executable opportunity. The private attempt ledger, route details, signer and RPC configuration remain outside this
+projection.
+
 ## Production acceptance
 
 - Both repositories pass their full local quality gates.

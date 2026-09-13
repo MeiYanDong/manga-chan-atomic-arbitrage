@@ -196,6 +196,24 @@ export function noTradeReason(business, overview) {
   return '系统持续扫描市场，目前没有出现满足执行条件的路线。'
 }
 
+export function baseLiveSummary(service) {
+  if (!service) return 'Base 实盘执行证据待核验。'
+  if (service.status !== 'RUNNING') return 'Base 自动执行服务当前未被证实为持续运行。'
+  const routes = Number.isSafeInteger(service.routesChecked) ? service.routesChecked : '—'
+  const gross = Number.isSafeInteger(service.positiveGrossCandidates) ? service.positiveGrossCandidates : null
+  const eligible = Number.isSafeInteger(service.fullLiveGateCandidates) ? service.fullLiveGateCandidates : null
+  if (eligible !== null && eligible > 0) {
+    return `本轮检查 ${routes} 条路线，${eligible} 条已通过最新区块重报价、Gas 和净利润门槛，系统已进入原子实盘提交。`
+  }
+  if (gross !== null && gross > 0) {
+    const best = service.bestGrossProfitEth ? `；最高毛利 ${service.bestGrossProfitEth} ETH` : ''
+    const reason = service.primaryBlockReason ? `。未广播原因：${service.primaryBlockReason}` : ''
+    return `本轮检查 ${routes} 条路线，${gross} 条只是毛利为正，0 条达到实盘净利润门槛${best}${reason}。`
+  }
+  if (gross === 0) return `本轮检查 ${routes} 条路线，当前没有毛利为正的闭环。`
+  return `Base 实盘服务正在运行；本轮路线与收益门槛证据仍待核验。`
+}
+
 export function humanStatus(status) {
   const labels = {
     RUNNING: '运行中',
