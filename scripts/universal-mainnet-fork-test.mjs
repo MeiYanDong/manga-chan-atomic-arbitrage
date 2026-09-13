@@ -34,6 +34,8 @@ const FORK_CACHE_DIR = path.join(DEFAULT_RUNTIME_DIR, 'hardhat-fork-cache')
 const CATALOG_PATH = path.resolve(
   process.env.MANGA_UNIVERSAL_FORK_CATALOG || path.join(DEFAULT_RUNTIME_DIR, 'global-catalog.json'),
 )
+const DIAGNOSTIC_FIRST_PREFIX = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_FIRST_PREFIX === '1'
+const DIAGNOSTIC_FIRST_TEMPLATE = process.env.MANGA_UNIVERSAL_FORK_DIAGNOSTIC_FIRST_TEMPLATE === '1'
 const EARN_OMNIPOOL = getAddress('0x070F0Bcf458c2A836cF68c986df3BA86586e64FD')
 const erc20Abi = parseAbi(['function decimals() view returns (uint8)'])
 const chain = defineChain({
@@ -172,6 +174,34 @@ async function main() {
           deadline: block.timestamp + 300n,
           allocations: template.kind === 'BPT_PREMIUM_BUY_AND_ADD' ? weightedAllocations(principal, pool) : undefined,
         })
+        if (DIAGNOSTIC_FIRST_PREFIX || DIAGNOSTIC_FIRST_TEMPLATE) {
+          const diagnosticPlan = DIAGNOSTIC_FIRST_PREFIX ? { ...plan, actions: plan.actions.slice(0, 1) } : plan
+          const actionPrefixes = await diagnoseActionPrefixes({
+            publicClient,
+            account: operator,
+            executor,
+            abi: compiled.abi,
+            plan: diagnosticPlan,
+            principal,
+          })
+          console.log(
+            JSON.stringify(
+              {
+                status: DIAGNOSTIC_FIRST_PREFIX
+                  ? 'UNIVERSAL_MAINNET_FORK_FIRST_PREFIX_DIAGNOSTIC'
+                  : 'UNIVERSAL_MAINNET_FORK_FIRST_TEMPLATE_DIAGNOSTIC',
+                evidence: 'LOCAL_FORK_REAL_PROTOCOL_STATE_NO_MAINNET_BROADCAST',
+                forkBlock: block.number.toString(),
+                templateId: template.id,
+                firstAction: plan.actions[0],
+                actionPrefixes,
+              },
+              (_, value) => (typeof value === 'bigint' ? value.toString() : value),
+              2,
+            ),
+          )
+          return
+        }
         let delta = null
         let failure = null
         try {
