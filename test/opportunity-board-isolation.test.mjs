@@ -529,6 +529,8 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.doesNotMatch(executeSource, /currentBoard = await boardCandidates/)
 
   const globalSource = fs.readFileSync(path.join(root, 'scripts', 'global-arb.mjs'), 'utf8')
+  assert.match(globalSource, /loadUniversalContractArtifact/)
+  assert.doesNotMatch(globalSource, /from '\.\/universal-contract-compile\.mjs'/)
   assert.match(globalSource, /manual global execution requires GLOBAL_LIVE_ARM=1/)
   assert.match(globalSource, /BigInt\(arm\.global\.minimumNetProfitUsdgWei\) !== MINIMUM_NET_USDG/)
   assert.match(globalSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== runtime\.globalMaxRoutesPerWake/)
@@ -540,6 +542,8 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualSource, /Number\(arm\.global\.quoteConcurrency\) !== RUNTIME_CONFIG\.globalQuoteConcurrency/)
 
   const forkSource = fs.readFileSync(path.join(root, 'scripts', 'universal-mainnet-fork-test.mjs'), 'utf8')
+  assert.match(forkSource, /loadUniversalContractArtifact/)
+  assert.doesNotMatch(forkSource, /universal-contract-compile\.mjs/)
   assert.match(forkSource, /runtime\.runDir \? path\.resolve\(runtime\.runDir\) : path\.join\(ROOT, 'runs'\)/)
   assert.match(forkSource, /path\.join\(DEFAULT_RUNTIME_DIR, 'global-catalog\.json'\)/)
   assert.match(forkSource, /path\.join\(DEFAULT_RUNTIME_DIR, 'hardhat-fork-cache'\)/)

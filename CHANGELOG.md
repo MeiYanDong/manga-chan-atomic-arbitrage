@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Generate a source- and bytecode-hashed universal executor artifact during the release build, then load that small
+  root-owned artifact in every live quote, reconciliation and fork process. The signer no longer loads Solc or
+  recompiles the executor on each Sequencer/periodic wake, keeping its graph scan inside the production memory cgroup
+  and shortening the event-to-submit path without weakening code-identity checks.
 - Materialize every Solidity `immutable` reference with the reviewed constructor value before committing a universal
   executor runtime hash. Recover the single v0.14.2 deployment only when its old template commitment, successful
   receipt, exact concrete runtime, operator and protocol identities all agree; future plans bind the concrete hash

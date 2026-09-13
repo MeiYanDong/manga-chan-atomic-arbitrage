@@ -29,7 +29,7 @@ import {
 import { ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import { diagnosticErrorText } from '../src/policy.mjs'
 import { loadRuntimeConfig } from '../src/config.mjs'
-import { compileUniversalContract } from './universal-contract-compile.mjs'
+import { loadUniversalContractArtifact } from '../src/universal-contract-artifact.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtime = loadRuntimeConfig()
@@ -211,7 +211,7 @@ async function main() {
     const accounts = await publicClient.request({ method: 'eth_accounts' })
     const operator = getAddress(accounts[0])
     const walletClient = createWalletClient({ account: operator, chain, transport: http(RPC_URL, { timeout: 60_000 }) })
-    const compiled = compileUniversalContract()
+    const compiled = loadUniversalContractArtifact()
     const deployHash = await walletClient.deployContract({
       abi: compiled.abi,
       bytecode: compiled.bytecode,
