@@ -57,24 +57,60 @@ async function waitForRpc(child) {
   throw new Error('fork node did not become ready')
 }
 
-function quoteResult(error, abi) {
+function findRevertData(error) {
   const pending = [error]
   const seen = new Set()
   while (pending.length > 0) {
     const item = pending.shift()
     if (!item || seen.has(item)) continue
-    if (typeof item === 'string' && /^0x[0-9a-f]{8,}$/i.test(item)) {
-      try {
-        const decoded = decodeErrorResult({ abi, data: item })
-        if (decoded.errorName === 'QuoteResult') return BigInt(decoded.args[0])
-      } catch {}
-      continue
-    }
+    if (typeof item === 'string' && /^0x[0-9a-f]{8,}$/i.test(item)) return item
     if (typeof item !== 'object') continue
     seen.add(item)
     for (const value of Object.values(item)) pending.push(value)
   }
   return null
+}
+
+function decodedExecutorError(error, abi) {
+  const data = findRevertData(error)
+  if (!data) return { selector: null, errorName: null, args: [] }
+  try {
+    const decoded = decodeErrorResult({ abi, data })
+    return { selector: data.slice(0, 10), errorName: decoded.errorName, args: decoded.args || [] }
+  } catch {
+    return { selector: data.slice(0, 10), errorName: null, args: [] }
+  }
+}
+
+function quoteResult(error, abi) {
+  const decoded = decodedExecutorError(error, abi)
+  return decoded.errorName === 'QuoteResult' ? BigInt(decoded.args[0]) : null
+}
+
+async function diagnoseActionPrefixes({ publicClient, account, executor, abi, plan, principal }) {
+  const prefixes = []
+  for (let length = 1; length <= plan.actions.length; length += 1) {
+    const prefixPlan = { ...plan, actions: plan.actions.slice(0, length) }
+    try {
+      await publicClient.simulateContract({
+        account,
+        address: executor,
+        abi,
+        functionName: 'quoteWithFlash',
+        args: [prefixPlan, principal],
+      })
+      prefixes.push({ length, outcome: 'UNEXPECTED_RETURN' })
+    } catch (error) {
+      const decoded = decodedExecutorError(error, abi)
+      prefixes.push({
+        length,
+        actionKind: prefixPlan.actions.at(-1).kind,
+        outcome: decoded.errorName || decoded.selector || diagnosticErrorText(error).split('\n')[0],
+      })
+      if (decoded.errorName === 'InvalidSwapDelta') break
+    }
+  }
+  return prefixes
 }
 
 function weightedAllocations(principal, pool) {
@@ -159,7 +195,21 @@ async function main() {
           failure = 'quote unexpectedly returned without QuoteResult'
         } catch (error) {
           delta = quoteResult(error, compiled.abi)
-          if (delta === null) failure = diagnosticErrorText(error).slice(0, 600)
+          if (delta === null) {
+            const decoded = decodedExecutorError(error, compiled.abi)
+            failure = {
+              selector: decoded.selector,
+              errorName: decoded.errorName,
+              actionPrefixes: await diagnoseActionPrefixes({
+                publicClient,
+                account: operator,
+                executor,
+                abi: compiled.abi,
+                plan,
+                principal,
+              }),
+            }
+          }
         }
         results.push({
           settlementToken,
