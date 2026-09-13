@@ -1293,6 +1293,18 @@ function StrategyPage({ data, opportunityData, onOpenOpportunity }) {
                 {Number(system?.health?.eventDrivenShadow?.consecutiveErrors || 0) > 0 ? '正在自动恢复' : '当前正常'}
               </dd>
             </div>
+            <div>
+              <dt>付费 RPC 今日用量</dt>
+              <dd>
+                {business?.strategy?.global?.managedFallbackDailyLogicalCallCap
+                  ? `${number(business.strategy.global.managedFallbackLogicalCallsToday, 0, true)} / ${number(
+                      business.strategy.global.managedFallbackDailyLogicalCallCap,
+                      0,
+                      true,
+                    )} 次调用`
+                  : '未启用'}
+              </dd>
+            </div>
           </dl>
         </details>
       </Section>

@@ -80,6 +80,7 @@ function arm(overrides = {}) {
       maximumRoutesPerWake: 32,
       quoteConcurrency: 8,
       managedMaximumCandidatesPerWake: 16,
+      managedFallbackDailyLogicalCallCap: 20_000,
       submissionPolicy: 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK',
       feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
     },
@@ -135,12 +136,25 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v7 authorization binds the global executor and Earn sizing ceilings', () => {
+test('v8 authorization binds global RPC cost, executor identity, and Earn sizing ceilings', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
     reason: null,
   })
+
+  for (const managedFallbackDailyLogicalCallCap of [999, 1_000_001, null]) {
+    assert.deepEqual(
+      evaluateDualAuthorizationBudget(
+        arm({
+          policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION,
+          global: { ...valid.global, managedFallbackDailyLogicalCallCap },
+        }),
+        { failedGasWei: 0n, earnGasSurplusWei: 5_000n },
+      ),
+      { allowed: false, reason: 'invalid-global-policy' },
+    )
+  }
 
   for (const earnOnHood of [
     { ...valid.earnOnHood, sizingAlgorithm: 'UNREVIEWED' },

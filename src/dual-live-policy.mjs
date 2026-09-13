@@ -7,7 +7,8 @@ import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v7'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v8'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7 = 'dual-base-loopback-escalation-v7'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6 = 'dual-base-loopback-escalation-v6'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5 = 'dual-base-loopback-escalation-v5'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4 = 'dual-base-loopback-escalation-v4'
@@ -327,6 +328,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4,
@@ -363,6 +365,9 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       arm.global.quoteConcurrency < 1 ||
       arm.global.quoteConcurrency > 16 ||
       arm.global?.managedMaximumCandidatesPerWake !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE ||
+      !Number.isSafeInteger(arm.global?.managedFallbackDailyLogicalCallCap) ||
+      arm.global.managedFallbackDailyLogicalCallCap < 1_000 ||
+      arm.global.managedFallbackDailyLogicalCallCap > 1_000_000 ||
       arm.global?.submissionPolicy !== 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK' ||
       arm.global?.feedPolicy !== 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE')
   ) {

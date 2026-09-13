@@ -491,6 +491,7 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     assert.match(unit, /^Environment=EARN_LIVE_MIN_HEADROOM_WETH=0$/m)
     assert.match(unit, /^Environment=EARN_LIVE_MAX_FAILED_GAS_WETH=0\.00012$/m)
     assert.match(unit, /^Environment=EARN_LIVE_WALLET_RESERVE_WETH=0\.00025$/m)
+    assert.match(unit, /^Environment=GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=20000$/m)
     assert.doesNotMatch(unit, /^Environment=EARN_LIVE_(?:MAX_)?(?:AMOUNT|PRINCIPAL)/m)
   }
   assert.match(
@@ -532,14 +533,25 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(globalSource, /loadUniversalContractArtifact/)
   assert.doesNotMatch(globalSource, /from '\.\/universal-contract-compile\.mjs'/)
   assert.match(globalSource, /manual global execution requires GLOBAL_LIVE_ARM=1/)
+  assert.match(globalSource, /publicFirstRpcTransport\(PUBLIC_RPC, RPC_URL/)
+  assert.match(globalSource, /consumeManagedFallbackBudget\(init\?\.body\)/)
+  assert.match(globalSource, /global-rpc-fallback-budget\.json/)
   assert.match(globalSource, /BigInt\(arm\.global\.minimumNetProfitUsdgWei\) !== MINIMUM_NET_USDG/)
   assert.match(globalSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== runtime\.globalMaxRoutesPerWake/)
   assert.match(globalSource, /Number\(arm\.global\.quoteConcurrency\) !== runtime\.globalQuoteConcurrency/)
   assert.match(globalSource, /managedMaximumCandidatesPerWake\) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE/)
+  assert.match(
+    globalSource,
+    /Number\(arm\.global\.managedFallbackDailyLogicalCallCap\) !==[\s\S]*runtime\.globalManagedFallbackDailyLogicalCallCap/,
+  )
   assert.match(globalSource, /arm\.global\.settlementAssets\.length !== SETTLEMENT_TOKENS\.length/)
   assert.match(dualSource, /arm\.global\.settlementAssets\.length !== configuredGlobalSettlementAssets\.length/)
   assert.match(dualSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== RUNTIME_CONFIG\.globalMaxRoutesPerWake/)
   assert.match(dualSource, /Number\(arm\.global\.quoteConcurrency\) !== RUNTIME_CONFIG\.globalQuoteConcurrency/)
+  assert.match(
+    dualSource,
+    /Number\(arm\.global\.managedFallbackDailyLogicalCallCap\) !==[\s\S]*RUNTIME_CONFIG\.globalManagedFallbackDailyLogicalCallCap/,
+  )
 
   const forkSource = fs.readFileSync(path.join(root, 'scripts', 'universal-mainnet-fork-test.mjs'), 'utf8')
   assert.match(forkSource, /loadUniversalContractArtifact/)

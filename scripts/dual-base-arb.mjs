@@ -1022,6 +1022,7 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     Number(arm.global.maximumRoutesPerWake) !== RUNTIME_CONFIG.globalMaxRoutesPerWake ||
     Number(arm.global.quoteConcurrency) !== RUNTIME_CONFIG.globalQuoteConcurrency ||
     Number(arm.global.managedMaximumCandidatesPerWake) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE ||
+    Number(arm.global.managedFallbackDailyLogicalCallCap) !== RUNTIME_CONFIG.globalManagedFallbackDailyLogicalCallCap ||
     arm.global.settlementAssets.length !== configuredGlobalSettlementAssets.length ||
     arm.global.settlementAssets.some(
       (token, index) => token.toLowerCase() !== configuredGlobalSettlementAssets[index].toLowerCase(),
@@ -2079,6 +2080,7 @@ async function armDualWatcher() {
         maximumRoutesPerWake: RUNTIME_CONFIG.globalMaxRoutesPerWake,
         quoteConcurrency: RUNTIME_CONFIG.globalQuoteConcurrency,
         managedMaximumCandidatesPerWake: GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
+        managedFallbackDailyLogicalCallCap: RUNTIME_CONFIG.globalManagedFallbackDailyLogicalCallCap,
         feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
         submissionPolicy: 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK',
         minimumNetProfitUsdgWei: minimumNetProfitUsdg.toString(),
@@ -2185,6 +2187,7 @@ async function armDualWatcher() {
         settlementAssets: arm.global.settlementAssets,
         feedPolicy: arm.global.feedPolicy,
         submissionPolicy: arm.global.submissionPolicy,
+        managedFallbackDailyLogicalCallCap: arm.global.managedFallbackDailyLogicalCallCap,
         minimumWakeIntervalMs: arm.global.minimumWakeIntervalMs,
         periodicMs: arm.global.periodicMs,
       },
@@ -2435,6 +2438,7 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
       lastTransaction: result.transaction || nextState.global.lastTransaction,
       lastNormalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
       graph: result.graph || result.latestOpportunity?.graph || null,
+      rpc: result.rpc || result.latestOpportunity?.rpc || null,
       feed: feed.snapshot(),
     },
   }
@@ -2678,6 +2682,7 @@ async function watchDual() {
         lastPreflightAt: null,
         lastResult: null,
         lastTransaction: null,
+        rpc: null,
         feed: null,
       },
     }
@@ -3207,6 +3212,7 @@ async function dualWatchStatus() {
               settlementAssets: arm.global.settlementAssets,
               feedPolicy: arm.global.feedPolicy,
               submissionPolicy: arm.global.submissionPolicy,
+              managedFallbackDailyLogicalCallCap: arm.global.managedFallbackDailyLogicalCallCap,
               minimumWakeIntervalMs: arm.global.minimumWakeIntervalMs,
               periodicMs: arm.global.periodicMs,
             }

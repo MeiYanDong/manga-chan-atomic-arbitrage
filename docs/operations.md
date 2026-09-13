@@ -106,8 +106,8 @@ delta. It never rebuilds, reprices or replaces the signed transaction.
 
 The universal executor is a fourth execution generation inside the existing dual watcher and single wallet nonce lane.
 It admits only typed Earn and Uniswap v2/v3/v4 actions. Deployment creates code but grants no continuing authority;
-v7 arming separately binds its identity, settlement allowlist, funding/graph/route policy, Sequencer Feed and quote-work
-bounds.
+v8 arming separately binds its identity, settlement allowlist, funding/graph/route policy, Sequencer Feed, quote-work
+bounds and the managed discovery fallback's daily logical-call ceiling.
 
 Before deployment:
 
@@ -141,9 +141,15 @@ sudo systemctl --no-pager --full status manga-global-deploy.service
 Require `UNIVERSAL_DEPLOYMENT_CONFIRMED`, a successful canonical receipt, exact runtime hash, operator and Morpho
 readback, and equal latest/pending nonce. Then run `npm run global:preflight` without a signer. A positive quote is still
 not profit and a negative result must not be turned into a Gas-spending probe. Start `manga-dual-arm.service` only after
-`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v7 watcher may
+`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v8 watcher may
 then execute a route only after current exact simulation; accepted effects require receipt, `Executed` event and balance
 delta.
+
+Broad graph discovery uses the official public RPC first and batches concurrent reads. A transport or HTTP 429 failure
+may retry the same read batch on the managed endpoint only while the restart-durable UTC-day logical-call budget has
+capacity. The default ceiling is `GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=20000`; changing it requires a fresh
+authorization. A deterministic EVM revert never triggers provider fallback. Budget exhaustion is a signer-free coverage
+degradation, not permission to lower the profit floor or broadcast a probe.
 
 If deployment or execution becomes UNKNOWN, leave the watcher stopped and run `npm run global:reconcile` (or the parent
 `dual:reconcile`). Reconciliation may replay only the exact persisted raw transaction. Never deploy a second universal

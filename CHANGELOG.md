@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Batch global graph reads on the official public RPC and use the managed endpoint only after a transport or rate-limit
+  failure. Persist a 20,000-logical-call UTC-day ceiling, debit it before fallback, bind it to authorization v8 and
+  expose only the operator-safe used/limit totals in the business snapshot. Deterministic EVM reverts, signed-raw
+  submission, profit guards and the single nonce lane remain unchanged.
 - Generate a source- and bytecode-hashed universal executor artifact during the release build, then load that small
   root-owned artifact in every live quote, reconciliation and fork process. The signer no longer loads Solc or
   recompiles the executor on each Sequencer/periodic wake, keeping its graph scan inside the production memory cgroup
