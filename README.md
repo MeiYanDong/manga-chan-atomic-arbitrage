@@ -130,15 +130,17 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   [`0xee0c…f880`](https://robinhoodchain.blockscout.com/tx/0xee0cee4e11b383ff869be571db44f5fbebbe88c1793daf011f4fcb03ae78f880).
   USDG cycles retain and compound USDG; WETH cycles retain and compound WETH. Native ETH remains in the operator
   wallet for Gas.
-- The active v4 authorization is `0x85d40d06d2f7c639b6d2c311bd3ec9cb2751128a6f86465100ef71418c411989`. It is
+- The active v6 authorization is `0xd704841d7e8b214d4d738623c203fb5ca067abe9e580b0cdf845de85dda78152`. It is
   `UNTIL_REVOKED` with unlimited count limits. The generic contracts retain their immutable `100 USDG` and `1 WETH`
   caps. Earn sizing has no fixed principal cap and reaches the current wallet balance minus its complete Gas allowance
   and `0.00025 ETH` submission reserve. Its full failed-Gas envelope must leave the receipt-proven lifetime Earn net
   strictly positive.
-- At the 2026-09-12 23:30 Asia/Shanghai production readback, five historical Earn receipts totaled
-  `0.000317402701771984 ETH` realized net with zero failed Gas. The fresh v4 authorization had zero executions and zero
-  current-authorization net; its latest public event wake returned `NO_SHOT_NO_SIGNATURE_NO_BROADCAST` because the best
-  quote remained negative after the complete Gas cap.
+- At the 2026-09-14 01:39 Asia/Shanghai production readback, the first v6 execution
+  [`0x2b90…1675`](https://robinhoodchain.blockscout.com/tx/0x2b904fdd635f6f9d46440b491b694d6ea0e739b516aed84cdde3b4fd8af91675)
+  atomically closed `WETH -> PONS -> WETH`. It used `0.000689660482469597 ETH`, produced
+  `0.000047946587752902 ETH` gross, paid `0.000028601800332 ETH` Gas and increased the wallet by
+  **`0.000019344787420902 ETH` net**. The active authorization had one confirmed execution, zero failed Gas and no
+  unresolved mutation; receipt-proven lifetime Earn net after Gas was `0.000446396334142951 ETH`.
 
 - Fixed-route contracts remain deployed and funded with small canary floats, but their autonomous signing service is
   disabled. Their public evidence is under [`deployments`](deployments).
@@ -158,19 +160,21 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   exclusively owns the live wallet lane. The broad opportunity board remains a separate signer-free service.
 - No private key, provider credential, signed raw transaction, runtime state, or log belongs in Git.
 - The signer-free board and the one dual/Earn watcher run release
-  `868caba680d5a8f867c77f7bff59881a6ff82ec4`. At the post-promotion readback, the board retained 4,049 candidates,
-  reported complete configured-start chain/source catalogs and healthy SQLite parity, and had no screened-positive
-  row. Both services had zero automatic restarts. The board remains loopback-only and has no signer or broadcast path.
+  `b5975fba6dca578d391a31e61196e08b47c0df37`. At the post-promotion readback, the board retained 4,360 candidates,
+  reported complete configured-start chain/source catalogs and healthy SQLite parity, while Earn loaded 30 current
+  Factory pools plus one reviewed legacy pool into 7,586 WETH-settled cycles. Both services had zero automatic restarts.
+  The board remains signer-free and its read-only presentation is publicly proxied.
 - The dual watcher now freezes the exact typed candidate revision that causes escalation. A concurrent board refresh
   can no longer replace that revision or reject it merely because its quote-block-bound candidate hash disappeared
   from the latest projection. Quote age, canonical block identity, current exact simulation, Gas, nonce, principal,
-  authorization, final simulation and receipt gates remain unchanged. The new handoff path is production-loaded but
-  has not yet seen a post-release screened-positive trigger.
+  authorization, final simulation and receipt gates remain unchanged. A separate Base-style proxy trigger decayed at
+  the exact executor and was not broadcast; the Earn PONS receipt above independently proves the dynamic graph's live
+  path.
 - The private business dashboard and isolated Feishu reporter are production-promoted. The reporter delivered the
   completed Beijing day `2026-09-07` with Feishu response code `0`, persisted one success receipt, rejected a duplicate
   same-day send, and is enabled as a five-minute refresh/retry timer with a 09:05 Beijing reporting cutoff. The latest
-  browser view keeps historical receipt economics separate from the active dual authorization, whose realized net is
-  still `0`.
+  browser view keeps historical receipt economics separate from the active dual authorization. The public daily-profit
+  projection now reports the current v6 receipt as `+0.000019344787420902 ETH` and zero failed Gas.
 - A proxy-positive quote checkpoints the compact execution feed before slower catalog maintenance, preserving the
   30-second signer horizon without weakening the separate `0.05 USDG` screen and `0.1 USDG` exact-net floors. Dual
   startup reads retry transient RPC failures five times before loading the private credential.
@@ -179,9 +183,9 @@ is [documented separately](docs/evidence/2026-09-07-ninecat-source-attribution-c
   capped at 200 candidates and 4,000 logical calls per UTC day. Release `0.8.8` reduced its first three natural managed
   cycles to 11 logical calls per event and kept pre-fixed-block work below 0.15 ms, but restart catch-up still exposed
   multi-second public ingestion and anchor reads. The candidate cap later exhausted and fallback worked as configured;
-  it was not increased because the active authorization still had no receipt-proven profit. Idle dual-v3 reads only
-  the local feed. Only a screened candidate can escalate again to the signing identity for exact simulation, signing,
-  broadcast and receipt convergence.
+  it has not been increased because one small receipt does not yet prove large-scale positive economics. Idle dual-v3
+  reads only the local feed. Only a screened candidate can escalate again to the signing identity for exact simulation,
+  signing, broadcast and receipt convergence.
 - The v0.8.4 event hot path no longer writes the approximately 42 MB source catalog before quoting. Production ordinary
   event samples completed in 29.8-38.4 seconds with 9-13 logical Quoter calls and no event-window catalog mtime change.
   Periodic catalog maintenance can still make loopback reads exceed 15 seconds. The retained hot-cursor metrics also
@@ -197,6 +201,10 @@ See
 [`docs/evidence/2026-09-12-unified-earnonhood-keeper-production-promotion.md`](docs/evidence/2026-09-12-unified-earnonhood-keeper-production-promotion.md)
 for the no-fixed-cap Earn policy, controlled signer cutover, Linux gates, event-driven production soak and current
 receipt-separated result.
+See
+[`docs/evidence/2026-09-14-earn-onchain-catalog-production-promotion.md`](docs/evidence/2026-09-14-earn-onchain-catalog-production-promotion.md)
+for the token-agnostic onchain catalog cutover, v6 authorization, first non-AI/MOO production receipt and remaining
+public-RPC limits.
 See [`docs/evidence/2026-09-06-signed-attempt-recovery.md`](docs/evidence/2026-09-06-signed-attempt-recovery.md)
 for the lifecycle root cause, repaired release, two-reader terminal recovery and then-current restart blockers.
 See
