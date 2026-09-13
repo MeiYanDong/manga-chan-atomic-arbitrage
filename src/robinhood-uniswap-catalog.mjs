@@ -33,6 +33,28 @@ const v3FactoryAbi = [
     outputs: [{ name: 'pool', type: 'address' }],
   },
 ]
+const v2PairAbi = [
+  {
+    type: 'function',
+    name: 'getReserves',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [
+      { name: 'reserve0', type: 'uint112' },
+      { name: 'reserve1', type: 'uint112' },
+      { name: 'blockTimestampLast', type: 'uint32' },
+    ],
+  },
+]
+const v3PoolAbi = [
+  {
+    type: 'function',
+    name: 'liquidity',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: 'liquidity', type: 'uint128' }],
+  },
+]
 
 /**
  * Old V4 pools cannot be reconstructed from a recent rolling log window. These
@@ -135,7 +157,22 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
         blockNumber,
       })
       if (key(pool) === key(ZERO)) return null
-      return { address: getAddress(pool), ...pair, source: 'CANONICAL_UNISWAP_V2_FACTORY_GET_PAIR' }
+      const reserves = await client.readContract({
+        address: getAddress(pool),
+        abi: v2PairAbi,
+        functionName: 'getReserves',
+        blockNumber,
+      })
+      if (BigInt(reserves[0]) === 0n || BigInt(reserves[1]) === 0n) {
+        return { rejected: true, reason: 'zero reserve', address: getAddress(pool), ...pair }
+      }
+      return {
+        address: getAddress(pool),
+        ...pair,
+        reserve0: BigInt(reserves[0]).toString(),
+        reserve1: BigInt(reserves[1]).toString(),
+        source: 'CANONICAL_UNISWAP_V2_FACTORY_GET_PAIR_WITH_NONZERO_RESERVES',
+      }
     } catch (error) {
       return { error: String(error), ...pair }
     }
@@ -152,15 +189,31 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
         blockNumber,
       })
       if (key(pool) === key(ZERO)) return null
-      return { address: getAddress(pool), ...query, source: 'CANONICAL_UNISWAP_V3_FACTORY_GET_POOL' }
+      const liquidity = BigInt(
+        await client.readContract({
+          address: getAddress(pool),
+          abi: v3PoolAbi,
+          functionName: 'liquidity',
+          blockNumber,
+        }),
+      )
+      if (liquidity === 0n) {
+        return { rejected: true, reason: 'zero active liquidity', address: getAddress(pool), ...query }
+      }
+      return {
+        address: getAddress(pool),
+        ...query,
+        liquidity: liquidity.toString(),
+        source: 'CANONICAL_UNISWAP_V3_FACTORY_GET_POOL_WITH_ACTIVE_LIQUIDITY',
+      }
     } catch (error) {
       return { error: String(error), ...query }
     }
   })
 
   const rejected = [
-    ...v2Results.filter((item) => item?.error).map((item) => ({ venue: 'UNISWAP_V2', ...item })),
-    ...v3Results.filter((item) => item?.error).map((item) => ({ venue: 'UNISWAP_V3', ...item })),
+    ...v2Results.filter((item) => item?.error || item?.rejected).map((item) => ({ venue: 'UNISWAP_V2', ...item })),
+    ...v3Results.filter((item) => item?.error || item?.rejected).map((item) => ({ venue: 'UNISWAP_V3', ...item })),
   ]
   const admittedAssets = new Set(assets.map(key))
   const v4ByPoolId = new Map()
@@ -200,8 +253,8 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
     coverage: 'ALL_EARN_ASSETS_AND_BPTS_TO_SETTLEMENT_HUBS_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
     assets,
     hubs,
-    v2Pools: v2Results.filter((item) => item && !item.error),
-    v3Pools: v3Results.filter((item) => item && !item.error),
+    v2Pools: v2Results.filter((item) => item && !item.error && !item.rejected),
+    v3Pools: v3Results.filter((item) => item && !item.error && !item.rejected),
     v4Pools: [...v4ByPoolId.values()],
     rejected,
   }

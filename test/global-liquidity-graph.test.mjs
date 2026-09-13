@@ -8,6 +8,7 @@ import {
   fundingCapability,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
+import { loadRobinhoodHubUniswapCatalog } from '../src/robinhood-uniswap-catalog.mjs'
 
 const USDG = '0x0000000000000000000000000000000000000001'
 const WETH = '0x0000000000000000000000000000000000000002'
@@ -93,6 +94,25 @@ test('quarantines malformed or explicitly unsupported source records', () => {
   })
   assert.equal(graph.edges.length, 0)
   assert.equal(graph.rejected.length, 2)
+})
+
+test('catalog quarantines factory entries that have no executable liquidity', async () => {
+  const v2Pool = '0x0000000000000000000000000000000000000021'
+  const v3Pool = '0x0000000000000000000000000000000000000022'
+  const client = {
+    async readContract({ functionName }) {
+      if (functionName === 'getPair') return v2Pool
+      if (functionName === 'getReserves') return [0n, 1n, 0]
+      if (functionName === 'getPool') return v3Pool
+      if (functionName === 'liquidity') return 0n
+      throw new Error(`unexpected read ${functionName}`)
+    },
+  }
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n)
+  assert.equal(catalog.v2Pools.length, 0)
+  assert.equal(catalog.v3Pools.length, 0)
+  assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V2' && item.reason === 'zero reserve'))
+  assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V3' && item.reason === 'zero active liquidity'))
 })
 
 test('managed exact work keeps one best amount per route and fair settlement coverage', () => {
