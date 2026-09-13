@@ -6,7 +6,8 @@ import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v5'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v6'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5 = 'dual-base-loopback-escalation-v5'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4 = 'dual-base-loopback-escalation-v4'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v1'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2 = 'dual-base-loopback-escalation-v2'
@@ -307,6 +308,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2,
@@ -338,6 +340,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
   if (
     [
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3,
     ].includes(arm.policyVersion)
@@ -374,6 +377,8 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
         Number(arm.earnOnHood.refinementPoints) < 2 ||
         Number(arm.earnOnHood.refinementPoints) > 16 ||
         arm.earnOnHood?.poolScope !== EARN_ROUTE_DISCOVERY_POLICY.poolScope ||
+        arm.earnOnHood?.catalogSource !== EARN_ROUTE_DISCOVERY_POLICY.catalogSource ||
+        arm.earnOnHood?.factory?.toLowerCase() !== EARN_ROUTE_DISCOVERY_POLICY.factory.toLowerCase() ||
         Number(arm.earnOnHood?.maximumHops) !== EARN_ROUTE_DISCOVERY_POLICY.maximumHops ||
         Number(arm.earnOnHood?.publicMaximumExactQuotesPerWake) !==
           maximumEarnPublicExactQuotes(Number(arm.earnOnHood.refinementPoints)) ||

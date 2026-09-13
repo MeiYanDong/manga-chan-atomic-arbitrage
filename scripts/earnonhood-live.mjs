@@ -34,14 +34,13 @@ import {
   assertEarnRouteShape,
   buildEarnOnHoodExactQuoteShortlist,
   enumerateEarnOnHoodCycles,
-  normalizeEarnOnHoodCatalog,
   routeExistsInCatalog,
 } from '../src/earnonhood-graph.mjs'
+import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
 import {
   EARN_BATCH_ROUTER as BATCH_ROUTER,
   EARN_LEGACY_REVIEWED_ROUTES,
   EARN_LEGACY_ROUTE_COMMITMENT,
-  EARN_POOLS_URL,
   EARN_ROUTE_DISCOVERY_POLICY,
   EARN_ROUTE_COMMITMENT,
   EARN_VAULT as VAULT,
@@ -63,7 +62,6 @@ const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
 const WALLET = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
 const EXPECTED_STATIC_SWAP_FEE = 3_000_000_000_000_000n
 const DEADLINE_SECONDS = 45n
-const MAX_CATALOG_BYTES = 2_000_000
 
 const pathComponents = [
   { name: 'tokenIn', type: 'address' },
@@ -309,6 +307,8 @@ function assertSharedAuthorization(context, { maximumGasCostWei = null, currentS
     arm.earnOnHood.vault?.toLowerCase() !== VAULT.toLowerCase() ||
     arm.earnOnHood.batchRouter?.toLowerCase() !== BATCH_ROUTER.toLowerCase() ||
     arm.earnOnHood.poolScope !== EARN_ROUTE_DISCOVERY_POLICY.poolScope ||
+    arm.earnOnHood.catalogSource !== EARN_ROUTE_DISCOVERY_POLICY.catalogSource ||
+    arm.earnOnHood.factory?.toLowerCase() !== EARN_ROUTE_DISCOVERY_POLICY.factory.toLowerCase() ||
     Number(arm.earnOnHood.maximumHops) !== EARN_ROUTE_DISCOVERY_POLICY.maximumHops ||
     arm.earnOnHood.principalPolicy !== 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP' ||
     arm.earnOnHood.sizingAlgorithm !== EARN_SIZING_ALGORITHM ||
@@ -364,23 +364,25 @@ function routePath(route, amountIn, minimumAmountOut) {
   }
 }
 
-async function loadDynamicRouteBook() {
-  const response = await fetch(EARN_POOLS_URL, {
-    headers: { accept: 'application/json', 'user-agent': 'manga-chan-atomic-arbitrage/0.13' },
-    signal: AbortSignal.timeout(15_000),
-  })
-  if (!response.ok) throw new Error(`EarnOnHood pool catalog returned HTTP ${response.status}`)
-  const contentLength = Number(response.headers.get('content-length') || 0)
-  if (contentLength > MAX_CATALOG_BYTES) throw new Error('EarnOnHood pool catalog exceeds the response bound')
-  const body = await response.text()
-  if (Buffer.byteLength(body) > MAX_CATALOG_BYTES) throw new Error('EarnOnHood pool catalog exceeds the response bound')
-  const catalog = normalizeEarnOnHoodCatalog(JSON.parse(body))
+async function loadDynamicRouteBook(client, blockNumber) {
+  const catalog = await loadEarnOnHoodOnchainCatalog(client, blockNumber)
   const routes = enumerateEarnOnHoodCycles(catalog.pools)
   if (routes.length === 0) throw new Error('EarnOnHood dynamic graph contains no WETH-settled cycle')
   return {
     ...catalog,
     routes,
     poolByAddress: new Map(catalog.pools.map((pool) => [pool.address.toLowerCase(), pool])),
+  }
+}
+
+function routeBookEvidence(routeBook) {
+  return {
+    catalogSource: routeBook.source,
+    catalogBlockNumber: routeBook.blockNumber,
+    discoveredFactoryPoolCount: routeBook.discoveredFactoryPools,
+    reviewedLegacyPoolCount: routeBook.reviewedLegacyPools,
+    eligiblePoolCount: routeBook.pools.length,
+    rejectedCatalogPoolCount: routeBook.rejected.length,
   }
 }
 
@@ -620,7 +622,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
   const blockNumber = await client.getBlockNumber()
   const block = await client.getBlock({ blockNumber })
   await assertCoreProtocolIdentity(client, blockNumber)
-  const routeBook = await loadDynamicRouteBook()
+  const routeBook = await loadDynamicRouteBook(client, blockNumber)
   const [walletBalance, nonceLatest, noncePending, gasPrice, fees] = await Promise.all([
     client.getBalance({ address: WALLET, blockNumber }),
     client.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
@@ -656,6 +658,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
         lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
         retainedWalletReserveEth: formatEther(retainedWalletReserveWei),
         principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+        ...routeBookEvidence(routeBook),
       },
     }
   }
@@ -697,8 +700,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
         maximumExactQuoteCount: optimizer.maximumExactQuoteCount,
         routeGraphCount: optimizer.routeGraphCount,
         shortlistedRouteCount: optimizer.shortlistedRouteCount,
-        eligiblePoolCount: routeBook.pools.length,
-        rejectedCatalogPoolCount: routeBook.rejected.length,
+        ...routeBookEvidence(routeBook),
       },
     }
   }
@@ -828,8 +830,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
         lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
         routeGraphCount: optimizer.routeGraphCount,
         shortlistedRouteCount: optimizer.shortlistedRouteCount,
-        eligiblePoolCount: routeBook.pools.length,
-        rejectedCatalogPoolCount: routeBook.rejected.length,
+        ...routeBookEvidence(routeBook),
       },
     }
   }
@@ -876,8 +877,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
     publicScreenBlockNumber: optimizer.publicScreenBlockNumber,
     routeGraphCount: optimizer.routeGraphCount,
     shortlistedRouteCount: optimizer.shortlistedRouteCount,
-    eligiblePoolCount: routeBook.pools.length,
-    rejectedCatalogPoolCount: routeBook.rejected.length,
+    ...routeBookEvidence(routeBook),
     sizingBracketLowerEth: formatEther(quoteBracket.lowerBoundWei),
     sizingBracketUpperEth: formatEther(quoteBracket.upperBoundWei),
     deadline,

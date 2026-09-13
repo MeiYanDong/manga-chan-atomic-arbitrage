@@ -3,6 +3,8 @@
 - Date: 2026-09-14 (Asia/Shanghai)
 - Scope: repository candidate `0.13.0`; no production deployment or chain mutation in this record
 - Policy: `EARN_OMNIPOOL_DYNAMIC_WETH_SIMPLE_CYCLES_V1`
+- Superseded source boundary: ADR 0059 replaces the website catalog dependency with the canonical onchain Factory;
+  the recorded route counts and v0.13.0 quality result remain historical evidence.
 
 ## Current discovery read
 

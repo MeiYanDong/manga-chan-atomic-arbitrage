@@ -59,6 +59,8 @@ function arm(overrides = {}) {
       walletReserveWei: '250',
       sizingAlgorithm: EARN_SIZING_ALGORITHM,
       poolScope: EARN_ROUTE_DISCOVERY_POLICY.poolScope,
+      catalogSource: EARN_ROUTE_DISCOVERY_POLICY.catalogSource,
+      factory: EARN_ROUTE_DISCOVERY_POLICY.factory,
       maximumHops: EARN_ROUTE_DISCOVERY_POLICY.maximumHops,
       coarseProbePoints: 8,
       refinementPoints: 6,
@@ -111,7 +113,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v5 authorization binds the dynamic graph, coarse-to-fine sizing, and quote ceilings', () => {
+test('v6 authorization binds the onchain graph, coarse-to-fine sizing, and quote ceilings', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -123,6 +125,8 @@ test('v5 authorization binds the dynamic graph, coarse-to-fine sizing, and quote
     { ...valid.earnOnHood, coarseProbePoints: 3 },
     { ...valid.earnOnHood, refinementPoints: 17 },
     { ...valid.earnOnHood, poolScope: 'FIXED_POOLS' },
+    { ...valid.earnOnHood, catalogSource: 'WEB_API' },
+    { ...valid.earnOnHood, factory: '0x0000000000000000000000000000000000000001' },
     { ...valid.earnOnHood, maximumHops: 5 },
     { ...valid.earnOnHood, publicMaximumExactQuotesPerWake: 57 },
     { ...valid.earnOnHood, managedMaximumExactQuotesPerWake: 10 },

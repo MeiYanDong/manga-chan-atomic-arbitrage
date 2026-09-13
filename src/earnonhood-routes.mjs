@@ -3,11 +3,17 @@ import { stableStringify } from './journal.mjs'
 
 export const EARN_VAULT = getAddress('0x28082618Ba2073E602230188E4F4C46e9b2169EB')
 export const EARN_BATCH_ROUTER = getAddress('0x2d6DD5A990a643A8B11CD06554FBC290a1a82bA6')
+export const EARN_OMNIPOOL_FACTORY = getAddress('0x5471E9DD525158C728610B487f10cdFD526507A7')
 export const EARN_WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
 export const EARN_TOKEN = getAddress('0xA3b6AEe90017b72c0812dC1e013De70eB2917ba3')
 export const EARN_AI = getAddress('0x2E8c31162b855A2ffa90F6F8634643Ad6F111e18')
 export const EARN_MOO = getAddress('0xD9dB30BB0D2b8d2eae3826A1372117E058791e18')
 export const EARN_POOLS_URL = 'https://earnonhood.com/api/omni/pools'
+
+// This pool predates the current factory but remains listed by the official
+// application and registered in the same canonical Vault. It is explicit so a
+// generic Vault pool can never enter the live graph merely by emitting Swap.
+export const EARN_REVIEWED_LEGACY_OMNIPOOLS = [getAddress('0x070F0Bcf458c2A836cF68c986df3BA86586e64FD')]
 
 export const EARN_HOOD_ECOSYSTEM_POOL = getAddress('0x4188656eAFdD7634d35Ca3f98ddfBf4b403A41fA')
 export const EARN_STOCK_MEMES_POOL = getAddress('0x00e7B76d0C0F0370C28A07aA9d9fDF92736238A6')
@@ -77,9 +83,11 @@ export const EARN_LEGACY_ROUTE_COMMITMENT = keccak256(
 )
 
 export const EARN_ROUTE_DISCOVERY_POLICY = Object.freeze({
-  version: 'EARN_OMNIPOOL_DYNAMIC_WETH_SIMPLE_CYCLES_V1',
-  poolScope: 'ALL_CURRENT_AND_FUTURE_OFFICIAL_OMNIPOOLS_ON_CANONICAL_VAULT',
-  catalogUrl: EARN_POOLS_URL,
+  version: 'EARN_OMNIPOOL_ONCHAIN_FACTORY_WETH_SIMPLE_CYCLES_V2',
+  poolScope: 'CURRENT_FACTORY_PLUS_REVIEWED_LEGACY_OMNIPOOLS_ON_CANONICAL_VAULT',
+  catalogSource: 'CANONICAL_FACTORY_AND_POOL_STATE_ONCHAIN',
+  factory: EARN_OMNIPOOL_FACTORY,
+  reviewedLegacyPools: EARN_REVIEWED_LEGACY_OMNIPOOLS,
   settlementAsset: EARN_WETH,
   maximumHops: 4,
   maximumCatalogPools: 128,
