@@ -6,6 +6,8 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429])
 const RATE_LIMIT_RPC_CODES = new Set([429, -32_005])
 const RATE_LIMIT_MESSAGE = /rate[ -]?limit|too many requests|request limit|quota (?:exceeded|reached)/i
+const MISSING_BATCH_ITEM_MESSAGE = /Cannot read properties of undefined \(reading ['"]error['"]\)/
+const VIEM_HTTP_TRANSPORT_FRAME = /[/\\]viem[/\\].*[/\\]clients[/\\]transports[/\\]http\.(?:js|ts):/
 
 /** @param {unknown} value @param {string} label */
 function rpcEndpoint(value, label) {
@@ -17,16 +19,34 @@ function rpcEndpoint(value, label) {
 
 /** @param {any} error */
 export function shouldFallbackToManagedRpc(error) {
-  if (!error || typeof error !== 'object') return false
-  if (error.name === 'TimeoutError' || error.name === 'SocketClosedError') return true
-  if (error.name === 'ResponseBodyTooLargeError') return true
-  if (error.name === 'HttpRequestError') {
-    const status = Number(error.status)
-    return !Number.isFinite(status) || RETRYABLE_HTTP_STATUSES.has(status) || status >= 500
+  const seen = new Set()
+  let current = error
+  for (let depth = 0; depth < 6 && current && typeof current === 'object' && !seen.has(current); depth += 1) {
+    seen.add(current)
+    if (current.name === 'TimeoutError' || current.name === 'SocketClosedError') return true
+    if (current.name === 'ResponseBodyTooLargeError') return true
+    if (
+      current.name === 'TypeError' &&
+      MISSING_BATCH_ITEM_MESSAGE.test(String(current.message || '')) &&
+      VIEM_HTTP_TRANSPORT_FRAME.test(String(current.stack || ''))
+    ) {
+      return true
+    }
+    if (current.name === 'HttpRequestError') {
+      const status = Number(current.status)
+      if (!Number.isFinite(status) || RETRYABLE_HTTP_STATUSES.has(status) || status >= 500) return true
+    }
+    const code = Number(current.code)
+    if (Number.isFinite(code) && RATE_LIMIT_RPC_CODES.has(code)) return true
+    if (
+      current.name === 'RpcRequestError' &&
+      RATE_LIMIT_MESSAGE.test(String(current.details || current.message || ''))
+    ) {
+      return true
+    }
+    current = current.cause
   }
-  const code = Number(error.code)
-  if (Number.isFinite(code) && RATE_LIMIT_RPC_CODES.has(code)) return true
-  return error.name === 'RpcRequestError' && RATE_LIMIT_MESSAGE.test(String(error.details || error.message || ''))
+  return false
 }
 
 /**

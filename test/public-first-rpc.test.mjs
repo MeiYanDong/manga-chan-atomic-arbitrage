@@ -106,6 +106,40 @@ test('does not contact the managed fallback when the public batch succeeds', asy
   assert.equal(fallbackCalls, 0)
 })
 
+test('falls back only for the logical call omitted from a malformed public batch', async (context) => {
+  const primaryBodies = []
+  const fallbackBodies = []
+  const primary = await listen(async (request, response) => {
+    const body = await requestBody(request)
+    primaryBodies.push(body)
+    const complete = rpcResponse(body)
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(Array.isArray(complete) ? complete.slice(0, 1) : complete))
+  })
+  const secondary = await listen(async (request, response) => {
+    const body = await requestBody(request)
+    fallbackBodies.push(body)
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(rpcResponse(body)))
+  })
+  context.after(async () => {
+    await Promise.all([primary.close(), secondary.close()])
+  })
+
+  const client = createPublicClient({
+    chain,
+    transport: publicFirstRpcTransport(primary.url, secondary.url, { batchWaitMs: 5 }),
+  })
+  const [blockNumber, gasPrice] = await Promise.all([client.getBlockNumber(), client.getGasPrice()])
+
+  assert.equal(blockNumber, 42n)
+  assert.equal(gasPrice, 1_000_000_000n)
+  assert.equal(primaryBodies.length, 1)
+  assert.equal(fallbackBodies.length, 1)
+  assert.equal(Array.isArray(fallbackBodies[0]), true)
+  assert.equal(fallbackBodies[0].length, 1)
+})
+
 test('does not switch providers for a deterministic EVM revert', async (context) => {
   let fallbackCalls = 0
   const primary = await listen(async (request, response) => {
@@ -162,10 +196,19 @@ test('does not spend fallback capacity on deterministic RPC request errors', asy
 })
 
 test('fallback classifier admits only transport and rate-limit failures', () => {
+  const missingBatchItem = new TypeError("Cannot read properties of undefined (reading 'error')")
+  missingBatchItem.stack = `${missingBatchItem.name}: ${missingBatchItem.message}\n    at request (file:///app/node_modules/viem/_esm/clients/transports/http.js:69:26)`
+  const wrappedMissingBatchItem = new Error('unknown RPC error', { cause: missingBatchItem })
   assert.equal(shouldFallbackToManagedRpc({ name: 'TimeoutError' }), true)
   assert.equal(shouldFallbackToManagedRpc({ name: 'HttpRequestError', status: 503 }), true)
   assert.equal(shouldFallbackToManagedRpc({ name: 'RpcRequestError', code: -32_005 }), true)
+  assert.equal(shouldFallbackToManagedRpc(missingBatchItem), true)
+  assert.equal(shouldFallbackToManagedRpc(wrappedMissingBatchItem), true)
   assert.equal(shouldFallbackToManagedRpc({ name: 'RpcRequestError', code: -32602 }), false)
+  assert.equal(
+    shouldFallbackToManagedRpc(new TypeError("Cannot read properties of undefined (reading 'error')")),
+    false,
+  )
   assert.equal(shouldFallbackToManagedRpc(new Error('unknown failure')), false)
 })
 
