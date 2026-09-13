@@ -1123,7 +1123,11 @@ function CompetitorEvidence({ snapshot }) {
                 >
                   {item.actorAlias} · {item.route}
                 </a>{' '}
-                · 路线净额估算 {number(item.estimatedNetEth, 6, true)} ETH · {formatBeijingTime(item.occurredAt)}
+                ·{' '}
+                {item.estimatedNetEth === null
+                  ? '非 ETH 结算，净额尚未统一折算'
+                  : `路线净额估算 ${number(item.estimatedNetEth, 6, true)} ETH`}{' '}
+                · {formatBeijingTime(item.occurredAt)}
               </li>
             ))}
           </ol>

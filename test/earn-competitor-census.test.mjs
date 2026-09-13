@@ -6,6 +6,7 @@ import { encodeAbiParameters, encodeEventTopics } from 'viem'
 import {
   assertEarnCompetitorSnapshot,
   buildEarnCompetitorSnapshot,
+  findEarnClosedCycles,
   findReviewedEarnCycles,
   reviewedReceiptRecord,
 } from '../src/earn-competitor-census.mjs'
@@ -71,7 +72,29 @@ test('receipt record keeps route economics as an estimate and aliases the actor'
   assert.equal(record.grossProfitWeth, '0.0001')
   assert.equal(record.gasCostEth, '0.00001')
   assert.equal(record.estimatedNetEth, '0.00009')
-  assert.equal(record.economicsState, 'ROUTE_RECEIPT_NET_ESTIMATE')
+  assert.equal(record.economicsState, 'WETH_CLOSED_CYCLE_RECEIPT_NET_ESTIMATE')
+  assert.equal(record.wethCycleCount, 1)
+})
+
+test('generic census detects an arbitrary non-AI closed cycle without inventing ETH profit', () => {
+  const TOKEN_A = '0x3333333333333333333333333333333333333333'
+  const TOKEN_B = '0x4444444444444444444444444444444444444444'
+  const route = /** @type {any} */ ({
+    id: 'ARBITRARY_NON_AI',
+    symbols: ['A', 'B', 'A'],
+    steps: [
+      { pool: '0x5555555555555555555555555555555555555555', tokenIn: TOKEN_A, tokenOut: TOKEN_B },
+      { pool: '0x6666666666666666666666666666666666666666', tokenIn: TOKEN_B, tokenOut: TOKEN_A },
+    ],
+  })
+  const closed = receipt(route)
+  const cycles = findEarnClosedCycles(closed)
+  assert.equal(cycles.length, 1)
+  assert.equal(cycles[0].baseToken.toLowerCase(), TOKEN_A.toLowerCase())
+  const record = reviewedReceiptRecord({ receipt: closed, occurredAt: '2026-09-13T00:00:00.000Z' })
+  assert.equal(record.nonWethCycleCount, 1)
+  assert.equal(record.estimatedNetEth, null)
+  assert.equal(record.economicsState, 'NON_WETH_CLOSED_CYCLE_UNNORMALIZED')
 })
 
 test('public census delays exact evidence and never invents a lost race count', () => {

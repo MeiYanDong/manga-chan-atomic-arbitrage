@@ -1,12 +1,13 @@
 import { keccak256, toHex } from 'viem'
 import { EARN_SIZING_ALGORITHM } from './earnonhood-live-policy.mjs'
-import { EARN_ROUTES } from './earnonhood-routes.mjs'
+import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from './earnonhood-routes.mjs'
 import { stableStringify } from './journal.mjs'
 import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v4'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v5'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4 = 'dual-base-loopback-escalation-v4'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v1'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2 = 'dual-base-loopback-escalation-v2'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3 = 'dual-base-loopback-escalation-v3'
@@ -21,7 +22,7 @@ const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3 = 'dual-base-loopback-escalati
 export function isDualOpportunityMiss(error) {
   return (
     isGenericOpportunityMiss(error) ||
-    /no dual-base candidate passed exact|no fresh typed dual-base|triggered dual-base candidate left|candidate exceeds realized authorized principal|principal is below candidate amount|exact normalized net profit is below|exact WETH simulation does not meet|WETH gross profit cannot fund|protected WETH max fee is below|worst-case Gas breaks|current gas price moved above|fee increased beyond the protected preflight cap|quote fell below the protected output floor/i.test(
+    /no dual-base candidate passed exact|no fresh typed dual-base|triggered dual-base candidate left|candidate exceeds realized authorized principal|principal is below candidate amount|exact normalized net profit is below|exact WETH simulation does not meet|WETH gross profit cannot fund|protected WETH max fee is below|worst-case Gas breaks|current gas price moved above|fee increased beyond the protected preflight cap|quote fell below the protected output floor|left the current dynamic Earn graph|absent from the current official catalog/i.test(
       errorText(error),
     )
   )
@@ -306,6 +307,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V2,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION,
@@ -333,7 +335,13 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     return { allowed: false, reason: 'invalid-profit-floors' }
   }
   if (usage.failedGasWei >= maxFailedGas) return { allowed: false, reason: 'failed-gas-limit' }
-  if ([DUAL_AUTHORIZATION_POLICY_VERSION, LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3].includes(arm.policyVersion)) {
+  if (
+    [
+      DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V4,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V3,
+    ].includes(arm.policyVersion)
+  ) {
     let initialGasSurplusWei
     let perAttemptGasCeilingWei
     let walletReserveWei
@@ -365,8 +373,10 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
         !Number.isSafeInteger(Number(arm.earnOnHood?.refinementPoints)) ||
         Number(arm.earnOnHood.refinementPoints) < 2 ||
         Number(arm.earnOnHood.refinementPoints) > 16 ||
+        arm.earnOnHood?.poolScope !== EARN_ROUTE_DISCOVERY_POLICY.poolScope ||
+        Number(arm.earnOnHood?.maximumHops) !== EARN_ROUTE_DISCOVERY_POLICY.maximumHops ||
         Number(arm.earnOnHood?.publicMaximumExactQuotesPerWake) !==
-          EARN_ROUTES.length * (Number(arm.earnOnHood.coarseProbePoints) + Number(arm.earnOnHood.refinementPoints)) ||
+          maximumEarnPublicExactQuotes(Number(arm.earnOnHood.refinementPoints)) ||
         Number(arm.earnOnHood?.managedMaximumExactQuotesPerWake) !== Number(arm.earnOnHood.refinementPoints) + 3)
     ) {
       return { allowed: false, reason: 'invalid-earnonhood-sizing-policy' }

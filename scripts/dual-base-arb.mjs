@@ -48,11 +48,11 @@ import { EARN_SIZING_ALGORITHM, earnOnHoodGasSolvency } from '../src/earnonhood-
 import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
 import {
   EARN_BATCH_ROUTER,
-  EARN_POOL_ADDRESSES,
+  EARN_ROUTE_DISCOVERY_POLICY,
   EARN_ROUTE_COMMITMENT,
-  EARN_ROUTES,
   EARN_VAULT,
-  isEarnOnHoodRouteSwap,
+  isEarnOnHoodVaultSwap,
+  maximumEarnPublicExactQuotes,
 } from '../src/earnonhood-routes.mjs'
 import { retryReadOnly } from '../src/event-driven-shadow.mjs'
 import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/generic-plan.mjs'
@@ -948,7 +948,8 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     arm.earnOnHood.routeCommitment !== EARN_ROUTE_COMMITMENT ||
     arm.earnOnHood.vault?.toLowerCase() !== EARN_VAULT.toLowerCase() ||
     arm.earnOnHood.batchRouter?.toLowerCase() !== EARN_BATCH_ROUTER.toLowerCase() ||
-    JSON.stringify(arm.earnOnHood.pools) !== JSON.stringify(EARN_POOL_ADDRESSES) ||
+    arm.earnOnHood.poolScope !== EARN_ROUTE_DISCOVERY_POLICY.poolScope ||
+    Number(arm.earnOnHood.maximumHops) !== EARN_ROUTE_DISCOVERY_POLICY.maximumHops ||
     BigInt(arm.earnOnHood.minimumNetProfitWei) !== configuredEarnMinimumNet ||
     BigInt(arm.earnOnHood.minimumQuoteHeadroomWei) !== configuredEarnHeadroom ||
     BigInt(arm.earnOnHood.perAttemptGasCeilingWei) !== configuredEarnGasCeiling ||
@@ -959,7 +960,7 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     Number(arm.earnOnHood.coarseProbePoints) !== RUNTIME_CONFIG.earnLiveCoarseProbePoints ||
     Number(arm.earnOnHood.refinementPoints) !== RUNTIME_CONFIG.earnLiveRefinementPoints ||
     Number(arm.earnOnHood.publicMaximumExactQuotesPerWake) !==
-      EARN_ROUTES.length * (RUNTIME_CONFIG.earnLiveCoarseProbePoints + RUNTIME_CONFIG.earnLiveRefinementPoints) ||
+      maximumEarnPublicExactQuotes(RUNTIME_CONFIG.earnLiveRefinementPoints) ||
     Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== RUNTIME_CONFIG.earnLiveRefinementPoints + 3
   ) {
     throw new Error('dual watcher runtime economics differ from the authorization scope')
@@ -1994,7 +1995,8 @@ async function armDualWatcher() {
         routeCommitment: EARN_ROUTE_COMMITMENT,
         vault: EARN_VAULT,
         batchRouter: EARN_BATCH_ROUTER,
-        pools: EARN_POOL_ADDRESSES,
+        poolScope: EARN_ROUTE_DISCOVERY_POLICY.poolScope,
+        maximumHops: EARN_ROUTE_DISCOVERY_POLICY.maximumHops,
         minimumNetProfitWei: earnMinimumNetProfitWei.toString(),
         minimumQuoteHeadroomWei: earnMinimumHeadroomWei.toString(),
         walletReserveWei: earnWalletReserveWei.toString(),
@@ -2005,8 +2007,7 @@ async function armDualWatcher() {
         sizingAlgorithm: EARN_SIZING_ALGORITHM,
         coarseProbePoints: RUNTIME_CONFIG.earnLiveCoarseProbePoints,
         refinementPoints: RUNTIME_CONFIG.earnLiveRefinementPoints,
-        publicMaximumExactQuotesPerWake:
-          EARN_ROUTES.length * (RUNTIME_CONFIG.earnLiveCoarseProbePoints + RUNTIME_CONFIG.earnLiveRefinementPoints),
+        publicMaximumExactQuotesPerWake: maximumEarnPublicExactQuotes(RUNTIME_CONFIG.earnLiveRefinementPoints),
         managedMaximumExactQuotesPerWake: RUNTIME_CONFIG.earnLiveRefinementPoints + 3,
         discoveryRpc: 'ROBINHOOD_OFFICIAL_PUBLIC',
         escalationRpc: 'MANGA_RPC_URL_ONLY_AFTER_PUBLIC_NET_POSITIVE',
@@ -2110,11 +2111,10 @@ async function pollEarnOnHoodWake(cursor) {
   const logs = await earnEventClient.getLogs({
     address: EARN_VAULT,
     event: EARN_SWAP_ABI[0],
-    args: { pool: EARN_POOL_ADDRESSES },
     fromBlock: scannedFrom,
     toBlock: head,
   })
-  const routeLogs = logs.filter(isEarnOnHoodRouteSwap)
+  const routeLogs = logs.filter(isEarnOnHoodVaultSwap)
   const latestRouteLog = routeLogs.at(-1) || null
   const sourceReceivedAt = new Date().toISOString()
   return {
@@ -2127,6 +2127,7 @@ async function pollEarnOnHoodWake(cursor) {
     eventBlockNumber: latestRouteLog?.blockNumber ?? null,
     eventTransactionHash: latestRouteLog?.transactionHash ?? null,
     eventLogIndex: latestRouteLog?.logIndex ?? null,
+    eventPool: latestRouteLog?.args?.pool ?? null,
   }
 }
 
@@ -2187,6 +2188,7 @@ function runEarnOnHoodShared(arm, signal) {
     EARN_WAKE_RECEIVED_AT: signal?.sourceReceivedAt || '',
     EARN_WAKE_BLOCK_NUMBER: signal?.eventBlockNumber === null ? '' : String(signal?.eventBlockNumber || ''),
     EARN_WAKE_TRANSACTION_HASH: signal?.eventTransactionHash || '',
+    EARN_WAKE_POOL: signal?.eventPool || '',
   })
 }
 

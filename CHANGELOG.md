@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Replace the Earn live executor's four AI/MOO routes with a dynamic graph over every initialized Omnipool returned by
+  the official catalog. Enumerate all simple WETH-settled cycles up to four swaps, rank the full graph locally with a
+  Gas-aware weighted-pool model, then buy exact quotes for at most 24 hop-diverse routes and refine at most eight. Any
+  canonical Vault Swap now wakes the lane, the selected dynamic route is frozen into the immutable mutation plan, and
+  policy v5 binds the pool scope, hop limit and 120-call public ceiling while retaining the one-route nine-call managed
+  preflight and every existing net-profit, reserve, nonce, simulation and receipt guard. Expand the read-only
+  competitor census from four known paths to every contiguous amount-linked Vault cycle without mislabelling non-WETH
+  settlement as ETH profit.
 - Add one independent `机会` page without restructuring the existing operations pages. A lightweight paginated ledger
   separates exact-ready, near-threshold, filtered and unknown candidates, delays current positive route/principal
   disclosure for five minutes, and never upgrades historical positive episodes into lost-profit evidence. Remove the

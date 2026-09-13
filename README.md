@@ -12,23 +12,24 @@ The repository retains three deployed execution generations:
 - dual-v3, which retains generic-v2 and adds a separately bounded WETH-principal executor behind one shared signer and
   nonce lane. Dual-v3 is the active production signer under an explicit until-revoked authorization.
 
-It also contains an EarnOnHood standing keeper inside the same dual signer. The scanner explores weighted Omnipools
-without signing; live execution remains limited to four reviewed routes across the same three pools: both direct
-`WETH -> AI -> WETH` directions and both `WETH/AI/MOO/WETH` triangles. Public Vault events plus a five-minute recovery
-tick wake balance-scaled probes with no fixed principal cap. The managed endpoint is used only after a public screen is
-net-positive, and worst-case failed Gas must leave lifetime receipt-proven Earn net positive. It is not a second
-autonomous signer. See
+It also contains an EarnOnHood standing keeper inside the same dual signer. Live discovery is token-agnostic: it builds
+a current graph from every initialized official Omnipool, enumerates WETH-settled simple cycles of two to four swaps,
+and locally ranks the full graph before requesting a bounded set of exact quotes. AI and MOO are historical examples,
+not an allowlist. Any canonical Vault Swap plus a five-minute recovery tick can wake balance-scaled probes with no fixed
+principal cap. The managed endpoint is used only after a public screen is net-positive; the exact dynamic route is then
+frozen into the mutation plan, revalidated on chain, and worst-case failed Gas must leave lifetime receipt-proven Earn
+net positive. It is not a second autonomous signer. See
 [the mechanism and live validation](docs/research/2026-09-12-earnonhood-mechanism-arbitrage-live-validation.md) and
 [ADR 0046](docs/decisions/0046-unified-earnonhood-standing-keeper.md) plus
-[ADR 0049](docs/decisions/0049-reviewed-earnonhood-two-pool-ai-routes.md).
+[ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md).
 
-The production v0.12 release replaces the 24-point flat route grid with an authorization-bound `8 + 6` coarse-to-fine exact
-search. A public-positive result hands only its committed route and immediate sizing bracket to at most nine managed
-quotes, while final quote, call, Gas, reserve, nonce and receipt guards remain unchanged. It also reduces public event
-polling from four seconds to one second and records the event receive boundary. Production authorization v4 commits
-this exact algorithm and both quote ceilings. See [ADR 0050](docs/decisions/0050-earn-coarse-to-fine-sizing-hot-path.md),
-the [historical replay](docs/evidence/2026-09-12-earn-sizing-refinement-local-validation.md) and the
-[production promotion](docs/evidence/2026-09-12-earn-sizing-hot-path-v4-production-promotion.md).
+The v0.13 policy keeps the balance-scaled coarse-to-fine sizing but separates cheap graph coverage from expensive
+execution truth. At most 24 routes receive three exact public quotes each; at most eight routes receive six local
+refinements, for a 120-call public ceiling. A public-positive result hands only its committed route and immediate sizing
+bracket to at most nine managed quotes, while final quote, call, Gas, reserve, nonce and receipt guards remain unchanged.
+Authorization v5 commits this graph and both quote ceilings. See
+[ADR 0050](docs/decisions/0050-earn-coarse-to-fine-sizing-hot-path.md) and
+[the dynamic-graph story](docs/stories/dynamic-earn-omnipool-live-graph.md).
 
 The generic economic unit is:
 
@@ -95,7 +96,8 @@ and [ADR 0052](docs/decisions/0052-static-cross-chain-shadow-read-model.md).
 
 The public dashboard adds one independent `机会` page beside the existing four operations pages. Its lightweight
 ledger separates exact-ready, near-threshold, filtered and unknown candidates without making the browser materialize
-the complete source graph. A separate signer-free service backfills seven days of exact reviewed Earn route receipts
+the complete source graph. A separate signer-free service backfills seven days of contiguous, amount-linked Earn Vault
+cycle receipts
 from the official public RPC; it cannot sign or broadcast, and it leaves lost-race evidence unknown until a same-block
 counterfactual exists. See [ADR 0057](docs/decisions/0057-opportunity-ledger-and-receipt-census.md).
 

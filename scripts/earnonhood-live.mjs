@@ -31,13 +31,22 @@ import {
   selectEarnOnHoodGasCandidates,
 } from '../src/earnonhood-live-policy.mjs'
 import {
+  assertEarnRouteShape,
+  buildEarnOnHoodExactQuoteShortlist,
+  enumerateEarnOnHoodCycles,
+  normalizeEarnOnHoodCatalog,
+  routeExistsInCatalog,
+} from '../src/earnonhood-graph.mjs'
+import {
   EARN_BATCH_ROUTER as BATCH_ROUTER,
-  EARN_POOL_ADDRESSES as ROUTE_POOLS,
+  EARN_LEGACY_REVIEWED_ROUTES,
+  EARN_LEGACY_ROUTE_COMMITMENT,
+  EARN_POOLS_URL,
+  EARN_ROUTE_DISCOVERY_POLICY,
   EARN_ROUTE_COMMITMENT,
-  EARN_ROUTES as ROUTES,
-  EARN_ROUTE_STEPS as ROUTE_STEPS,
   EARN_VAULT as VAULT,
   EARN_WETH as WETH,
+  maximumEarnPublicExactQuotes,
 } from '../src/earnonhood-routes.mjs'
 import {
   DUAL_AUTHORIZATION_POLICY_VERSION,
@@ -54,6 +63,7 @@ const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
 const WALLET = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
 const EXPECTED_STATIC_SWAP_FEE = 3_000_000_000_000_000n
 const DEADLINE_SECONDS = 45n
+const MAX_CATALOG_BYTES = 2_000_000
 
 const pathComponents = [
   { name: 'tokenIn', type: 'address' },
@@ -298,12 +308,14 @@ function assertSharedAuthorization(context, { maximumGasCostWei = null, currentS
     arm.earnOnHood.routeCommitment !== EARN_ROUTE_COMMITMENT ||
     arm.earnOnHood.vault?.toLowerCase() !== VAULT.toLowerCase() ||
     arm.earnOnHood.batchRouter?.toLowerCase() !== BATCH_ROUTER.toLowerCase() ||
+    arm.earnOnHood.poolScope !== EARN_ROUTE_DISCOVERY_POLICY.poolScope ||
+    Number(arm.earnOnHood.maximumHops) !== EARN_ROUTE_DISCOVERY_POLICY.maximumHops ||
     arm.earnOnHood.principalPolicy !== 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP' ||
     arm.earnOnHood.sizingAlgorithm !== EARN_SIZING_ALGORITHM ||
     Number(arm.earnOnHood.coarseProbePoints) !== runtimeConfig.earnLiveCoarseProbePoints ||
     Number(arm.earnOnHood.refinementPoints) !== runtimeConfig.earnLiveRefinementPoints ||
     Number(arm.earnOnHood.publicMaximumExactQuotesPerWake) !==
-      ROUTES.length * (runtimeConfig.earnLiveCoarseProbePoints + runtimeConfig.earnLiveRefinementPoints) ||
+      maximumEarnPublicExactQuotes(runtimeConfig.earnLiveRefinementPoints) ||
     Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== runtimeConfig.earnLiveRefinementPoints + 3
   ) {
     throw new Error('shared EarnOnHood route or principal authorization mismatch')
@@ -352,17 +364,58 @@ function routePath(route, amountIn, minimumAmountOut) {
   }
 }
 
-async function assertProtocolIdentity(client, blockNumber) {
-  const codeTargets = [VAULT, BATCH_ROUTER, WETH, ...ROUTE_POOLS]
-  const [chainId, codes, routerVault, routerWeth, wethSymbol, wethDecimals, poolChecks] = await Promise.all([
+async function loadDynamicRouteBook() {
+  const response = await fetch(EARN_POOLS_URL, {
+    headers: { accept: 'application/json', 'user-agent': 'manga-chan-atomic-arbitrage/0.13' },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!response.ok) throw new Error(`EarnOnHood pool catalog returned HTTP ${response.status}`)
+  const contentLength = Number(response.headers.get('content-length') || 0)
+  if (contentLength > MAX_CATALOG_BYTES) throw new Error('EarnOnHood pool catalog exceeds the response bound')
+  const body = await response.text()
+  if (Buffer.byteLength(body) > MAX_CATALOG_BYTES) throw new Error('EarnOnHood pool catalog exceeds the response bound')
+  const catalog = normalizeEarnOnHoodCatalog(JSON.parse(body))
+  const routes = enumerateEarnOnHoodCycles(catalog.pools)
+  if (routes.length === 0) throw new Error('EarnOnHood dynamic graph contains no WETH-settled cycle')
+  return {
+    ...catalog,
+    routes,
+    poolByAddress: new Map(catalog.pools.map((pool) => [pool.address.toLowerCase(), pool])),
+  }
+}
+
+async function assertCoreProtocolIdentity(client, blockNumber) {
+  const [chainId, codes, routerVault, routerWeth, wethSymbol, wethDecimals] = await Promise.all([
     client.getChainId(),
-    Promise.all(codeTargets.map((address) => client.getCode({ address, blockNumber }))),
+    Promise.all([VAULT, BATCH_ROUTER, WETH].map((address) => client.getCode({ address, blockNumber }))),
     client.readContract({ address: BATCH_ROUTER, abi: batchRouterAbi, functionName: 'getVault', blockNumber }),
     client.readContract({ address: BATCH_ROUTER, abi: batchRouterAbi, functionName: 'getWeth', blockNumber }),
     client.readContract({ address: WETH, abi: wethAbi, functionName: 'symbol', blockNumber }),
     client.readContract({ address: WETH, abi: wethAbi, functionName: 'decimals', blockNumber }),
+  ])
+  if (chainId !== CHAIN_ID) throw new Error(`wrong chain id ${chainId}`)
+  if (codes.some((code) => !code || code === '0x')) throw new Error('a canonical EarnOnHood target has no bytecode')
+  if (routerVault.toLowerCase() !== VAULT.toLowerCase() || routerWeth.toLowerCase() !== WETH.toLowerCase()) {
+    throw new Error('BatchRouter dependency identity mismatch')
+  }
+  if (wethSymbol !== 'WETH' || wethDecimals !== 18)
+    throw new Error(`WETH identity mismatch: ${wethSymbol}/${wethDecimals}`)
+}
+
+async function assertDynamicRouteIdentity(client, blockNumber, routes, routeBook) {
+  const checkedRoutes = routes.map((route) => assertEarnRouteShape(route))
+  if (checkedRoutes.some((route) => !routeExistsInCatalog(route, routeBook.routes))) {
+    throw new Error('dynamic Earn route is absent from the current official catalog graph')
+  }
+  const pools = [
+    ...new Map(
+      checkedRoutes.flatMap((route) => route.steps).map((step) => [step.pool.toLowerCase(), step.pool]),
+    ).values(),
+  ]
+  const [codes, poolChecks] = await Promise.all([
+    Promise.all(pools.map((address) => client.getCode({ address, blockNumber }))),
     Promise.all(
-      ROUTE_POOLS.map(async (pool) => {
+      pools.map(async (pool) => {
         const [initialized, paused, recoveryMode, tokens, staticSwapFee] = await Promise.all([
           client.readContract({
             address: VAULT,
@@ -404,28 +457,27 @@ async function assertProtocolIdentity(client, blockNumber) {
       }),
     ),
   ])
-  if (chainId !== CHAIN_ID) throw new Error(`wrong chain id ${chainId}`)
-  if (codes.some((code) => !code || code === '0x'))
-    throw new Error('a canonical EarnOnHood route target has no bytecode')
-  if (routerVault.toLowerCase() !== VAULT.toLowerCase() || routerWeth.toLowerCase() !== WETH.toLowerCase()) {
-    throw new Error('BatchRouter dependency identity mismatch')
-  }
-  if (wethSymbol !== 'WETH' || wethDecimals !== 18)
-    throw new Error(`WETH identity mismatch: ${wethSymbol}/${wethDecimals}`)
+  if (codes.some((code) => !code || code === '0x')) throw new Error('an EarnOnHood candidate pool has no bytecode')
   for (const check of poolChecks) {
     const tokens = check.tokens.map((token) => token.toLowerCase())
     const requiredTokens = new Set(
-      ROUTE_STEPS.filter((step) => step.pool.toLowerCase() === check.pool.toLowerCase()).flatMap((step) => [
-        step.tokenIn.toLowerCase(),
-        step.tokenOut.toLowerCase(),
-      ]),
+      checkedRoutes
+        .flatMap((route) => route.steps)
+        .filter((step) => step.pool.toLowerCase() === check.pool.toLowerCase())
+        .flatMap((step) => [step.tokenIn.toLowerCase(), step.tokenOut.toLowerCase()]),
     )
+    const catalogTokens = routeBook.poolByAddress
+      .get(check.pool.toLowerCase())
+      ?.tokens.map((token) => token.address.toLowerCase())
     if (
       !check.initialized ||
       check.paused ||
       check.recoveryMode ||
       check.staticSwapFee !== EXPECTED_STATIC_SWAP_FEE ||
-      [...requiredTokens].some((token) => !tokens.includes(token))
+      [...requiredTokens].some((token) => !tokens.includes(token)) ||
+      !catalogTokens ||
+      catalogTokens.length !== tokens.length ||
+      catalogTokens.some((token) => !tokens.includes(token))
     ) {
       throw new Error(`EarnOnHood pool boundary mismatch: ${check.pool}`)
     }
@@ -483,10 +535,20 @@ function sortEarnQuotes(quotes) {
   return quotes
 }
 
-async function optimizeEarnOnHoodQuotes(client, sizing, blockNumber, candidateHint = null) {
+async function optimizeEarnOnHoodQuotes(
+  client,
+  sizing,
+  blockNumber,
+  routeBook,
+  gasPriceWei,
+  candidateHint = null,
+  focusPool = null,
+) {
   if (candidateHint) {
-    const route = ROUTES.find((item) => item.id === candidateHint.routeId)
-    if (!route) throw new Error('public-screen candidate route is outside the committed Earn route book')
+    const route = assertEarnRouteShape(candidateHint.route)
+    if (!routeExistsInCatalog(route, routeBook.routes)) {
+      throw new Error('public-screen candidate route left the current dynamic Earn graph')
+    }
     const targeted = buildEarnOnHoodTargetedAmounts({
       spendableWei: sizing.spendableWei,
       lowerBoundWei: candidateHint.lowerBoundWei,
@@ -507,12 +569,27 @@ async function optimizeEarnOnHoodQuotes(client, sizing, blockNumber, candidateHi
       exactQuoteCount: quotes.length,
       maximumExactQuoteCount: runtimeConfig.earnLiveRefinementPoints + 3,
       publicScreenBlockNumber: candidateHint.publicBlockNumber,
+      routeGraphCount: routeBook.routes.length,
+      shortlistedRouteCount: 1,
     }
   }
 
-  const coarseInputs = ROUTES.flatMap((route) => sizing.amounts.map((amountIn) => ({ route, amountIn })))
-  const coarseQuotes = await exactQuotesAtBlock(client, coarseInputs, blockNumber)
-  const refinementInputs = ROUTES.flatMap((route) => {
+  const shortlist = buildEarnOnHoodExactQuoteShortlist({
+    pools: routeBook.pools,
+    routes: routeBook.routes,
+    amounts: sizing.amounts,
+    gasPriceWei,
+    focusPool,
+  })
+  const coarseQuotes = await exactQuotesAtBlock(client, shortlist.quoteInputs, blockNumber)
+  const bestByRoute = new Map()
+  for (const quote of sortEarnQuotes([...coarseQuotes])) {
+    if (!quote.error && !bestByRoute.has(quote.route.id)) bestByRoute.set(quote.route.id, quote)
+  }
+  const refinementRoutes = [...bestByRoute.values()]
+    .slice(0, EARN_ROUTE_DISCOVERY_POLICY.refinementRouteLimit)
+    .map((quote) => quote.route)
+  const refinementInputs = refinementRoutes.flatMap((route) => {
     const refinement = buildEarnOnHoodRefinementAmounts({
       spendableWei: sizing.spendableWei,
       quotes: coarseQuotes.filter((quote) => quote.route.id === route.id),
@@ -523,13 +600,14 @@ async function optimizeEarnOnHoodQuotes(client, sizing, blockNumber, candidateHi
   const refinementQuotes = await exactQuotesAtBlock(client, refinementInputs, blockNumber)
   return {
     quotes: sortEarnQuotes([...coarseQuotes, ...refinementQuotes]),
-    quoteMode: 'FULL_ROUTE_BOOK_COARSE_TO_FINE',
+    quoteMode: 'DYNAMIC_FULL_GRAPH_LOCAL_RANK_THEN_EXACT',
     coarseQuoteCount: coarseQuotes.length,
     refinementQuoteCount: refinementQuotes.length,
     exactQuoteCount: coarseQuotes.length + refinementQuotes.length,
-    maximumExactQuoteCount:
-      ROUTES.length * (runtimeConfig.earnLiveCoarseProbePoints + runtimeConfig.earnLiveRefinementPoints),
+    maximumExactQuoteCount: maximumEarnPublicExactQuotes(runtimeConfig.earnLiveRefinementPoints),
     publicScreenBlockNumber: null,
+    routeGraphCount: routeBook.routes.length,
+    shortlistedRouteCount: shortlist.selectedRoutes.length,
   }
 }
 
@@ -538,10 +616,11 @@ function currentGasSolvency(sharedContext) {
   return earnOnHoodGasSolvency(readJsonLines(auditPath))
 }
 
-async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = null } = {}) {
+async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = null, focusPool = null } = {}) {
   const blockNumber = await client.getBlockNumber()
   const block = await client.getBlock({ blockNumber })
-  await assertProtocolIdentity(client, blockNumber)
+  await assertCoreProtocolIdentity(client, blockNumber)
+  const routeBook = await loadDynamicRouteBook()
   const [walletBalance, nonceLatest, noncePending, gasPrice, fees] = await Promise.all([
     client.getBalance({ address: WALLET, blockNumber }),
     client.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
@@ -580,7 +659,15 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
       },
     }
   }
-  const optimizer = await optimizeEarnOnHoodQuotes(client, sizing, blockNumber, candidateHint)
+  const optimizer = await optimizeEarnOnHoodQuotes(
+    client,
+    sizing,
+    blockNumber,
+    routeBook,
+    gasPrice > (fees.maxFeePerGas || 0n) ? gasPrice : fees.maxFeePerGas || gasPrice,
+    candidateHint,
+    focusPool,
+  )
   const { quotes } = optimizer
   const positiveGross = quotes.filter((quote) => !quote.error && quote.amountOut > quote.amountIn)
   if (positiveGross.length === 0) {
@@ -608,6 +695,10 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
         quoteMode: optimizer.quoteMode,
         exactQuoteCount: optimizer.exactQuoteCount,
         maximumExactQuoteCount: optimizer.maximumExactQuoteCount,
+        routeGraphCount: optimizer.routeGraphCount,
+        shortlistedRouteCount: optimizer.shortlistedRouteCount,
+        eligiblePoolCount: routeBook.pools.length,
+        rejectedCatalogPoolCount: routeBook.rejected.length,
       },
     }
   }
@@ -616,8 +707,24 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
   const minimumNetProfitWei = parseEther(runtimeConfig.earnLiveMinNetWeth)
   const minimumQuoteHeadroomWei = parseEther(runtimeConfig.earnLiveMinHeadroomWeth)
   const evaluations = []
-  const gasCandidates = selectEarnOnHoodGasCandidates(positiveGross, candidateHint ? 1 : ROUTES.length)
-  for (const candidate of gasCandidates) {
+  const gasCandidates = selectEarnOnHoodGasCandidates(
+    positiveGross,
+    candidateHint ? 1 : EARN_ROUTE_DISCOVERY_POLICY.maximumGasCandidates,
+    { observedFeePerGasWei: observedFeePerGas },
+  )
+  const identityChecks = await mapWithConcurrency(gasCandidates, 4, async (candidate) => {
+    try {
+      await assertDynamicRouteIdentity(client, blockNumber, [candidate.route], routeBook)
+      return { candidate, error: null }
+    } catch (error) {
+      return { candidate, error: errorText(error) }
+    }
+  })
+  for (const { candidate, error: identityError } of identityChecks) {
+    if (identityError) {
+      evaluations.push({ candidate, reason: identityError })
+      continue
+    }
     try {
       const provisionalPath = routePath(candidate.route, candidate.amountIn, candidate.amountIn + 1n)
       const provisionalGas = await client.estimateContractGas({
@@ -719,6 +826,10 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
         dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
         principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
         lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
+        routeGraphCount: optimizer.routeGraphCount,
+        shortlistedRouteCount: optimizer.shortlistedRouteCount,
+        eligiblePoolCount: routeBook.pools.length,
+        rejectedCatalogPoolCount: routeBook.rejected.length,
       },
     }
   }
@@ -763,6 +874,10 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
     exactQuoteCount: optimizer.exactQuoteCount,
     maximumExactQuoteCount: optimizer.maximumExactQuoteCount,
     publicScreenBlockNumber: optimizer.publicScreenBlockNumber,
+    routeGraphCount: optimizer.routeGraphCount,
+    shortlistedRouteCount: optimizer.shortlistedRouteCount,
+    eligiblePoolCount: routeBook.pools.length,
+    rejectedCatalogPoolCount: routeBook.rejected.length,
     sizingBracketLowerEth: formatEther(quoteBracket.lowerBoundWei),
     sizingBracketUpperEth: formatEther(quoteBracket.upperBoundWei),
     deadline,
@@ -779,6 +894,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
     retainedWalletReserveWei,
     candidateHint: {
       routeId: candidate.route.id,
+      route: candidate.route,
       amountInWei: candidate.amountIn,
       lowerBoundWei: quoteBracket.lowerBoundWei,
       upperBoundWei: quoteBracket.upperBoundWei,
@@ -791,7 +907,8 @@ async function preflight({ print = true } = {}) {
   const sharedContext = sharedExecutionContext()
   const watcherPid = activeLock(dualWatchLockPath)
   const gasSolvency = currentGasSolvency(sharedContext)
-  const screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN')
+  const focusPool = process.env.EARN_WAKE_POOL ? getAddress(process.env.EARN_WAKE_POOL) : null
+  const screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN', { focusPool })
   if (screened.report.status !== 'SHOT_READY') {
     appendAudit('preflight', screened.report)
     if (print) console.log(stringify(screened.report))
@@ -918,7 +1035,13 @@ async function execute() {
       gasLimit: prepared.bounds.gasLimit,
       maxFeePerGas: prepared.bounds.maxFeePerGas,
       maxPriorityFeePerGas: 0n,
+      routeId: prepared.candidate.route.id,
       route: prepared.candidate.route.symbols,
+      routeSteps: prepared.candidate.route.steps.map((step) => ({
+        pool: step.pool,
+        tokenIn: step.tokenIn,
+        tokenOut: step.tokenOut,
+      })),
       pools: prepared.candidate.route.steps.map((step) => step.pool),
       quotedAmountOutWei: latestQuote,
       minimumAmountOutWei: prepared.bounds.minimumAmountOutWei,
@@ -1075,8 +1198,15 @@ async function execute() {
 }
 
 function routeForPlan(plan) {
+  if (plan.routeCommitment === EARN_ROUTE_COMMITMENT && Array.isArray(plan.routeSteps)) {
+    return assertEarnRouteShape({
+      id: plan.routeId,
+      symbols: Array.isArray(plan.route) ? plan.route : [],
+      steps: plan.routeSteps,
+    })
+  }
   const pools = Array.isArray(plan.pools) ? plan.pools.map((value) => String(value).toLowerCase()) : []
-  return ROUTES.find(
+  return EARN_LEGACY_REVIEWED_ROUTES.find(
     (route) =>
       route.steps.length === pools.length &&
       route.steps.every((step, index) => step.pool.toLowerCase() === pools[index]),
@@ -1116,7 +1246,7 @@ async function reconcile() {
     )
     if (!plan) throw new Error('EarnOnHood mutation plan is missing')
     const route = routeForPlan(plan)
-    if (!route || plan.routeCommitment !== EARN_ROUTE_COMMITMENT) {
+    if (!route || ![EARN_ROUTE_COMMITMENT, EARN_LEGACY_ROUTE_COMMITMENT].includes(plan.routeCommitment)) {
       throw new Error('EarnOnHood mutation plan route is outside the reviewed commitment')
     }
     const rawPrivateRef = path.resolve(unresolved.rawPrivateRef || '')
