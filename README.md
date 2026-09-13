@@ -93,6 +93,12 @@ Robinhood/BNB cross-venue Shadow produced by the separate atomic-cycle service. 
 broadcast path; a positive Shadow row is not a trade or realized profit. See [ADR 0051](docs/decisions/0051-static-public-daily-profit-api.md)
 and [ADR 0052](docs/decisions/0052-static-cross-chain-shadow-read-model.md).
 
+The public dashboard adds one independent `机会` page beside the existing four operations pages. Its lightweight
+ledger separates exact-ready, near-threshold, filtered and unknown candidates without making the browser materialize
+the complete source graph. A separate signer-free service backfills seven days of exact reviewed Earn route receipts
+from the official public RPC; it cannot sign or broadcast, and it leaves lost-race evidence unknown until a same-block
+counterfactual exists. See [ADR 0057](docs/decisions/0057-opportunity-ledger-and-receipt-census.md).
+
 The same five-minute snapshot now includes a sanitized cross-strategy funds registry: two operator wallets, three active
 executors and two stopped-but-funded executors across Base and Robinhood Chain. The `资金` page keeps the two parked
 contracts visible until a separately authorized, receipt-reconciled collection is complete. Base contributes only a
@@ -437,11 +443,15 @@ than being mislabeled as opportunities:
 GET /api/v1/overview
 GET /api/v1/opportunities
 GET /api/v1/opportunities/:id
+GET /api/v1/opportunity-ledger/summary
+GET /api/v1/opportunity-ledger/items?stage=NOW|NEAR|FILTERED|UNKNOWN&limit=50
+GET /api/v1/opportunity-ledger/episodes?limit=50
 GET /api/v1/sources
 GET /api/v1/episodes
 GET /api/v1/executions
 GET /api/v1/system
 GET /api/v1/business
+GET /api/v1/competitors/earn
 ```
 
 The production dashboard is publicly readable at `http://47.251.185.146/`. Port 80 is the catch-all virtual host, so

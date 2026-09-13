@@ -71,6 +71,7 @@ install -o root -g root -m 0644 deploy/systemd/manga-dual-watcher.service /etc/s
 install -o root -g root -m 0644 deploy/systemd/manga-legacy-collect.service /etc/systemd/system/manga-legacy-collect.service
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
+install -o root -g root -m 0644 deploy/systemd/manga-opportunity-census.service /etc/systemd/system/manga-opportunity-census.service
 install -o root -g root -m 0644 deploy/systemd/manga-business-report.service /etc/systemd/system/manga-business-report.service
 install -o root -g root -m 0644 deploy/systemd/manga-business-report.path /etc/systemd/system/manga-business-report.path
 install -o root -g root -m 0644 deploy/systemd/manga-business-report.timer /etc/systemd/system/manga-business-report.timer

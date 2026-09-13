@@ -1,4 +1,10 @@
 import { getAddress } from 'viem'
+import {
+  buildOpportunityLedger,
+  opportunityLedgerSummary,
+  queryOpportunityEpisodes,
+  queryOpportunityLedger,
+} from './opportunity-ledger.mjs'
 import { BoardStatus, finiteNumber } from './opportunity-board.mjs'
 import { selectVisibleDopplerLaunches, sourceFactEvidenceId } from './source-adapters.mjs'
 import {
@@ -618,6 +624,7 @@ export function buildDashboardModel({
   const realizedNetUsdg = realized.reduce((sum, item) => sum + Number(item.realizedNetUsdg || 0), 0)
   const coverage = coverageQuality(snapshot, sourceCatalog)
   const strategyGraph = sourceCatalog?.summary?.strategyGraph || null
+  const opportunityLedger = buildOpportunityLedger({ snapshot, episodes, executions })
   return {
     schemaVersion: 4,
     generatedAt: snapshot?.generatedAt || null,
@@ -646,6 +653,7 @@ export function buildDashboardModel({
       serviceStatus: snapshot?.health?.status || 'STARTING',
     },
     opportunities,
+    opportunityLedger,
     sources: Object.values(sourceCatalog?.adapters || {}),
     episodes,
     executions,
@@ -683,6 +691,23 @@ export function routeDashboardApi(pathname, searchParams, model) {
       },
     }
   }
+  if (pathname === '/api/v1/opportunity-ledger' || pathname === '/api/v1/opportunity-ledger/summary') {
+    return { status: 200, payload: opportunityLedgerSummary(model.opportunityLedger) }
+  }
+  if (pathname === '/api/v1/opportunity-ledger/items') {
+    try {
+      return { status: 200, payload: queryOpportunityLedger(model.opportunityLedger, searchParams) }
+    } catch (error) {
+      return { status: 400, payload: { error: error.message } }
+    }
+  }
+  if (pathname === '/api/v1/opportunity-ledger/episodes') {
+    try {
+      return { status: 200, payload: queryOpportunityEpisodes(model.opportunityLedger, searchParams) }
+    } catch (error) {
+      return { status: 400, payload: { error: error.message } }
+    }
+  }
   if (pathname === '/api/v1/opportunities') {
     const items = filterDashboardOpportunities(model.opportunities, {
       platform: searchParams.get('platform'),
@@ -693,14 +718,24 @@ export function routeDashboardApi(pathname, searchParams, model) {
       minimumNet: searchParams.has('minimumNet') ? searchParams.get('minimumNet') : null,
       query: searchParams.get('query'),
     })
+    const rawLimit = searchParams.get('limit')
+    const rawCursor = searchParams.get('cursor')
+    const limit = rawLimit === null ? Math.max(items.length, 1) : Number(rawLimit)
+    const cursor = rawCursor === null ? 0 : Number(rawCursor)
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(cursor) || cursor < 0) {
+      return { status: 400, payload: { error: 'invalid opportunity pagination' } }
+    }
+    const page = items.slice(cursor, cursor + limit)
     return {
       status: 200,
       payload: {
         schemaVersion: model.schemaVersion,
         generatedAt: model.generatedAt,
         count: items.length,
+        cursor,
+        nextCursor: cursor + page.length < items.length ? String(cursor + page.length) : null,
         view: 'SUMMARY',
-        items: items.map((item) => summarizeDashboardOpportunity(item)),
+        items: page.map((item) => summarizeDashboardOpportunity(item)),
       },
     }
   }

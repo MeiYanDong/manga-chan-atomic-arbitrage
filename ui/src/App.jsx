@@ -12,9 +12,12 @@ import {
   noTradeReason,
   opportunityLane,
   opportunityReason,
+  opportunityStageLabel,
+  opportunityStageTone,
   relativeAge,
   runtimeBadge,
   selectOpportunitiesForOperator,
+  crossChainRouteResult,
   sourceAdapterDescription,
   sourceAdapterLabel,
   sourceLabel,
@@ -66,7 +69,6 @@ function useOperationsData() {
       try {
         const results = await Promise.allSettled([
           requestJson('/api/v1/overview', controller.signal),
-          requestJson('/api/v1/opportunities', controller.signal),
           requestJson('/api/v1/sources', controller.signal),
           requestJson('/api/v1/system', controller.signal),
           requestOptionalJson('/api/v1/business', controller.signal),
@@ -77,15 +79,14 @@ function useOperationsData() {
         if (succeeded === 0) throw new Error('all presentation endpoints are unavailable')
         const value = (index) => (results[index].status === 'fulfilled' ? results[index].value : null)
         const overview = value(0)
-        const opportunities = value(1)
-        const sources = value(2)
-        const system = value(3)
-        const business = value(4)
-        const chainOpportunities = value(5)
+        const sources = value(1)
+        const system = value(2)
+        const business = value(3)
+        const chainOpportunities = value(4)
         setState((before) => ({
           data: {
             overview: overview || before.data.overview,
-            opportunities: opportunities?.items || before.data.opportunities,
+            opportunities: before.data.opportunities,
             sources: sources?.items || before.data.sources,
             sourceSummary: sources?.summary || before.data.sourceSummary,
             system: system || before.data.system,
@@ -110,6 +111,92 @@ function useOperationsData() {
       controller?.abort()
     }
   }, [])
+  return state
+}
+
+function useStrategyOpportunities(enabled) {
+  const [state, setState] = useState({ items: [], count: 0, loading: false, error: null })
+  useEffect(() => {
+    if (!enabled) return undefined
+    let mounted = true
+    let controller = null
+    const load = async () => {
+      controller?.abort()
+      controller = new AbortController()
+      setState((before) => ({ ...before, loading: true }))
+      try {
+        const payload = await requestJson('/api/v1/opportunities?limit=12', controller.signal)
+        if (!mounted) return
+        setState({ items: payload.items || [], count: payload.count || 0, loading: false, error: null })
+      } catch (error) {
+        if (!mounted || error.name === 'AbortError') return
+        setState((before) => ({ ...before, loading: false, error: error.message }))
+      }
+    }
+    load()
+    const interval = setInterval(load, 30_000)
+    return () => {
+      mounted = false
+      clearInterval(interval)
+      controller?.abort()
+    }
+  }, [enabled])
+  return state
+}
+
+function useOpportunityLedger(stage) {
+  const [state, setState] = useState({
+    summary: null,
+    items: [],
+    episodes: [],
+    competitors: null,
+    loading: true,
+    error: null,
+  })
+  useEffect(() => {
+    let mounted = true
+    let controller = null
+    const load = async () => {
+      controller?.abort()
+      controller = new AbortController()
+      try {
+        const paths = [
+          '/api/v1/opportunity-ledger/summary',
+          `/api/v1/opportunity-ledger/items?stage=${encodeURIComponent(stage)}&limit=50`,
+          stage === 'UNKNOWN' ? '/api/v1/opportunity-ledger/episodes?limit=50' : null,
+          '/api/v1/competitors/earn',
+        ]
+        const results = await Promise.allSettled(
+          paths.map((path) => (path ? requestOptionalJson(path, controller.signal) : Promise.resolve(null))),
+        )
+        if (!mounted) return
+        const value = (index) => (results[index].status === 'fulfilled' ? results[index].value : null)
+        const summary = value(0)
+        const items = value(1)
+        const episodes = value(2)
+        const competitors = value(3)
+        if (!summary || !items) throw new Error('opportunity ledger is unavailable')
+        setState({
+          summary,
+          items: items.items || [],
+          episodes: episodes?.items || [],
+          competitors,
+          loading: false,
+          error: null,
+        })
+      } catch (error) {
+        if (!mounted || error.name === 'AbortError') return
+        setState((before) => ({ ...before, loading: false, error: error.message }))
+      }
+    }
+    load()
+    const interval = setInterval(load, 15_000)
+    return () => {
+      mounted = false
+      clearInterval(interval)
+      controller?.abort()
+    }
+  }, [stage])
   return state
 }
 
@@ -747,7 +834,334 @@ function CrossChainOpportunityTable({ snapshot }) {
   )
 }
 
-function StrategyPage({ data, onOpenOpportunity }) {
+const opportunityStages = Object.freeze(['NOW', 'NEAR', 'FILTERED', 'UNKNOWN'])
+
+const opportunityStageNotes = Object.freeze({
+  NOW: '已通过成交前精确核验；出现时由实盘服务立即处理。',
+  NEAR: '已观察到价差，但经过 Gas、风险储备或成交前核验后还不能执行。',
+  FILTERED: '有新鲜完整报价，但闭环毛利不为正。',
+  UNKNOWN: '报价过期、不完整或仍未获取；未知不会被写成零机会。',
+})
+
+function opportunityMoney(value, unit = 'USDG', signed = false) {
+  if (value === null || value === undefined || value === '') return '—'
+  return `${number(value, unit === 'USDG' ? 3 : 6, signed)} ${unit}`
+}
+
+function valueTone(value) {
+  if (value === null || value === undefined || value === '') return ''
+  const numeric = Number.parseFloat(String(value))
+  if (!Number.isFinite(numeric) || numeric === 0) return ''
+  return numeric > 0 ? 'positive' : 'negative'
+}
+
+function OpportunityStageTabs({ stage, counts, onChange }) {
+  return (
+    <div className="opportunity-tabs" role="tablist" aria-label="机会阶段">
+      {opportunityStages.map((value) => (
+        <button
+          key={value}
+          type="button"
+          role="tab"
+          aria-selected={stage === value}
+          className={stage === value ? 'active' : ''}
+          onClick={() => onChange(value)}
+        >
+          <span>{opportunityStageLabel(value)}</span>
+          <strong>{counts?.[value] ?? '—'}</strong>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function OpportunityLedgerTable({ items, stage, loading }) {
+  return (
+    <div className="table-wrap">
+      <table className="opportunity-ledger-table">
+        <thead>
+          <tr>
+            <th>资产 / 路线</th>
+            <th className="numeric">测试本金</th>
+            <th className="numeric">毛利</th>
+            <th className="numeric">预估成本</th>
+            <th className="numeric">预估净利润</th>
+            <th>当前结论</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.opportunityId}>
+              <td>
+                <strong>{item.asset}</strong>
+                <small>{item.route}</small>
+                {item.disclosure?.exactRouteDelayed && (
+                  <small>当前精确路线与本金将于 {formatBeijingTime(item.disclosure.availableAt)} 公开</small>
+                )}
+              </td>
+              <td className="numeric">
+                {item.disclosure?.exactRouteDelayed
+                  ? '延迟公开'
+                  : opportunityMoney(item.economics?.principal, item.economics?.unit)}
+              </td>
+              <td className={`numeric ${valueTone(item.economics?.grossProfit)}`}>
+                {opportunityMoney(item.economics?.grossProfit, item.economics?.unit, true)}
+              </td>
+              <td className="numeric">{opportunityMoney(item.economics?.estimatedCost, item.economics?.unit)}</td>
+              <td className={`numeric ${valueTone(item.economics?.estimatedNetProfit)}`}>
+                {opportunityMoney(item.economics?.estimatedNetProfit, item.economics?.unit, true)}
+              </td>
+              <td>
+                <Status value={opportunityStageTone(item.stage)} label={opportunityStageLabel(item.stage)} />
+                <small>{item.reason}</small>
+              </td>
+            </tr>
+          ))}
+          {items.length === 0 && (
+            <tr>
+              <td colSpan={6} className="empty-cell">
+                {loading ? '正在更新机会证据…' : `${opportunityStageLabel(stage)}当前为 0`}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function OpportunityFunnel({ overview, ledger }) {
+  const funnel = overview?.funnel || {}
+  const stages = [
+    ['已发现池子', funnel.discoveredPools],
+    ['多池目标', funnel.multiPoolTargets],
+    ['进入候选', funnel.admittedCandidates],
+    ['新鲜报价', funnel.freshQuotes],
+    ['接近门槛', ledger?.counts?.NEAR],
+    ['精确可执行', ledger?.counts?.NOW],
+  ]
+  return (
+    <Section title="机会漏斗" side={<Status value={ledger?.coverage?.status || 'UNKNOWN'} />}>
+      <div className="funnel-line">
+        {stages.map(([label, value], index) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value ?? '—'}</strong>
+            {index < stages.length - 1 && <i aria-hidden="true">›</i>}
+          </div>
+        ))}
+      </div>
+      <p className="coverage-note">
+        当前新鲜覆盖 {overview?.coverageQuality?.freshQuotedTokens ?? '—'} /{' '}
+        {overview?.coverageQuality?.candidateTokens ?? '—'} 条候选；未报价与过期报价都归入“未知”。
+      </p>
+    </Section>
+  )
+}
+
+function CrossChainRouteLedger({ snapshot }) {
+  const rows = (snapshot?.networks || []).flatMap((network) =>
+    (network.bestObservedRoutes || []).map((route) => ({ network, route })),
+  )
+  return (
+    <Section title="Robinhood 与 BNB 跨平台扫描">
+      <p className="section-note">这是固定区块的只读报价；“净正”不等于已经成交。</p>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>链 / 路线</th>
+              <th className="numeric">测试本金</th>
+              <th className="numeric">毛利</th>
+              <th className="numeric">Gas / 风险储备</th>
+              <th className="numeric">预估净利润</th>
+              <th>结论</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ network, route }, index) => {
+              const result = crossChainRouteResult(route)
+              const delay =
+                result.stage === 'NEAR' &&
+                Number.isFinite(Date.parse(network.observedAt)) &&
+                Date.now() - Date.parse(network.observedAt) < 5 * 60 * 1_000
+              return (
+                <tr key={`${network.id}:${route.pair}:${route.route}:${index}`}>
+                  <td>
+                    <strong>{network.name}</strong>
+                    <small>{delay ? `${route.routeType || '多池'}闭环` : `${route.pair} · ${route.route}`}</small>
+                  </td>
+                  <td className="numeric">{delay ? '延迟公开' : route.principal}</td>
+                  <td className={`numeric ${valueTone(route.grossProfit)}`}>{route.grossProfit}</td>
+                  <td className="numeric">
+                    {route.estimatedGasCost}
+                    <small>储备 {route.riskReserve}</small>
+                  </td>
+                  <td className={`numeric ${valueTone(route.estimatedNetProfit)}`}>{route.estimatedNetProfit}</td>
+                  <td>
+                    <Status value={opportunityStageTone(result.stage)} label={result.label} />
+                  </td>
+                </tr>
+              )
+            })}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={6} className="empty-cell">
+                  跨平台报价尚未生成；这不代表机会为零。
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  )
+}
+
+function HistoricalOpportunityTable({ items }) {
+  return (
+    <Section title="历史价差与证据空档">
+      <p className="section-note">历史价差不自动等于错失利润；只有完整反事实证据才能记为被抢或错失。</p>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>历史路线</th>
+              <th>最后观察</th>
+              <th className="numeric">当时预估净利润</th>
+              <th>可以得出的结论</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.episodeId}>
+                <td>{item.route}</td>
+                <td>{formatBeijingTime(item.lastPositiveAt || item.openedAt)}</td>
+                <td className="numeric positive">{opportunityMoney(item.lastPositiveNetUsdg, 'USDG', true)}</td>
+                <td>{item.conclusion}</td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={4} className="empty-cell">
+                  暂无历史价差记录
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  )
+}
+
+function CompetitorEvidence({ snapshot }) {
+  const summary = snapshot?.summary
+  const leaders = snapshot?.leaders || []
+  const evidence = snapshot?.recentEvidence || []
+  const generatedAtMs = Date.parse(snapshot?.generatedAt || '')
+  const stale = !Number.isFinite(generatedAtMs) || Date.now() - generatedAtMs > 2 * 60 * 1_000
+  const status = snapshot && !stale ? snapshot.status : 'STALE'
+  return (
+    <Section title="竞争者与被抢证据" side={<Status value={snapshot ? status : 'PARTIAL'} />}>
+      <p className="section-note">只计入审查路线的链上成交回执；普通 swap、未知报价和历史正价差不会被冒充为竞争。</p>
+      <dl className="fact-grid competitor-facts">
+        <div>
+          <dt>已审查交易</dt>
+          <dd>{summary?.transactionsReviewed ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>外部闭环回执</dt>
+          <dd>{summary?.externalCycleReceipts ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>已确认竞争者</dt>
+          <dd>{summary?.distinctExternalActors ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>已证明被抢</dt>
+          <dd>{summary?.confirmedLostRaces ?? '—'}</dd>
+        </div>
+      </dl>
+      {!snapshot && <p className="coverage-note">竞争者链上取证正在接入；当前不能声称没有竞争者。</p>}
+      {snapshot && stale && <p className="coverage-note">竞争者快照已过期，当前数字不能当作实时结论。</p>}
+      {snapshot?.coverage?.note && <p className="coverage-note">{snapshot.coverage.note}</p>}
+      {leaders.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>参与者</th>
+                <th className="numeric">精确闭环回执</th>
+                <th className="numeric">路线净正估算</th>
+                <th>最后出现</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leaders.map((item) => (
+                <tr key={item.actorAlias}>
+                  <td>{item.actorAlias}</td>
+                  <td className="numeric">{item.confirmedCycleReceipts}</td>
+                  <td className="numeric">{item.positiveRouteEstimates}</td>
+                  <td>{formatBeijingTime(item.lastSeenAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {evidence.length > 0 && (
+        <details className="technical-details">
+          <summary>查看链上回执证据</summary>
+          <ol className="evidence-list">
+            {evidence.map((item) => (
+              <li key={item.evidenceId}>
+                <a
+                  href={`https://robinhoodchain.blockscout.com/tx/${item.transactionHash}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {item.actorAlias} · {item.route}
+                </a>{' '}
+                · 路线净额估算 {number(item.estimatedNetEth, 6, true)} ETH · {formatBeijingTime(item.occurredAt)}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+    </Section>
+  )
+}
+
+function OpportunitiesPage({ data }) {
+  const [stage, setStage] = useState('NOW')
+  const ledger = useOpportunityLedger(stage)
+  return (
+    <div className="page-stack">
+      <PageTitle
+        title="机会"
+        note="看当前能不能做、为什么没做，以及哪些结论仍缺证据。"
+        side={<Status value={ledger.summary?.coverage?.status || 'UNKNOWN'} />}
+      />
+      {ledger.error && <Notice tone="danger">机会总账暂时不可用，页面会继续自动重试。</Notice>}
+      <OpportunityFunnel overview={data.overview} ledger={ledger.summary} />
+      <OpportunityStageTabs stage={stage} counts={ledger.summary?.counts} onChange={setStage} />
+      <Section
+        title={opportunityStageLabel(stage)}
+        side={<span className="section-summary">{ledger.items.length} 条已展示</span>}
+      >
+        <p className="section-note">{opportunityStageNotes[stage]}</p>
+        <OpportunityLedgerTable items={ledger.items} stage={stage} loading={ledger.loading} />
+      </Section>
+      {stage === 'UNKNOWN' && <HistoricalOpportunityTable items={ledger.episodes} />}
+      <CrossChainRouteLedger snapshot={data.chainOpportunities} />
+      <CompetitorEvidence snapshot={ledger.competitors} />
+      <p className="page-footnote">当前只有链上成交回执与资产增量可记为收益；只读报价、模拟与历史价差均不计收益。</p>
+    </div>
+  )
+}
+
+function StrategyPage({ data, opportunityData, onOpenOpportunity }) {
   const business = data.business
   const overview = data.overview
   const services = business?.portfolio?.services || []
@@ -756,6 +1170,7 @@ function StrategyPage({ data, onOpenOpportunity }) {
   return (
     <div className="page-stack">
       <PageTitle title="策略" note="查看执行服务、候选机会和信息源覆盖；不能授权、签名或发起交易。" />
+      {opportunityData.error && <Notice>原有策略候选暂时不可用，页面会继续重试。</Notice>}
       <section className="service-strip">
         {services.map((service) => (
           <div key={service.id}>
@@ -780,7 +1195,7 @@ function StrategyPage({ data, onOpenOpportunity }) {
         }
       >
         <Notice tone="plain">{noTradeReason(business, overview)}</Notice>
-        <OpportunityTable items={data.opportunities} onOpen={onOpenOpportunity} />
+        <OpportunityTable items={opportunityData.items} onOpen={onOpenOpportunity} />
       </Section>
       <Section title="信息源">
         <SourceTable summary={data.sourceSummary} sources={data.sources} />
@@ -1047,6 +1462,7 @@ export default function App() {
     }
   }, [])
   const state = useOperationsData()
+  const strategyOpportunities = useStrategyOpportunities(page === 'strategy')
 
   useEffect(() => {
     const update = () => {
@@ -1062,8 +1478,12 @@ export default function App() {
     content = <ActivityPage business={state.data.business} onOpen={setSelectedActivity} />
   } else if (page === 'portfolio') {
     content = <FundsPage portfolio={state.data.business?.portfolio} />
+  } else if (page === 'opportunities') {
+    content = <OpportunitiesPage data={state.data} />
   } else if (page === 'strategy') {
-    content = <StrategyPage data={state.data} onOpenOpportunity={openOpportunity} />
+    content = (
+      <StrategyPage data={state.data} opportunityData={strategyOpportunities} onOpenOpportunity={openOpportunity} />
+    )
   } else {
     content = <OverviewPage data={state.data} onOpenActivity={setSelectedActivity} />
   }

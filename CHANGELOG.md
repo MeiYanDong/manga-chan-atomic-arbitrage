@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add one independent `机会` page without restructuring the existing operations pages. A lightweight paginated ledger
+  separates exact-ready, near-threshold, filtered and unknown candidates, delays current positive route/principal
+  disclosure for five minutes, and never upgrades historical positive episodes into lost-profit evidence. Remove the
+  full opportunity projection from global browser polling and load only twelve summaries when the original strategy
+  page is open.
+- Add a signer-free seven-day Earn reviewed-receipt census on the official public RPC. It recognizes only exact
+  pool/token/order/amount-linked copies of the four approved WETH cycles, aliases actors in the public projection and
+  keeps external economics at `ROUTE_RECEIPT_NET_ESTIMATE`; confirmed lost races remain unknown until a same-block
+  counterfactual exists.
 - Follow the funded Base executor migration to `0x002ccD95D1304C6fB88f67183DC1e7d1b90A577F` and consume sanitized
   heartbeat schema v2. Both fixed profit floors are now one wei, so the strategy page distinguishes a merely
   gross-positive spread from a candidate that passed latest-block re-quote, Gas and net-profit gates; no Base signer,
