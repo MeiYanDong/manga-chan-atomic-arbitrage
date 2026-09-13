@@ -4,7 +4,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   createPublicClient,
-  createWalletClient,
   defineChain,
   encodeFunctionData,
   formatEther,
@@ -18,6 +17,7 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
+import { broadcastSameRawToSequencer } from '../src/direct-sequencer.mjs'
 import { decodeEarnOnHoodReceiptRoute } from '../src/earnonhood-receipt.mjs'
 import {
   EARN_SIZING_ALGORITHM,
@@ -1090,18 +1090,17 @@ async function execute() {
         currentSignedAttempt: { event: 'mutation_signed', ...signedAttempt },
       })
     }
-    const walletClient = createWalletClient({
-      account,
-      chain,
-      transport: http(rpcUrl, { timeout: 30_000, retryCount: 0 }),
-    })
     try {
-      const acceptedHash = await walletClient.sendRawTransaction({ serializedTransaction })
-      if (acceptedHash.toLowerCase() !== hash.toLowerCase())
-        throw new Error('RPC returned a different transaction hash')
+      const broadcast = await broadcastSameRawToSequencer({ serializedTransaction, managedRpcUrl: rpcUrl })
       appendAudit(
-        'broadcast_accepted',
-        { kind: plan.kind, authorizationId: sharedContext?.authorizationId || null, hash },
+        'broadcast_result',
+        {
+          kind: plan.kind,
+          authorizationId: sharedContext?.authorizationId || null,
+          hash,
+          directSequencerStatus: broadcast.direct.status,
+          managedFallbackStatus: broadcast.fallback?.status || null,
+        },
         { mirrorShared: Boolean(sharedContext) },
       )
     } catch (error) {

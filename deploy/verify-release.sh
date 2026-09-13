@@ -23,6 +23,9 @@ fi
 if [[ -f /var/lib/manga-chan-arbitrage/weth-state.json ]]; then
   runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run dual:runtime-verify
 fi
+if [[ -f /var/lib/manga-chan-arbitrage/universal-state.json ]]; then
+  runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run global:status
+fi
 systemctl --no-pager --full status manga-chan-watcher.service || true
 systemctl --no-pager --full status manga-generic-watcher.service || true
 systemctl --no-pager --full status manga-dual-watcher.service || true

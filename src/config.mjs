@@ -46,6 +46,13 @@ const CONFIG_KEYS = new Set([
   'EARN_WATCH_ENABLED',
   'EARN_WATCH_EVENT_POLL_MS',
   'EARN_WATCH_PERIODIC_MS',
+  'GLOBAL_WATCH_ENABLED',
+  'GLOBAL_WATCH_MIN_INTERVAL_MS',
+  'GLOBAL_WATCH_PERIODIC_MS',
+  'GLOBAL_EXTRA_SETTLEMENT_ASSETS',
+  'GLOBAL_MAX_ROUTES_PER_WAKE',
+  'GLOBAL_QUOTE_CONCURRENCY',
+  'GLOBAL_LIVE_ARM',
 ])
 
 /** @param {string} file */
@@ -137,6 +144,12 @@ export function loadRuntimeConfig(environment = process.env) {
     earnWatchEnabled: strictBoolean(value('EARN_WATCH_ENABLED'), false),
     earnWatchEventPollMs: boundedInteger(value('EARN_WATCH_EVENT_POLL_MS'), 1_000, 1_000, 60_000),
     earnWatchPeriodicMs: boundedInteger(value('EARN_WATCH_PERIODIC_MS'), 300_000, 30_000, 3_600_000),
+    globalWatchEnabled: strictBoolean(value('GLOBAL_WATCH_ENABLED'), false),
+    globalWatchMinIntervalMs: boundedInteger(value('GLOBAL_WATCH_MIN_INTERVAL_MS'), 15_000, 1_000, 300_000),
+    globalWatchPeriodicMs: boundedInteger(value('GLOBAL_WATCH_PERIODIC_MS'), 300_000, 30_000, 3_600_000),
+    globalExtraSettlementAssets: value('GLOBAL_EXTRA_SETTLEMENT_ASSETS') || '',
+    globalMaxRoutesPerWake: boundedInteger(value('GLOBAL_MAX_ROUTES_PER_WAKE'), 32, 4, 256),
+    globalQuoteConcurrency: boundedInteger(value('GLOBAL_QUOTE_CONCURRENCY'), 8, 1, 16),
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
 }

@@ -67,6 +67,22 @@ function arm(overrides = {}) {
       publicMaximumExactQuotesPerWake: maximumEarnPublicExactQuotes(6),
       managedMaximumExactQuotesPerWake: 9,
     },
+    global: {
+      enabled: true,
+      lane: 'global-v1',
+      executor: '0x0000000000000000000000000000000000000001',
+      sourceHash: `0x${'11'.repeat(32)}`,
+      runtimeCodeHash: `0x${'22'.repeat(32)}`,
+      fundingPolicy: 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY',
+      settlementAssets: ['0x0000000000000000000000000000000000000002', '0x0000000000000000000000000000000000000003'],
+      graphPolicy: 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
+      routePolicy: 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS',
+      maximumRoutesPerWake: 32,
+      quoteConcurrency: 8,
+      managedMaximumCandidatesPerWake: 16,
+      submissionPolicy: 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK',
+      feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
+    },
     ...overrides,
   }
   return { ...value, authorizationId: dualAuthorizationId(value) }
@@ -86,6 +102,12 @@ test('last-moment fee and quote decay reject one candidate without halting the w
   assert.equal(isDualOpportunityMiss(new Error('candidate pool is absent from the current official catalog')), true)
   assert.equal(isDualOpportunityMiss(new Error('reconciled receipt and wallet balance disagree')), false)
   assert.equal(isDualOpportunityMiss(new Error('executor operator mismatch')), false)
+})
+
+test('global quote and Gas drift are normal no-shot outcomes before a signature exists', () => {
+  assert.equal(isDualOpportunityMiss(new Error('selected opportunity decayed before signing')), true)
+  assert.equal(isDualOpportunityMiss(new Error('gross quote does not fund worst-case Gas plus net floor')), true)
+  assert.equal(isDualOpportunityMiss(new Error('protected gas limit is below the final exact estimate')), true)
 })
 
 test('screen floor can trigger exact preflight without lowering the signed execution floor', () => {
@@ -113,7 +135,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v6 authorization binds the onchain graph, coarse-to-fine sizing, and quote ceilings', () => {
+test('v7 authorization binds the global executor and Earn sizing ceilings', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -283,6 +305,22 @@ test('usage comes from both ledgers and the append-only audit', () => {
       hash: '0xearn',
       realizedNetProfitWei: '250',
     },
+    {
+      event: 'mutation_signed',
+      authorizationId: authorization.authorizationId,
+      kind: 'global-execute',
+    },
+    {
+      event: 'global_watch_exact_preflight_started',
+      authorizationId: authorization.authorizationId,
+    },
+    {
+      event: 'mutation_effect',
+      authorizationId: authorization.authorizationId,
+      kind: 'global-execute',
+      hash: '0xglobal',
+      normalizedNetProfitUsdgWei: '300000',
+    },
   ]
   const usage = dualAuthorizationUsage(
     authorization,
@@ -294,13 +332,15 @@ test('usage comes from both ledgers and the append-only audit', () => {
     usdgConfirmed: 1,
     wethConfirmed: 2,
     earnConfirmed: 1,
-    confirmedExecutions: 4,
-    signedAttempts: 3,
-    exactPreflights: 2,
+    globalConfirmed: 1,
+    confirmedExecutions: 5,
+    signedAttempts: 4,
+    exactPreflights: 3,
     failedGasWei: 40n,
     earnRealizedNetProfitWei: 250n,
     earnFailedGasWei: 0n,
     earnGasSurplusWei: 5250n,
+    globalRealizedNetProfitUsdgWei: 300000n,
   })
   assert.equal(evaluateDualAuthorizationBudget(authorization, usage).allowed, true)
   assert.equal(

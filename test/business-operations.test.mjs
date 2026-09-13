@@ -199,7 +199,7 @@ test('builds receipt-gated business results and compounds only authorized profit
   assert.equal(snapshot.economics.today.verifiedExecutionNetUsdg, '1.3')
   assert.equal(snapshot.economics.today.verifiedExecutionNetEth, '0.00003')
   assert.equal(snapshot.economics.today.confirmedExecutions, 3)
-  assert.deepEqual(snapshot.economics.today.confirmedByBase, { USDG: 1, WETH: 1, EARN_ETH: 1 })
+  assert.deepEqual(snapshot.economics.today.confirmedByBase, { USDG: 1, WETH: 1, EARN_ETH: 1, GLOBAL: 0 })
   assert.equal(snapshot.economics.today.failedTransactions, 1)
   assert.equal(snapshot.economics.today.failedGasEth, '0.00002')
   assert.equal(snapshot.economics.previousDay.verifiedExecutionNetUsdg, '1.7')
@@ -264,6 +264,42 @@ test('builds a compact daily profit API without inventing a cross-asset business
   assert.throws(() => assertPublicDailyProfitSnapshot({ ...daily, webhook: 'forbidden' }), /forbidden data/)
 })
 
+test('includes only receipt-gated universal executions in the operating totals', () => {
+  const input = fixture()
+  input.universalState = {
+    executions: [
+      {
+        hash: `0x${'9'.repeat(64)}`,
+        lane: 'global-v1',
+        authorizationId: input.arm.authorizationId,
+        confirmedAt: '2026-09-08T02:50:00.000Z',
+        routeLabel: '跨平台 2 跳循环',
+        baseAsset: 'USDG',
+        settlementDecimals: 6,
+        amountInWei: '10000000',
+        grossProfitWei: '250000',
+        normalizedNetProfitUsdgWei: '200000',
+        gasSpentWei: '10000000000000',
+        blockNumber: '10',
+      },
+    ],
+  }
+  input.arm.global = { settlementAssets: ['USDG', 'WETH'] }
+  input.runtime.global = { status: 'WATCHING', lastResult: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED' }
+  input.runtime.usage.confirmedByBase.GLOBAL = 1
+  const snapshot = buildBusinessSnapshot(input)
+  assert.equal(snapshot.economics.today.verifiedExecutionNetUsdg, '1.5')
+  assert.equal(snapshot.economics.today.confirmedExecutions, 4)
+  assert.equal(snapshot.economics.today.confirmedByBase.GLOBAL, 1)
+  assert.equal(snapshot.economics.today.confirmedByBase.USDG, 1)
+  assert.equal(
+    Object.values(snapshot.economics.today.confirmedByBase).reduce((total, count) => total + count, 0),
+    snapshot.economics.today.confirmedExecutions,
+  )
+  assert.equal(snapshot.strategy.global.confirmedExecutions, 1)
+  assert.equal(snapshot.recentExecutions[0].route, '跨平台 2 跳循环')
+})
+
 test('deduplicates identical Earn receipts and drops conflicting profit evidence', () => {
   const duplicated = fixture()
   duplicated.earnOnHoodRecords.push({ ...duplicated.earnOnHoodRecords[1] })
@@ -290,7 +326,7 @@ test('daily Feishu copy reports business outcomes without raw execution identifi
   const report = formatFeishuDailyReport(snapshot, '2026-09-07')
 
   assert.match(report, /昨日结果：已确认净收益 \+1\.70 USDG；\+0\.000020 ETH/)
-  assert.match(report, /成交：2 笔（USDG 本金 1 笔，WETH 本金 0 笔，Earn ETH 1 笔）/)
+  assert.match(report, /成交：2 笔（USDG 本金 1 笔，WETH 本金 0 笔，Earn ETH 1 笔，全局跨池 0 笔）/)
   assert.match(report, /当前策略：运行中，累计净收益 \+1\.30 USDG；\+0\.000030 ETH，共 3 笔/)
   assert.match(report, /可复投资金：11\.00 USDG；0\.0011 WETH/)
   assert.match(report, /当前机会：可以执行 0 条；接近门槛 1 条/)

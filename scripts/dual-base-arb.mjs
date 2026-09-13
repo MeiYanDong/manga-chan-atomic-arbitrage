@@ -4,7 +4,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   createPublicClient,
-  createWalletClient,
   decodeEventLog,
   defineChain,
   encodeDeployData,
@@ -22,6 +21,7 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
+import { broadcastSameRawToSequencer } from '../src/direct-sequencer.mjs'
 import {
   buildDualBaseExecutionCandidates,
   freezeDualExecutionTrigger,
@@ -44,6 +44,8 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
+import { globalSettlementAssets } from '../src/global-settlement-assets.mjs'
+import { GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE } from '../src/global-liquidity-graph.mjs'
 import { EARN_SIZING_ALGORITHM, earnOnHoodGasSolvency } from '../src/earnonhood-live-policy.mjs'
 import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
 import {
@@ -57,6 +59,7 @@ import {
 import { retryReadOnly } from '../src/event-driven-shadow.mjs'
 import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/generic-plan.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
+import { SequencerFeedWakeClient } from '../src/sequencer-feed.mjs'
 import {
   classifyReconciliation,
   diagnosticErrorText,
@@ -71,6 +74,7 @@ import {
 } from '../src/policy.mjs'
 import { compileGenericContract } from './generic-contract-compile.mjs'
 import { compileWethContract } from './weth-contract-compile.mjs'
+import { compileUniversalContract } from './universal-contract-compile.mjs'
 
 const CHAIN_ID = 4_663
 const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
@@ -79,6 +83,8 @@ const POOL_MANAGER = getAddress('0x8366a39CC670B4001A1121B8F6A443A643e40951')
 const V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
 const V3_ROUTER = getAddress('0xCaf681a66D020601342297493863E78C959E5cb2')
 const V3_QUOTER = getAddress('0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7')
+const MORPHO = getAddress('0x9D53d5E3bd5E8d4Cbfa6DB1ca238AEA02E651010')
+const EARN_ROUTER = getAddress('0xFCcDd6Df64de63b609042c55C629F223321340e1')
 const PAIR_HOOK = getAddress('0x16D1560630Ce74af4478d9b8AD46548A092A2000')
 const EXPLORER_TX = 'https://robinhoodchain.blockscout.com/tx/'
 const USDG_MINIMUM_GROSS_PROFIT = 50_000n
@@ -107,6 +113,8 @@ const DUAL_WATCH_ARM_PATH = path.join(RUN_DIR, 'dual-watch-arm.json')
 const DUAL_WATCH_REVOCATION_PATH = path.join(RUN_DIR, 'dual-watch-revocation.json')
 const DUAL_WATCH_STATE_PATH = path.join(RUN_DIR, 'dual-watch-state.json')
 const EARN_AUDIT_PATH = path.join(RUN_DIR, 'earnonhood-audit.jsonl')
+const UNIVERSAL_STATE_PATH = path.join(RUN_DIR, 'universal-state.json')
+const GLOBAL_CATALOG_PATH = path.join(RUN_DIR, 'global-catalog.json')
 const SIGNED_TX_DIR = path.join(RUN_DIR, 'signed')
 
 const chain = defineChain({
@@ -652,16 +660,16 @@ async function signBroadcastWait(plan, transaction, assertStillAuthorized = null
     rawPrivateRef,
   }
   appendAudit('mutation_signed', currentSignedAttempt)
-  const walletClient = createWalletClient({
-    account,
-    chain,
-    transport: http(RPC_URL, { timeout: 30_000, retryCount: 0 }),
-  })
   if (assertStillAuthorized) assertStillAuthorized({ stage: 'before-broadcast', currentSignedAttempt })
   try {
-    const acceptedHash = await walletClient.sendRawTransaction({ serializedTransaction })
-    if (acceptedHash.toLowerCase() !== hash.toLowerCase()) throw new Error('RPC returned a different transaction hash')
-    appendAudit('dual_broadcast_accepted', { kind: plan.kind, hash, nonce: plan.nonce })
+    const broadcast = await broadcastSameRawToSequencer({ serializedTransaction, managedRpcUrl: RPC_URL })
+    appendAudit('dual_broadcast_result', {
+      kind: plan.kind,
+      hash,
+      nonce: plan.nonce,
+      directSequencerStatus: broadcast.direct.status,
+      managedFallbackStatus: broadcast.fallback?.status || null,
+    })
   } catch (error) {
     appendAudit('dual_broadcast_unknown', { kind: plan.kind, hash, nonce: plan.nonce, error: errorText(error) })
   }
@@ -835,15 +843,49 @@ async function deployWeth() {
 }
 
 async function loadVerifiedDeployments() {
-  const [usdgCompiled, wethCompiled] = [compileGenericContract(), compileWethContract()]
-  const [usdg, weth] = await Promise.all([
+  const [usdgCompiled, wethCompiled, universalCompiled] = [
+    compileGenericContract(),
+    compileWethContract(),
+    compileUniversalContract(),
+  ]
+  const universalState = readJson(UNIVERSAL_STATE_PATH)
+  const [usdg, weth, universal] = await Promise.all([
     assertUsdgDeployment(readJson(USDG_STATE_PATH), usdgCompiled),
     assertWethDeployment(readJson(WETH_STATE_PATH), wethCompiled),
+    assertUniversalDeployment(universalState, universalCompiled),
   ])
   return {
     usdg: { ...usdg, state: readJson(USDG_STATE_PATH), compiled: usdgCompiled, baseToken: GENERIC_USDG, decimals: 6 },
     weth: { ...weth, state: readJson(WETH_STATE_PATH), compiled: wethCompiled, baseToken: GENERIC_WETH, decimals: 18 },
+    universal: { ...universal, state: universalState, compiled: universalCompiled },
   }
+}
+
+async function assertUniversalDeployment(state, compiled) {
+  if (
+    state?.schemaVersion !== 1 ||
+    state.lane !== 'global-v1' ||
+    state.chainId !== CHAIN_ID ||
+    state.wallet?.toLowerCase() !== WALLET.toLowerCase() ||
+    !state.executor ||
+    state.sourceHash !== compiled.sourceHash ||
+    state.creationCodeHash !== compiled.creationCodeHash
+  ) {
+    throw new Error('valid global-v1 universal deployment state was not found')
+  }
+  const executor = getAddress(state.executor)
+  const [code, operator, morpho] = await Promise.all([
+    publicClient.getCode({ address: executor }),
+    publicClient.readContract({ address: executor, abi: compiled.abi, functionName: 'operator' }),
+    publicClient.readContract({ address: executor, abi: compiled.abi, functionName: 'MORPHO' }),
+  ])
+  if (!code || code === '0x' || keccak256(code) !== state.runtimeCodeHash) {
+    throw new Error('universal executor bytecode differs from the deployment ledger')
+  }
+  if (operator.toLowerCase() !== WALLET.toLowerCase() || morpho.toLowerCase() !== MORPHO.toLowerCase()) {
+    throw new Error('universal executor protocol identity mismatch')
+  }
+  return { executor }
 }
 
 function deploymentForCandidate(deployments, candidate) {
@@ -893,7 +935,10 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     arm.wethExecutor?.toLowerCase() !== deployments.weth.executor.toLowerCase() ||
     arm.wethSourceHash !== deployments.weth.state.sourceHash ||
     arm.wethRuntimeCodeHash !== deployments.weth.state.runtimeCodeHash ||
-    BigInt(arm.wethHardCapWei) !== deployments.weth.amountCap
+    BigInt(arm.wethHardCapWei) !== deployments.weth.amountCap ||
+    arm.global?.executor?.toLowerCase() !== deployments.universal.executor.toLowerCase() ||
+    arm.global?.sourceHash !== deployments.universal.state.sourceHash ||
+    arm.global?.runtimeCodeHash !== deployments.universal.state.runtimeCodeHash
   ) {
     throw new Error('dual authorization is not bound to the current deployments')
   }
@@ -931,6 +976,10 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     18,
     'EarnOnHood wallet reserve',
   )
+  const configuredGlobalSettlementAssets = globalSettlementAssets(
+    [GENERIC_USDG, GENERIC_WETH],
+    RUNTIME_CONFIG.globalExtraSettlementAssets,
+  )
   if (
     !RUNTIME_CONFIG.genericWatchUntilRevoked ||
     RUNTIME_CONFIG.genericWatchAutoRenew ||
@@ -963,7 +1012,22 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     Number(arm.earnOnHood.refinementPoints) !== RUNTIME_CONFIG.earnLiveRefinementPoints ||
     Number(arm.earnOnHood.publicMaximumExactQuotesPerWake) !==
       maximumEarnPublicExactQuotes(RUNTIME_CONFIG.earnLiveRefinementPoints) ||
-    Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== RUNTIME_CONFIG.earnLiveRefinementPoints + 3
+    Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== RUNTIME_CONFIG.earnLiveRefinementPoints + 3 ||
+    !RUNTIME_CONFIG.globalWatchEnabled ||
+    arm.global?.enabled !== true ||
+    arm.global.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
+    arm.global.feedPolicy !== 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE' ||
+    arm.global.submissionPolicy !== 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK' ||
+    BigInt(arm.global.minimumNetProfitUsdgWei) !== configuredMinimumNet ||
+    Number(arm.global.maximumRoutesPerWake) !== RUNTIME_CONFIG.globalMaxRoutesPerWake ||
+    Number(arm.global.quoteConcurrency) !== RUNTIME_CONFIG.globalQuoteConcurrency ||
+    Number(arm.global.managedMaximumCandidatesPerWake) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE ||
+    arm.global.settlementAssets.length !== configuredGlobalSettlementAssets.length ||
+    arm.global.settlementAssets.some(
+      (token, index) => token.toLowerCase() !== configuredGlobalSettlementAssets[index].toLowerCase(),
+    ) ||
+    Number(arm.global.minimumWakeIntervalMs) !== RUNTIME_CONFIG.globalWatchMinIntervalMs ||
+    Number(arm.global.periodicMs) !== RUNTIME_CONFIG.globalWatchPeriodicMs
   ) {
     throw new Error('dual watcher runtime economics differ from the authorization scope')
   }
@@ -1712,6 +1776,11 @@ async function reconcile() {
     console.log(stringify(result))
     return result
   }
+  if (['global-deploy', 'global-execute'].includes(unresolvedBeforeLock?.kind)) {
+    const result = await runChildScript('global-arb.mjs', 'reconcile')
+    console.log(stringify(result))
+    return result
+  }
   const release = acquireLock(WALLET_LOCK_PATH, 'dual-v3-wallet')
   try {
     const records = readAuditRecords()
@@ -1870,6 +1939,7 @@ function refreshDeploymentLedgers(deployments) {
   return {
     usdg: { ...deployments.usdg, state: readJson(USDG_STATE_PATH) },
     weth: { ...deployments.weth, state: readJson(WETH_STATE_PATH) },
+    universal: { ...deployments.universal, state: readJson(UNIVERSAL_STATE_PATH) },
   }
 }
 
@@ -1891,6 +1961,9 @@ async function armDualWatcher() {
     }
     if (!RUNTIME_CONFIG.earnWatchEnabled) {
       throw new Error('unified dual watcher requires EARN_WATCH_ENABLED=1')
+    }
+    if (!RUNTIME_CONFIG.globalWatchEnabled) {
+      throw new Error('unified watcher requires GLOBAL_WATCH_ENABLED=1')
     }
     const existing = readJson(DUAL_WATCH_ARM_PATH)
     if (existing?.status === 'ARMED' && !readDualRevocation(existing.authorizationId)) {
@@ -1990,6 +2063,28 @@ async function armDualWatcher() {
       idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_SWAP_EVENTS',
       escalationRpcBehavior: 'MANAGED_EXACT_PREFLIGHT_ONLY_AFTER_POSITIVE_SCREEN_THEN_ONE_SIGNATURE',
       rpcSource: RUNTIME_CONFIG.rpcSource,
+      global: {
+        enabled: true,
+        lane: 'global-v1',
+        executor: deployments.universal.executor,
+        sourceHash: deployments.universal.state.sourceHash,
+        runtimeCodeHash: deployments.universal.state.runtimeCodeHash,
+        fundingPolicy: 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY',
+        settlementAssets: globalSettlementAssets(
+          [GENERIC_USDG, GENERIC_WETH],
+          RUNTIME_CONFIG.globalExtraSettlementAssets,
+        ),
+        graphPolicy: 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
+        routePolicy: 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS',
+        maximumRoutesPerWake: RUNTIME_CONFIG.globalMaxRoutesPerWake,
+        quoteConcurrency: RUNTIME_CONFIG.globalQuoteConcurrency,
+        managedMaximumCandidatesPerWake: GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
+        feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
+        submissionPolicy: 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK',
+        minimumNetProfitUsdgWei: minimumNetProfitUsdg.toString(),
+        minimumWakeIntervalMs: RUNTIME_CONFIG.globalWatchMinIntervalMs,
+        periodicMs: RUNTIME_CONFIG.globalWatchPeriodicMs,
+      },
       earnOnHood: {
         enabled: true,
         lane: 'earnonhood-v2',
@@ -2044,6 +2139,7 @@ async function armDualWatcher() {
       minimumNetProfitUsdgWei: arm.minimumNetProfitUsdgWei,
       minimumScreenedNetProfitUsdgWei: arm.minimumScreenedNetProfitUsdgWei,
       earnOnHood: arm.earnOnHood,
+      global: arm.global,
       maxConfirmedExecutions: null,
       maxAttempts: null,
       maxExactPreflights: null,
@@ -2056,6 +2152,7 @@ async function armDualWatcher() {
       authorizationLifetime: arm.authorizationLifetime,
       principalPolicy: arm.principalPolicy,
       executors: { USDG: arm.usdgExecutor, WETH: arm.wethExecutor },
+      universalExecutor: arm.global.executor,
       principal: {
         usdg: formatUnits(usdgPrincipal, 6),
         weth: formatUnits(wethPrincipal, 18),
@@ -2082,6 +2179,15 @@ async function armDualWatcher() {
         managedMaximumExactQuotesPerWake: arm.earnOnHood.managedMaximumExactQuotesPerWake,
         periodicMs: arm.earnOnHood.periodicMs,
       },
+      global: {
+        executor: arm.global.executor,
+        fundingPolicy: arm.global.fundingPolicy,
+        settlementAssets: arm.global.settlementAssets,
+        feedPolicy: arm.global.feedPolicy,
+        submissionPolicy: arm.global.submissionPolicy,
+        minimumWakeIntervalMs: arm.global.minimumWakeIntervalMs,
+        periodicMs: arm.global.periodicMs,
+      },
     }
     console.log(stringify(output))
     return arm
@@ -2098,13 +2204,19 @@ function sleep(ms) {
 function watcherUsageView(usage) {
   return {
     confirmedExecutions: usage.confirmedExecutions,
-    confirmedByBase: { USDG: usage.usdgConfirmed, WETH: usage.wethConfirmed, EARN_ETH: usage.earnConfirmed },
+    confirmedByBase: {
+      USDG: usage.usdgConfirmed,
+      WETH: usage.wethConfirmed,
+      EARN_ETH: usage.earnConfirmed,
+      GLOBAL: usage.globalConfirmed,
+    },
     signedAttempts: usage.signedAttempts,
     exactPreflights: usage.exactPreflights,
     failedGasEth: formatEther(usage.failedGasWei),
     earnLifetimeGasSurplusEth: formatEther(usage.earnGasSurplusWei),
     earnCurrentAuthorizationNetEth: formatEther(usage.earnRealizedNetProfitWei),
     earnCurrentAuthorizationFailedGasEth: formatEther(usage.earnFailedGasWei),
+    globalCurrentAuthorizationNetUsdg: formatUnits(usage.globalRealizedNetProfitUsdgWei, 6),
   }
 }
 
@@ -2199,6 +2311,144 @@ function runEarnOnHoodShared(arm, signal) {
   })
 }
 
+function runGlobalShared(arm, signal) {
+  return runChildScript('global-arb.mjs', 'execute', {
+    GLOBAL_SHARED_AUTHORIZATION_ID: arm.authorizationId,
+    GLOBAL_SHARED_WATCH_PID: String(process.pid),
+    GLOBAL_WAKE_RECEIVED_AT: signal?.receivedAt || signal?.sourceReceivedAt || '',
+    GLOBAL_WAKE_SEQUENCE_NUMBER:
+      signal?.firstSequenceNumber === null || signal?.firstSequenceNumber === undefined
+        ? ''
+        : String(signal.firstSequenceNumber),
+    GLOBAL_WAKE_MATCHED_ADDRESSES: (signal?.matchedAddresses || []).join(','),
+  })
+}
+
+function globalFeedWatchAddresses() {
+  const addresses = new Map()
+  const add = (value) => {
+    try {
+      const address = getAddress(value)
+      addresses.set(address.toLowerCase(), address)
+    } catch {}
+  }
+  ;[MORPHO, EARN_VAULT, EARN_ROUTER, POOL_MANAGER, V3_FACTORY, GENERIC_USDG, GENERIC_WETH].forEach(add)
+  const catalog = readJson(GLOBAL_CATALOG_PATH)
+  for (const pool of catalog?.earn?.pools || []) {
+    add(pool.address)
+    for (const token of pool.tokens || []) add(token.address)
+  }
+  for (const venue of ['v2Pools', 'v3Pools', 'v4Pools']) {
+    for (const pool of catalog?.uniswap?.[venue] || []) {
+      add(pool.address || pool.pool)
+      add(pool.token0)
+      add(pool.token1)
+      add(pool.hooks)
+    }
+  }
+  if (addresses.size > 1_024) throw new Error('global feed address filter exceeds its safety bound')
+  return [...addresses.values()]
+}
+
+function runChildScript(script, command, extraEnvironment = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(ROOT, 'scripts', script), command], {
+      cwd: ROOT,
+      env: { ...process.env, ...extraEnvironment },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    const appendBounded = (current, chunk) => `${current}${chunk}`.slice(-1_000_000)
+    child.stdout.on('data', (chunk) => {
+      stdout = appendBounded(stdout, chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr = appendBounded(stderr, chunk)
+    })
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 240_000)
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.once('close', (code, signal) => {
+      clearTimeout(timeout)
+      if (code !== 0) {
+        reject(new Error(`global live child failed (${code ?? signal}): ${stderr.trim() || stdout.trim()}`))
+        return
+      }
+      try {
+        resolve(parseEarnChildOutput(stdout))
+      } catch (error) {
+        reject(error)
+      }
+    })
+  })
+}
+
+async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReason, signal, nextPeriodicAt, feed }) {
+  appendAudit('global_watch_wake', {
+    authorizationId: arm.authorizationId,
+    wakeReason,
+    sourceReceivedAt: signal?.receivedAt || null,
+    feedSequenceNumber: signal?.firstSequenceNumber ?? null,
+    matchedAddressCount: signal?.matchedAddresses?.length || 0,
+  })
+  let nextState = {
+    ...watchState,
+    status: 'EXECUTING',
+    updatedAt: new Date().toISOString(),
+    lastDecision: 'GLOBAL_EXACT_PREFLIGHT_RUNNING',
+    global: {
+      ...watchState.global,
+      status: 'PREFLIGHT_RUNNING',
+      lastWakeReason: wakeReason,
+      lastPreflightAt: new Date().toISOString(),
+      nextPeriodicAt: new Date(nextPeriodicAt).toISOString(),
+      feed: feed.snapshot(),
+    },
+  }
+  writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
+  appendAudit('global_watch_exact_preflight_started', {
+    authorizationId: arm.authorizationId,
+    wakeReason,
+  })
+  const result = await runGlobalShared(arm, signal)
+  feed.setWatchedAddresses(globalFeedWatchAddresses())
+  const nextDeployments = refreshDeploymentLedgers(deployments)
+  const usage = assertDualAuthorization(arm, nextDeployments)
+  const confirmed = result.status === 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED'
+  nextState = {
+    ...nextState,
+    status: 'RUNNING',
+    updatedAt: new Date().toISOString(),
+    usage: watcherUsageView(usage),
+    consecutiveGlobalErrors: 0,
+    lastDecision: confirmed ? 'GLOBAL_CONFIRMED_EXECUTION' : 'GLOBAL_NO_NET_OPPORTUNITY',
+    reason: null,
+    lastTransaction: confirmed ? result.transaction : nextState.lastTransaction,
+    lastExecutionBaseAsset: confirmed ? 'GLOBAL' : nextState.lastExecutionBaseAsset,
+    global: {
+      ...nextState.global,
+      status: 'WATCHING',
+      lastResult: result.status,
+      lastTransaction: result.transaction || nextState.global.lastTransaction,
+      lastNormalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
+      graph: result.graph || result.latestOpportunity?.graph || null,
+      feed: feed.snapshot(),
+    },
+  }
+  writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
+  appendAudit('global_watch_result', {
+    authorizationId: arm.authorizationId,
+    wakeReason,
+    status: result.status,
+    transaction: result.transaction || null,
+    normalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
+  })
+  return { watchState: nextState, deployments: nextDeployments }
+}
+
 async function executeEarnWatcherWake({
   arm,
   watchState,
@@ -2272,6 +2522,7 @@ async function watchDual() {
   let stopRequested = false
   let watchState = null
   let startupRpcRetries = 0
+  let sequencerFeed = null
   const requestStop = () => {
     stopRequested = true
   }
@@ -2379,11 +2630,15 @@ async function watchDual() {
       pid: process.pid,
       authorizationId: arm.authorizationId,
       wallet: WALLET,
-      executors: { USDG: deployments.usdg.executor, WETH: deployments.weth.executor },
+      executors: {
+        USDG: deployments.usdg.executor,
+        WETH: deployments.weth.executor,
+        UNIVERSAL: deployments.universal.executor,
+      },
       startedAt,
       updatedAt: startedAt,
-      triggerMode: 'LOOPBACK_FROZEN_TRIGGER_OR_PUBLIC_EARN_SWAP_EVENT_THEN_EXACT_PREFLIGHT',
-      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_EVENT_POLL',
+      triggerMode: 'LOOPBACK_OR_EARN_EVENT_OR_FILTERED_SEQUENCER_FEED_THEN_EXACT_PREFLIGHT',
+      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_EVENT_PLUS_ORDERED_FEED_FILTER',
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
       authorizationLifetime: arm.authorizationLifetime,
       principalPolicy: arm.principalPolicy,
@@ -2393,6 +2648,7 @@ async function watchDual() {
       consecutiveBoardErrors: 0,
       consecutiveExecutionRpcErrors: 0,
       consecutiveEarnErrors: 0,
+      consecutiveGlobalErrors: 0,
       processedBoardGenerations: 0,
       screenedPositiveBoardGenerations: 0,
       lastBoardGeneratedAt: null,
@@ -2410,6 +2666,19 @@ async function watchDual() {
         lastPreflightAt: null,
         lastResult: null,
         lastTransaction: null,
+      },
+      global: {
+        status: 'STARTING',
+        triggerMode: 'FILTERED_ORDERED_FEED_OR_PERIODIC_RECOVERY',
+        executor: arm.global.executor,
+        fundingPolicy: arm.global.fundingPolicy,
+        settlementAssets: arm.global.settlementAssets,
+        nextPeriodicAt: new Date().toISOString(),
+        lastWakeReason: null,
+        lastPreflightAt: null,
+        lastResult: null,
+        lastTransaction: null,
+        feed: null,
       },
     }
     writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
@@ -2438,6 +2707,19 @@ async function watchDual() {
     let nextEarnPeriodicAt = Date.now()
     let pendingEarnWake = 'STARTUP'
     let pendingEarnSignal = { sourceReceivedAt: new Date().toISOString() }
+    let nextGlobalPeriodicAt = Date.now()
+    let lastGlobalRunAt = 0
+    let pendingGlobalWake = 'STARTUP'
+    let pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
+    sequencerFeed = new SequencerFeedWakeClient({
+      watchedAddresses: globalFeedWatchAddresses(),
+      minimumAddressMatches: 1,
+      onWake: (signal) => {
+        pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
+        pendingGlobalSignal = signal
+      },
+    })
+    sequencerFeed.start()
     while (!stopRequested) {
       const loopStartedAt = Date.now()
       let phase = 'BOARD'
@@ -2447,6 +2729,32 @@ async function watchDual() {
         const currentUsage = assertDualAuthorization(currentArm, deployments)
         const unresolvedNow = latestUnresolved()
         if (unresolvedNow) throw new Error(`unresolved ${unresolvedNow.kind} mutation ${unresolvedNow.hash}`)
+        if (Date.now() >= nextGlobalPeriodicAt && !pendingGlobalWake) {
+          pendingGlobalWake = 'PERIODIC_RECOVERY'
+          pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
+        }
+        if (pendingGlobalWake && Date.now() - lastGlobalRunAt >= RUNTIME_CONFIG.globalWatchMinIntervalMs) {
+          const wakeReason = pendingGlobalWake
+          const signal = pendingGlobalSignal
+          pendingGlobalWake = null
+          pendingGlobalSignal = null
+          lastGlobalRunAt = Date.now()
+          nextGlobalPeriodicAt = Date.now() + RUNTIME_CONFIG.globalWatchPeriodicMs
+          phase = 'GLOBAL'
+          const globalRun = await executeGlobalWatcherWake({
+            arm: currentArm,
+            watchState,
+            deployments,
+            wakeReason,
+            signal,
+            nextPeriodicAt: nextGlobalPeriodicAt,
+            feed: sequencerFeed,
+          })
+          watchState = globalRun.watchState
+          deployments = globalRun.deployments
+          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+          continue
+        }
         if (Date.now() - lastEarnEventPollAt >= RUNTIME_CONFIG.earnWatchEventPollMs) {
           lastEarnEventPollAt = Date.now()
           try {
@@ -2690,29 +2998,48 @@ async function watchDual() {
             authorizationId: watchState.authorizationId,
             reason: errorText(error),
           })
-        } else if (phase === 'EARN' && isTransientRpcError(error)) {
-          const consecutiveErrors = Number(watchState.consecutiveEarnErrors || 0) + 1
+        } else if (['EARN', 'GLOBAL'].includes(phase) && isTransientRpcError(error)) {
+          const globalPhase = phase === 'GLOBAL'
+          const counter = globalPhase ? 'consecutiveGlobalErrors' : 'consecutiveEarnErrors'
+          const consecutiveErrors = Number(watchState[counter] || 0) + 1
           watchState = {
             ...watchState,
-            status: 'DEGRADED_EARN',
+            status: globalPhase ? 'DEGRADED_GLOBAL' : 'DEGRADED_EARN',
             updatedAt: new Date().toISOString(),
             usage: currentUsage ? watcherUsageView(currentUsage) : watchState?.usage,
-            consecutiveEarnErrors: consecutiveErrors,
-            lastDecision: 'EARN_RPC_RETRY_SCHEDULED',
+            [counter]: consecutiveErrors,
+            lastDecision: globalPhase ? 'GLOBAL_RPC_RETRY_SCHEDULED' : 'EARN_RPC_RETRY_SCHEDULED',
             reason: errorText(error),
-            earnOnHood: {
-              ...watchState.earnOnHood,
-              status: 'DEGRADED_RPC',
-              lastResult: 'RPC_ERROR_NO_SIGNATURE_OR_UNRESOLVED_MUTATION',
-            },
+            ...(globalPhase
+              ? {
+                  global: {
+                    ...watchState.global,
+                    status: 'DEGRADED_RPC',
+                    lastResult: 'RPC_ERROR_NO_SIGNATURE_OR_UNRESOLVED_MUTATION',
+                    feed: sequencerFeed?.snapshot() || null,
+                  },
+                }
+              : {
+                  earnOnHood: {
+                    ...watchState.earnOnHood,
+                    status: 'DEGRADED_RPC',
+                    lastResult: 'RPC_ERROR_NO_SIGNATURE_OR_UNRESOLVED_MUTATION',
+                  },
+                }),
           }
           writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
-          appendAudit('earn_watch_rpc_error', {
+          appendAudit(globalPhase ? 'global_watch_rpc_error' : 'earn_watch_rpc_error', {
             authorizationId: watchState.authorizationId,
             consecutiveErrors,
             reason: errorText(error),
           })
-          await sleep(Math.min(30_000, RUNTIME_CONFIG.earnWatchEventPollMs * consecutiveErrors))
+          await sleep(
+            Math.min(
+              30_000,
+              (globalPhase ? RUNTIME_CONFIG.globalWatchMinIntervalMs : RUNTIME_CONFIG.earnWatchEventPollMs) *
+                consecutiveErrors,
+            ),
+          )
         } else if (isBoardSnapshotTransportFailure(error)) {
           const counter = phase === 'BOARD' ? 'consecutiveBoardErrors' : 'consecutiveExecutionRpcErrors'
           const consecutiveErrors = Number(watchState[counter] || 0) + 1
@@ -2790,6 +3117,7 @@ async function watchDual() {
     })
     return watchState
   } finally {
+    sequencerFeed?.stop()
     process.removeListener('SIGTERM', requestStop)
     process.removeListener('SIGINT', requestStop)
     release()
@@ -2801,6 +3129,7 @@ async function dualWatchStatus() {
   const runtime = readJson(DUAL_WATCH_STATE_PATH)
   const usdgState = readJson(USDG_STATE_PATH)
   const wethState = readJson(WETH_STATE_PATH)
+  const universalState = readJson(UNIVERSAL_STATE_PATH)
   const processState = lockHolder(DUAL_WATCH_LOCK_PATH)
   let usage = null
   let principal = null
@@ -2871,6 +3200,17 @@ async function dualWatchStatus() {
               periodicMs: arm.earnOnHood.periodicMs,
             }
           : null,
+        global: arm.global
+          ? {
+              executor: arm.global.executor,
+              fundingPolicy: arm.global.fundingPolicy,
+              settlementAssets: arm.global.settlementAssets,
+              feedPolicy: arm.global.feedPolicy,
+              submissionPolicy: arm.global.submissionPolicy,
+              minimumWakeIntervalMs: arm.global.minimumWakeIntervalMs,
+              periodicMs: arm.global.periodicMs,
+            }
+          : null,
       }
     } catch (error) {
       authorization = {
@@ -2900,6 +3240,13 @@ async function dualWatchStatus() {
             status: wethState.status,
             executor: wethState.executor,
             confirmedExecutions: (wethState.executions || []).length,
+          }
+        : null,
+      UNIVERSAL: universalState
+        ? {
+            status: universalState.status,
+            executor: universalState.executor,
+            confirmedExecutions: (universalState.executions || []).length,
           }
         : null,
     },

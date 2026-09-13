@@ -25,6 +25,13 @@ net positive. It is not a second autonomous signer. See
 [ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md) and
 [ADR 0059](docs/decisions/0059-earn-onchain-factory-catalog.md).
 
+The v0.14.0 lane adds a typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4. It can
+atomically combine swaps and Earn BPT premium/discount actions, settle in USDG, WETH or an explicitly allowlisted asset,
+and fund a route with zero-fee Morpho flash liquidity or protected executor inventory. The Sequencer Feed only wakes
+exact state checks; signed raw transactions are persisted before direct Sequencer submission, and any managed-RPC
+fallback must broadcast the identical raw. See [ADR 0060](docs/decisions/0060-universal-cross-protocol-atomic-execution.md)
+and [the global live stories](docs/stories/global-cross-protocol-live.md).
+
 The v0.13.1 policy keeps the balance-scaled coarse-to-fine sizing but separates cheap graph coverage from expensive
 execution truth. At most 24 routes receive three exact public quotes each; at most eight routes receive six local
 refinements, for a 120-call public ceiling. A public-positive result hands only its committed route and immediate sizing

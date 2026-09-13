@@ -1,7 +1,7 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.13.1",
-  "description": "Bounded MANGA atomic-arbitrage executor and read-only multi-pool opportunity board on Robinhood Chain",
+  "version": "0.14.0",
+  "description": "Typed cross-protocol atomic-arbitrage executors and opportunity intelligence on Robinhood Chain",
   "license": "MIT",
   "private": false,
   "repository": {
@@ -42,10 +42,10 @@
     "vite.config.mjs"
   ],
   "scripts": {
-    "compile": "node scripts/manga-chan-arb.mjs compile && node scripts/generic-contract-compile.mjs && node scripts/weth-contract-compile.mjs",
+    "compile": "node scripts/manga-chan-arb.mjs compile && node scripts/generic-contract-compile.mjs && node scripts/weth-contract-compile.mjs && node scripts/universal-contract-compile.mjs",
     "self-test": "node scripts/manga-chan-arb.mjs self-test",
     "test": "node --test --test-reporter=spec test/*.test.mjs",
-    "test:contract": "node scripts/contract-test.mjs && node scripts/generic-contract-test.mjs && node scripts/weth-contract-test.mjs",
+    "test:contract": "node scripts/contract-test.mjs && node scripts/generic-contract-test.mjs && node scripts/weth-contract-test.mjs && node scripts/universal-contract-test.mjs",
     "lint": "npm run lint:js && npm run lint:sol && npm run lint:shell",
     "lint:js": "eslint .",
     "lint:sol": "solhint 'contracts/**/*.sol' 'test/contracts/**/*.sol'",
@@ -118,7 +118,16 @@
     "business:report:preview": "node scripts/business-report.mjs preview",
     "business:report:status": "node scripts/business-report.mjs status",
     "competitor:census": "node scripts/earn-competitor-census.mjs watch",
-    "competitor:census:once": "node scripts/earn-competitor-census.mjs once"
+    "competitor:census:once": "node scripts/earn-competitor-census.mjs once",
+    "universal:compile": "node scripts/universal-contract-compile.mjs",
+    "global:status": "node scripts/global-arb.mjs status",
+    "global:deploy-preflight": "node scripts/global-arb.mjs deploy-preflight",
+    "global:deploy": "node scripts/global-arb.mjs deploy",
+    "global:preflight": "node scripts/global-arb.mjs preflight",
+    "global:execute": "node scripts/global-arb.mjs execute",
+    "global:reconcile": "node scripts/global-arb.mjs reconcile",
+    "global:catalog:refresh": "node scripts/global-arb.mjs catalog-refresh",
+    "global:fork-test": "node scripts/universal-mainnet-fork-test.mjs"
   },
   "dependencies": {
     "react": "19.2.8",

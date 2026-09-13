@@ -105,8 +105,12 @@ function executionActivity(record, index) {
   const transactionHash = validHash(record?.hash)
   const occurredAt = validDate(record?.confirmedAt)
   if (!transactionHash || !occurredAt) return null
-  const baseAsset = record?.baseAsset === 'WETH' ? 'WETH' : 'USDG'
-  const decimals = baseAsset === 'WETH' ? 18 : 6
+  const baseAsset = /^[A-Z0-9._-]{2,16}$/.test(String(record?.baseAsset || '')) ? record.baseAsset : 'USDG'
+  const decimals = Number.isSafeInteger(Number(record?.settlementDecimals))
+    ? Number(record.settlementDecimals)
+    : baseAsset === 'WETH'
+      ? 18
+      : 6
   const amountIn = decimal(record?.amountInWei, decimals)
   const grossProfit = decimal(record?.grossProfitWei, decimals)
   const gas = decimal(record?.gasSpentWei, 18)

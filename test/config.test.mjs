@@ -40,11 +40,13 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'EARN_LIVE_COARSE_PROBE_POINTS=10',
       'EARN_LIVE_REFINEMENT_POINTS=8',
       'EARN_WATCH_EVENT_POLL_MS=1500',
+      'GLOBAL_LIVE_ARM=0',
     ].join('\n'),
     { mode: 0o600 },
   )
   const parsed = readConfigFile(file)
   assert.equal(parsed.RH_RPC_URL, undefined)
+  assert.equal(parsed.GLOBAL_LIVE_ARM, '0')
   const config = loadRuntimeConfig({ MANGA_CONFIG_FILE: file })
   assert.equal(config.rpcUrl, 'https://primary.invalid')
   assert.equal(config.wsUrl, 'wss://primary.invalid')
