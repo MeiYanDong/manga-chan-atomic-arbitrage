@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Match the real Balancer v3 and Uniswap v4 settlement boundaries in the universal executor: approve BPT removals to
+  the Earn Router that actually pulls them, and execute each v4 swap before settling its resulting input debt and
+  taking its output credit. Tighten deterministic mocks so either reversed ordering or the wrong allowance spender
+  fails in CI before the mandatory mainnet-fork gate.
 - Make the universal mainnet-fork gate read its canonical catalog and place Hardhat's fork cache under `MANGA_RUN_DIR`
   by default, so the documented unprivileged production command validates protected runtime artifacts without path or
   filesystem-permission overrides.

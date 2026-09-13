@@ -159,38 +159,64 @@ contract UniversalMockPoolManager {
 
     uint256 public bonus;
     address private outputToken;
+    address private inputToken;
+    address private syncedToken;
+    uint256 private inputDebt;
+    uint256 private outputCredit;
     uint256 private settlement;
+    bool private unlocked;
 
     function configure(uint256 bonus_) external {
         bonus = bonus_;
     }
 
     function unlock(bytes calldata data) external returns (bytes memory) {
-        return IUniversalCallbackTest(msg.sender).unlockCallback(data);
+        require(!unlocked, "UNLOCKED");
+        unlocked = true;
+        bytes memory result = IUniversalCallbackTest(msg.sender).unlockCallback(data);
+        require(inputDebt == 0 && outputCredit == 0 && settlement == 0, "UNSETTLED");
+        unlocked = false;
+        return result;
     }
 
-    function sync(address) external {}
+    function sync(address currency) external {
+        require(unlocked && inputDebt > 0 && currency == inputToken, "SYNC_ORDER");
+        require(syncedToken == address(0) && settlement == 0, "SYNC_ACTIVE");
+        syncedToken = currency;
+    }
 
     function recordSettlement(uint256 amount) external {
+        require(unlocked && syncedToken != address(0) && msg.sender == syncedToken, "TRANSFER_ORDER");
         settlement += amount;
     }
 
     function settle() external returns (uint256 paid) {
+        require(unlocked && syncedToken == inputToken && settlement == inputDebt, "SETTLEMENT");
         paid = settlement;
         settlement = 0;
+        inputDebt = 0;
+        inputToken = address(0);
+        syncedToken = address(0);
     }
 
     function swap(PoolKey memory key, SwapParams memory params, bytes calldata) external returns (int256) {
+        require(unlocked && inputDebt == 0 && outputCredit == 0 && syncedToken == address(0), "SWAP_ORDER");
         uint256 input = uint256(-params.amountSpecified);
         uint256 output = input + bonus;
+        inputToken = params.zeroForOne ? key.currency0 : key.currency1;
         outputToken = params.zeroForOne ? key.currency1 : key.currency0;
+        inputDebt = input;
+        outputCredit = output;
         int128 signedInput = int128(int256(input));
         int128 signedOutput = int128(int256(output));
         return params.zeroForOne ? _pack(-signedInput, signedOutput) : _pack(signedOutput, -signedInput);
     }
 
     function take(address currency, address to, uint256 amount) external {
-        require(currency == outputToken, "OUTPUT");
+        require(unlocked && inputDebt == 0, "TAKE_ORDER");
+        require(currency == outputToken && amount == outputCredit, "OUTPUT");
+        outputCredit = 0;
+        outputToken = address(0);
         IMockTokenUniversal(currency).mint(to, amount);
     }
 
@@ -288,7 +314,7 @@ contract UniversalMockEarnRouter {
         external
         returns (uint256[] memory outputs)
     {
-        UniversalMockVault(VAULT).pull(pool, msg.sender, address(this), exactBptAmountIn);
+        require(IMockTokenUniversal(pool).transferFrom(msg.sender, address(this), exactBptAmountIn), "BPT");
         address[] memory tokens = UniversalMockVault(VAULT).getPoolTokens(pool);
         require(tokens.length == minimums.length, "MINIMUMS");
         outputs = new uint256[](tokens.length);
