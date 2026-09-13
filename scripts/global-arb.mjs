@@ -41,7 +41,11 @@ import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import { classifyReconciliation, errorText, latestUnresolvedMutation } from '../src/policy.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
-import { compileUniversalContract } from './universal-contract-compile.mjs'
+import {
+  compileUniversalContract,
+  materializeUniversalRuntime,
+  verifyUniversalRuntimeEvidence,
+} from './universal-contract-compile.mjs'
 
 const CHAIN_ID = 4_663
 const PUBLIC_RPC = 'https://rpc.mainnet.chain.robinhood.com'
@@ -863,6 +867,7 @@ async function deployPreflight({ print = true } = {}) {
   const unresolved = latestUnresolvedMutation(readAuditRecords())
   if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
   const compiled = compileUniversalContract()
+  const runtimeCodeHash = keccak256(materializeUniversalRuntime(compiled, WALLET))
   const snapshot = await walletSnapshot()
   if (snapshot.latestNonce !== snapshot.pendingNonce) throw new Error('wallet has a pending nonce')
   const data = encodeDeployData({ abi: compiled.abi, bytecode: compiled.bytecode, args: [WALLET] })
@@ -882,10 +887,11 @@ async function deployPreflight({ print = true } = {}) {
     retainedReserveEth: formatEther(reserve),
     sourceHash: compiled.sourceHash,
     creationCodeHash: compiled.creationCodeHash,
-    runtimeCodeHash: compiled.runtimeCodeHash,
+    runtimeCodeHash,
+    runtimeTemplateCodeHash: compiled.runtimeTemplateCodeHash,
   }
   if (print) console.log(stringify(report))
-  return { compiled, snapshot, data, gasLimit, maxFeePerGas, report }
+  return { compiled, snapshot, data, gasLimit, maxFeePerGas, runtimeCodeHash, report }
 }
 
 async function broadcastPersisted(plan, transaction) {
@@ -929,6 +935,9 @@ async function deploymentStateFromReceipt(plan, hash, receipt, compiled) {
   if (receipt.status !== 'success' || !receipt.contractAddress) {
     throw new Error('canonical deployment receipt is not successful')
   }
+  if (plan.sourceHash !== compiled.sourceHash || plan.creationCodeHash !== compiled.creationCodeHash) {
+    throw new Error('deployment plan source or creation hash differs from the reviewed compiler output')
+  }
   const executor = getAddress(receipt.contractAddress)
   const [code, operator, morpho, block] = await Promise.all([
     executionClient.getCode({ address: executor, blockNumber: receipt.blockNumber }),
@@ -946,9 +955,13 @@ async function deploymentStateFromReceipt(plan, hash, receipt, compiled) {
     }),
     executionClient.getBlock({ blockNumber: receipt.blockNumber }),
   ])
-  if (!code || code === '0x' || keccak256(code) !== plan.runtimeCodeHash) {
-    throw new Error('deployed runtime hash differs from the immutable mutation plan')
-  }
+  if (!code || code === '0x') throw new Error('canonical deployment receipt has no runtime code')
+  const runtimeEvidence = verifyUniversalRuntimeEvidence({
+    compiled,
+    operator: WALLET,
+    code,
+    plannedRuntimeCodeHash: plan.runtimeCodeHash,
+  })
   if (operator.toLowerCase() !== WALLET.toLowerCase() || morpho.toLowerCase() !== MORPHO.toLowerCase()) {
     throw new Error('deployed universal executor has unexpected immutable identities')
   }
@@ -965,7 +978,8 @@ async function deploymentStateFromReceipt(plan, hash, receipt, compiled) {
     executor,
     sourceHash: plan.sourceHash,
     creationCodeHash: plan.creationCodeHash,
-    runtimeCodeHash: plan.runtimeCodeHash,
+    runtimeCodeHash: runtimeEvidence.actualRuntimeCodeHash,
+    runtimeVerification: runtimeEvidence.mode,
     deploymentTransaction: hash,
     deploymentBlock: receipt.blockNumber,
     deployedAt: new Date(Number(block.timestamp) * 1_000).toISOString(),
@@ -980,6 +994,8 @@ async function deploymentStateFromReceipt(plan, hash, receipt, compiled) {
     result: 'CONFIRMED_SUCCESS',
     executor,
     blockNumber: receipt.blockNumber,
+    runtimeCodeHash: runtimeEvidence.actualRuntimeCodeHash,
+    runtimeVerification: runtimeEvidence.mode,
   })
   return state
 }
@@ -1114,7 +1130,7 @@ async function deploy() {
       maxPriorityFeePerGas: 0n,
       sourceHash: prepared.compiled.sourceHash,
       creationCodeHash: prepared.compiled.creationCodeHash,
-      runtimeCodeHash: prepared.compiled.runtimeCodeHash,
+      runtimeCodeHash: prepared.runtimeCodeHash,
     })
     appendAudit('mutation_plan', plan)
     const sent = await broadcastPersisted(plan, {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Materialize every Solidity `immutable` reference with the reviewed constructor value before committing a universal
+  executor runtime hash. Recover the single v0.14.2 deployment only when its old template commitment, successful
+  receipt, exact concrete runtime, operator and protocol identities all agree; future plans bind the concrete hash
+  before signing.
 - Match the real Balancer v3 and Uniswap v4 settlement boundaries in the universal executor: approve BPT removals to
   the Earn Router that actually pulls them, and execute each v4 swap before settling its resulting input debt and
   taking its output credit. Tighten deterministic mocks so either reversed ordering or the wrong allowance spender
