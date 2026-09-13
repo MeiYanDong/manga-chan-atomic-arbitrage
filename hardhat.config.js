@@ -1,4 +1,7 @@
 export default {
+  paths: {
+    cache: process.env.MANGA_HARDHAT_CACHE || './cache',
+  },
   solidity: {
     version: '0.8.26',
     settings: {

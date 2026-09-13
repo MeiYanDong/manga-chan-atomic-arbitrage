@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make the universal mainnet-fork gate read its canonical catalog and place Hardhat's fork cache under `MANGA_RUN_DIR`
+  by default, so the documented unprivileged production command validates protected runtime artifacts without path or
+  filesystem-permission overrides.
 - Add a typed-only universal atomic executor and one asset graph across Earn plus Uniswap v2/v3/v4. Support USDG,
   WETH and explicitly allowlisted settlement assets backed by zero-fee Morpho flash liquidity or protected executor
   inventory. Enumerate bounded BPT premium/discount templates and rotating 2–4 hop cross-venue cycles, refine positive
