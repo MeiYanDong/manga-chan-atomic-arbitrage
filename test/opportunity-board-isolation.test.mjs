@@ -572,16 +572,22 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualSource, /EARN_WAKE_RECEIVED_AT/)
   assert.match(dualSource, /EARN_WAKE_POOLS/)
   assert.match(dualSource, /classifyEarnFeedMatches/)
-  assert.match(dualSource, /mergePendingMarketSignals\(pendingEarnSignal, signal/)
-  assert.match(dualSource, /mergePendingMarketSignals\(pendingGlobalSignal, signal/)
-  assert.doesNotMatch(
-    dualWatchSource,
-    /pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'[\s\S]{0,100}pendingEarnSignal = wake/,
+  assert.match(dualSource, /ProtectedStrategyScheduler/)
+  assert.match(dualWatchSource, /id: 'EARN',[\s\S]*id: 'GLOBAL'/)
+  assert.match(dualWatchSource, /strategyScheduler\.enqueueEvent\('EARN'/)
+  assert.match(dualWatchSource, /strategyScheduler\.enqueueEvent\('GLOBAL'/)
+  assert.match(dualWatchSource, /wakeReason === 'FILTERED_SEQUENCER_FEED' \? 100 : 50/)
+  assert.match(dualWatchSource, /const scheduledWork = strategyScheduler\.claimNext\(Date\.now\(\)\)/)
+  assert.match(dualWatchSource, /strategyScheduler: strategyScheduler\.snapshot\(\)/)
+  assert.doesNotMatch(dualWatchSource, /pendingEarnWake|pendingGlobalWake/)
+  const publicEventPoll = dualWatchSource.indexOf('if (Date.now() - lastEarnEventPollAt')
+  const protectedClaim = dualWatchSource.indexOf('const scheduledWork = strategyScheduler.claimNext')
+  const boardRead = dualWatchSource.indexOf('const board = await screenedBoardCandidates(32)', protectedClaim)
+  assert.ok(
+    publicEventPoll >= 0 && publicEventPoll < protectedClaim,
+    'public Earn events must enter the shared scheduler',
   )
-  const earnFeedPriority = dualWatchSource.indexOf("if (pendingEarnWake === 'FILTERED_SEQUENCER_FEED')")
-  const globalFeedExecution = dualWatchSource.indexOf('if (pendingGlobalWake &&')
-  assert.ok(earnFeedPriority >= 0, 'an Earn feed match must have a dedicated priority dispatch')
-  assert.ok(earnFeedPriority < globalFeedExecution, 'Earn feed work must run before the broader global adapter')
+  assert.ok(protectedClaim < boardRead, 'protected strategy coverage must run before ordinary board work')
   assert.match(dualWatchSource, /freezeDualExecutionTrigger\(board\.snapshot, candidate/)
   assert.match(dualWatchSource, /frozenTrigger,/)
   const executeStart = dualSource.indexOf('async function execute(')

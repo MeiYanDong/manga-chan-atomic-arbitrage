@@ -48,7 +48,6 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
-import { mergePendingMarketSignals } from '../src/feed-signal-coalescer.mjs'
 import {
   GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
   GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
@@ -87,6 +86,7 @@ import {
 import { retryReadOnly } from '../src/event-driven-shadow.mjs'
 import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/generic-plan.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
+import { ProtectedStrategyScheduler } from '../src/protected-strategy-scheduler.mjs'
 import { SequencerFeedWakeClient } from '../src/sequencer-feed.mjs'
 import {
   classifyReconciliation,
@@ -2741,6 +2741,17 @@ async function watchDual() {
     // identity, deployment, balance and nonce reads have converged.
     loadAccount()
     const startedAt = new Date().toISOString()
+    const strategyScheduler = new ProtectedStrategyScheduler({
+      startedAt: Date.parse(startedAt),
+      lanes: [
+        { id: 'EARN', periodMs: RUNTIME_CONFIG.earnWatchPeriodicMs, minimumIntervalMs: 0 },
+        {
+          id: 'GLOBAL',
+          periodMs: RUNTIME_CONFIG.globalWatchPeriodicMs,
+          minimumIntervalMs: RUNTIME_CONFIG.globalWatchMinIntervalMs,
+        },
+      ],
+    })
     watchState = {
       schemaVersion: 1,
       status: 'RUNNING',
@@ -2771,6 +2782,7 @@ async function watchDual() {
       lastBoardGeneratedAt: null,
       lastBoardCandidateCount: 0,
       lastDecision: 'STARTING',
+      strategyScheduler: strategyScheduler.snapshot(),
       earnOnHood: {
         status: 'STARTING',
         triggerMode: 'FILTERED_ORDERED_FEED_OR_PUBLIC_SWAP_EVENT_OR_PERIODIC_RECOVERY',
@@ -2778,7 +2790,7 @@ async function watchDual() {
         fixedPrincipalCap: null,
         routeCommitment: arm.earnOnHood.routeCommitment,
         publicEventCursor: null,
-        nextPeriodicAt: new Date().toISOString(),
+        nextPeriodicAt: new Date(strategyScheduler.laneSnapshot('EARN').nextPeriodicAt).toISOString(),
         lastWakeReason: null,
         lastPreflightAt: null,
         lastResult: null,
@@ -2791,7 +2803,7 @@ async function watchDual() {
         fundingPolicy: arm.global.fundingPolicy,
         settlementPolicy: arm.global.settlementPolicy,
         settlementSeeds: arm.global.settlementSeeds,
-        nextPeriodicAt: new Date().toISOString(),
+        nextPeriodicAt: new Date(strategyScheduler.laneSnapshot('GLOBAL').nextPeriodicAt).toISOString(),
         lastWakeReason: null,
         lastPreflightAt: null,
         lastResult: null,
@@ -2823,34 +2835,19 @@ async function watchDual() {
     let attemptedHashes = new Set()
     let earnEventCursor = null
     let lastEarnEventPollAt = 0
-    let nextEarnPeriodicAt = Date.now()
-    let pendingEarnWake = 'STARTUP'
-    let pendingEarnSignal = { sourceReceivedAt: new Date().toISOString() }
-    let coalescedEarnWakes = 0
-    let nextGlobalPeriodicAt = Date.now()
-    let lastGlobalRunAt = 0
-    let pendingGlobalWake = 'STARTUP'
-    let pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
-    let coalescedGlobalWakes = 0
-    const marketWakeReasons = new Set(['FILTERED_SEQUENCER_FEED', 'REVIEWED_POOL_SWAP_EVENT'])
     const enqueueEarnMarketWake = (wakeReason, signal) => {
-      const mergeExisting = marketWakeReasons.has(pendingEarnWake)
-      if (mergeExisting) coalescedEarnWakes += 1
-      pendingEarnSignal = mergeExisting
-        ? mergePendingMarketSignals(pendingEarnSignal, signal, { coalescedWakeCount: coalescedEarnWakes })
-        : { ...signal, coalescedWakeCount: coalescedEarnWakes }
-      pendingEarnWake =
-        pendingEarnWake === 'FILTERED_SEQUENCER_FEED' || wakeReason === 'FILTERED_SEQUENCER_FEED'
-          ? 'FILTERED_SEQUENCER_FEED'
-          : wakeReason
+      strategyScheduler.enqueueEvent('EARN', {
+        reason: wakeReason,
+        signal,
+        priority: wakeReason === 'FILTERED_SEQUENCER_FEED' ? 100 : 50,
+      })
     }
     const enqueueGlobalFeedWake = (signal) => {
-      const mergeExisting = pendingGlobalWake === 'FILTERED_SEQUENCER_FEED'
-      if (mergeExisting) coalescedGlobalWakes += 1
-      pendingGlobalSignal = mergeExisting
-        ? mergePendingMarketSignals(pendingGlobalSignal, signal, { coalescedWakeCount: coalescedGlobalWakes })
-        : { ...signal, coalescedWakeCount: coalescedGlobalWakes }
-      pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
+      strategyScheduler.enqueueEvent('GLOBAL', {
+        reason: 'FILTERED_SEQUENCER_FEED',
+        signal,
+        priority: 75,
+      })
     }
     let activeGlobalFeedPolicy = globalFeedWatchPolicy()
     let reconciliationTask = null
@@ -3011,6 +3008,7 @@ async function watchDual() {
             status: 'RECONCILING_UNKNOWN',
             updatedAt: new Date().toISOString(),
             usage: watcherUsageView(currentUsage),
+            strategyScheduler: strategyScheduler.snapshot(),
             executionPaused: true,
             discoveryActive: true,
             lastDecision: 'SIGNING_PAUSED_ASYNC_RECONCILIATION',
@@ -3064,54 +3062,6 @@ async function watchDual() {
           }
           writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
         }
-        if (Date.now() >= nextGlobalPeriodicAt && !pendingGlobalWake) {
-          pendingGlobalWake = 'PERIODIC_RECOVERY'
-          pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
-        }
-        if (pendingEarnWake === 'FILTERED_SEQUENCER_FEED') {
-          const wakeReason = pendingEarnWake
-          const signal = pendingEarnSignal
-          pendingEarnWake = null
-          pendingEarnSignal = null
-          nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
-          phase = 'EARN'
-          const earnRun = await executeEarnWatcherWake({
-            arm: currentArm,
-            watchState,
-            deployments,
-            wakeReason,
-            signal,
-            eventCursor: earnEventCursor,
-            nextPeriodicAt: nextEarnPeriodicAt,
-          })
-          watchState = earnRun.watchState
-          deployments = earnRun.deployments
-          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
-          continue
-        }
-        if (pendingGlobalWake && Date.now() - lastGlobalRunAt >= RUNTIME_CONFIG.globalWatchMinIntervalMs) {
-          const wakeReason = pendingGlobalWake
-          const signal = pendingGlobalSignal
-          pendingGlobalWake = null
-          pendingGlobalSignal = null
-          lastGlobalRunAt = Date.now()
-          nextGlobalPeriodicAt = Date.now() + RUNTIME_CONFIG.globalWatchPeriodicMs
-          phase = 'GLOBAL'
-          const globalRun = await executeGlobalWatcherWake({
-            arm: currentArm,
-            watchState,
-            deployments,
-            wakeReason,
-            signal,
-            nextPeriodicAt: nextGlobalPeriodicAt,
-            feed: sequencerFeed,
-          })
-          watchState = globalRun.watchState
-          deployments = globalRun.deployments
-          activeGlobalFeedPolicy = globalRun.feedPolicy
-          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
-          continue
-        }
         if (Date.now() - lastEarnEventPollAt >= RUNTIME_CONFIG.earnWatchEventPollMs) {
           lastEarnEventPollAt = Date.now()
           try {
@@ -3143,10 +3093,52 @@ async function watchDual() {
             }
           }
         }
-        if (Date.now() >= nextEarnPeriodicAt && !pendingEarnWake) {
-          pendingEarnWake = 'PERIODIC_RECOVERY'
-          pendingEarnSignal = { sourceReceivedAt: new Date().toISOString() }
+        const scheduledWork = strategyScheduler.claimNext(Date.now())
+        if (scheduledWork) {
+          watchState = { ...watchState, strategyScheduler: strategyScheduler.snapshot() }
+          appendAudit('strategy_work_claimed', {
+            authorizationId: currentArm.authorizationId,
+            lane: scheduledWork.laneId,
+            kind: scheduledWork.kind,
+            wakeReason: scheduledWork.reason,
+            scheduledAt: new Date(scheduledWork.scheduledAt).toISOString(),
+            claimedAt: new Date(scheduledWork.claimedAt).toISOString(),
+            latenessMs: scheduledWork.latenessMs ?? null,
+            waitMs: scheduledWork.waitMs ?? null,
+            nextPeriodicAt: new Date(scheduledWork.nextPeriodicAt).toISOString(),
+          })
+          if (scheduledWork.laneId === 'EARN') {
+            phase = 'EARN'
+            const earnRun = await executeEarnWatcherWake({
+              arm: currentArm,
+              watchState,
+              deployments,
+              wakeReason: scheduledWork.reason,
+              signal: scheduledWork.signal,
+              eventCursor: earnEventCursor,
+              nextPeriodicAt: scheduledWork.nextPeriodicAt,
+            })
+            watchState = earnRun.watchState
+            deployments = earnRun.deployments
+          } else {
+            phase = 'GLOBAL'
+            const globalRun = await executeGlobalWatcherWake({
+              arm: currentArm,
+              watchState,
+              deployments,
+              wakeReason: scheduledWork.reason,
+              signal: scheduledWork.signal,
+              nextPeriodicAt: scheduledWork.nextPeriodicAt,
+              feed: sequencerFeed,
+            })
+            watchState = globalRun.watchState
+            deployments = globalRun.deployments
+            activeGlobalFeedPolicy = globalRun.feedPolicy
+          }
+          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+          continue
         }
+        watchState = { ...watchState, strategyScheduler: strategyScheduler.snapshot() }
         const board = await screenedBoardCandidates(32)
         if (!board.snapshot?.generatedAt || !Number.isFinite(Date.parse(board.snapshot.generatedAt))) {
           throw new Error('loopback board snapshot has no valid generation timestamp')
@@ -3164,27 +3156,6 @@ async function watchDual() {
           }
         }
         if (board.candidates.length === 0) {
-          if (pendingEarnWake) {
-            const wakeReason = pendingEarnWake
-            const signal = pendingEarnSignal
-            pendingEarnWake = null
-            pendingEarnSignal = null
-            nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
-            phase = 'EARN'
-            const earnRun = await executeEarnWatcherWake({
-              arm: currentArm,
-              watchState,
-              deployments,
-              wakeReason,
-              signal,
-              eventCursor: earnEventCursor,
-              nextPeriodicAt: nextEarnPeriodicAt,
-            })
-            watchState = earnRun.watchState
-            deployments = earnRun.deployments
-            await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
-            continue
-          }
           watchState = {
             ...watchState,
             status: 'RUNNING',
@@ -3208,27 +3179,6 @@ async function watchDual() {
           }
         })
         if (!candidate) {
-          if (pendingEarnWake) {
-            const wakeReason = pendingEarnWake
-            const signal = pendingEarnSignal
-            pendingEarnWake = null
-            pendingEarnSignal = null
-            nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
-            phase = 'EARN'
-            const earnRun = await executeEarnWatcherWake({
-              arm: currentArm,
-              watchState,
-              deployments,
-              wakeReason,
-              signal,
-              eventCursor: earnEventCursor,
-              nextPeriodicAt: nextEarnPeriodicAt,
-            })
-            watchState = earnRun.watchState
-            deployments = earnRun.deployments
-            await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
-            continue
-          }
           watchState = {
             ...watchState,
             status: 'RUNNING',
@@ -3359,7 +3309,6 @@ async function watchDual() {
           const globalPhase = phase === 'GLOBAL'
           const counter = globalPhase ? 'consecutiveGlobalErrors' : 'consecutiveEarnErrors'
           const consecutiveErrors = Number(watchState[counter] || 0) + 1
-          if (globalPhase) lastGlobalRunAt = Date.now()
           watchState = {
             ...watchState,
             status: globalPhase ? 'DEGRADED_GLOBAL' : 'DEGRADED_EARN',
