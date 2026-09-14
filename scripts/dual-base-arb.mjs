@@ -2596,7 +2596,7 @@ async function watchDual() {
             `dual watcher startup state mismatch: nonce=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}, USDG=${usdgPrincipal}/${spendableUsdg}, WETH=${wethPrincipal}/${spendableWeth}`,
           )
         }
-        return { deployments, usage }
+        return { deployments, usage, wallet }
       },
       {
         attempts: STARTUP_RPC_ATTEMPTS,
@@ -2733,6 +2733,7 @@ async function watchDual() {
     let pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
     const initialGlobalFeedPolicy = globalFeedWatchPolicy()
     sequencerFeed = new SequencerFeedWakeClient({
+      requestedSequenceNumber: startup.wallet.blockNumber,
       watchedAddresses: initialGlobalFeedPolicy.watchedAddresses,
       minimumAddressMatches: 1,
       matchFilter: (signal) => classifyGlobalFeedMatches(signal.matchedAddresses, initialGlobalFeedPolicy).actionable,

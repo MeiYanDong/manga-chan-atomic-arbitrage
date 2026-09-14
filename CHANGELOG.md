@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Use a Nitro-v2-compatible WebSocket client for the Robinhood Sequencer Feed: send the required client-version and
+  requested-sequence headers, negotiate per-message compression, begin at the already-read startup block, and resume
+  from the next observed feed sequence. Replace fixed one-second rejection retries with bounded exponential backoff
+  that honors server `Retry-After`, preventing a bad handshake from turning into an IP cooldown while leaving every
+  exact quote, Gas, nonce, simulation, balance and profit gate unchanged.
 - Require a Sequencer Feed frame to match one reviewed protocol/pool address or at least two distinct graph assets
   before waking global discovery. Event wakes now rank and quote at most eight related routes without filling unused
   slots with unrelated rotations; startup and periodic recovery retain bounded broad coverage. Add non-persistent

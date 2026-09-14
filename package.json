@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.14.8",
+  "version": "0.14.9",
   "description": "Typed cross-protocol atomic-arbitrage executors and opportunity intelligence on Robinhood Chain",
   "license": "MIT",
   "private": false,
@@ -133,7 +133,8 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "solc": "0.8.26",
-    "viem": "2.56.3"
+    "viem": "2.56.3",
+    "ws": "8.21.3"
   },
   "overrides": {
     "tmp": "0.2.7"

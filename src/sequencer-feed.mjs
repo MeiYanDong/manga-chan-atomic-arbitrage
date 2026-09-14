@@ -1,11 +1,32 @@
 import { TextDecoder } from 'node:util'
 import { Buffer } from 'node:buffer'
+import WebSocket from 'ws'
 
 const DEFAULT_FEED_URL = 'wss://feed.mainnet.chain.robinhood.com'
+const FEED_CLIENT_VERSION = 2
+const DEFAULT_CHAIN_ID = 4_663
+const MAX_SERVER_RETRY_AFTER_MS = 3_600_000
 
 function integer(value) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+function sequenceNumber(value) {
+  if (typeof value === 'bigint' && value >= 0n) return value
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
+  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value)
+  throw new Error('sequencer feed requested sequence number is invalid')
+}
+
+function retryAfterMs(value, now = Date.now()) {
+  if (typeof value !== 'string' || value.length === 0) return 0
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(MAX_SERVER_RETRY_AFTER_MS, Math.ceil(seconds * 1_000) + 1_000)
+  }
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.min(MAX_SERVER_RETRY_AFTER_MS, Math.max(0, date - now) + 1_000) : 0
 }
 
 /** Parse only the bounded envelope metadata needed for a wake signal. */
@@ -71,16 +92,33 @@ export class SequencerFeedWakeClient {
     this.onStatus = options.onStatus || (() => {})
     this.matchFilter = options.matchFilter || (() => true)
     this.reconnectMs = Number(options.reconnectMs || 1_000)
+    this.reconnectMaxMs = Number(options.reconnectMaxMs || 64_000)
+    this.handshakeTimeoutMs = Number(options.handshakeTimeoutMs || 10_000)
+    this.expectedChainId = String(options.expectedChainId || DEFAULT_CHAIN_ID)
+    this.requestedSequenceNumber = sequenceNumber(options.requestedSequenceNumber ?? 0n)
     this.watchedAddresses = []
     this.setWatchedAddresses(options.watchedAddresses || [])
     this.minimumAddressMatches = Number(options.minimumAddressMatches || (this.watchedAddresses.length > 0 ? 1 : 0))
-    this.WebSocketImpl = options.WebSocketImpl || globalThis.WebSocket
+    this.WebSocketImpl = options.WebSocketImpl || WebSocket
     if (typeof this.WebSocketImpl !== 'function') throw new Error('WebSocket implementation is unavailable')
     this.socket = null
     this.timer = null
     this.stopped = true
     this.lastSequenceNumber = null
-    this.metrics = { connects: 0, frames: 0, wakes: 0, filtered: 0, malformed: 0, errors: 0, reconnects: 0 }
+    this.reconnectAttempt = 0
+    this.lastStatus = 'IDLE'
+    this.lastHttpStatus = null
+    this.nextReconnectAt = null
+    this.metrics = {
+      connects: 0,
+      frames: 0,
+      wakes: 0,
+      filtered: 0,
+      malformed: 0,
+      errors: 0,
+      rejections: 0,
+      reconnects: 0,
+    }
   }
 
   start() {
@@ -103,6 +141,12 @@ export class SequencerFeedWakeClient {
       ...this.metrics,
       connected: this.socket?.readyState === 1,
       lastSequenceNumber: this.lastSequenceNumber,
+      requestedSequenceNumber: this.#nextRequestedSequenceNumber().toString(),
+      feedClientVersion: FEED_CLIENT_VERSION,
+      expectedChainId: this.expectedChainId,
+      lastStatus: this.lastStatus,
+      lastHttpStatus: this.lastHttpStatus,
+      nextReconnectAt: this.nextReconnectAt,
       feedUrl: this.url,
       watchedAddresses: this.watchedAddresses.length,
     }
@@ -125,29 +169,78 @@ export class SequencerFeedWakeClient {
     this.matchFilter = matchFilter
   }
 
-  #scheduleReconnect() {
+  #nextRequestedSequenceNumber() {
+    return this.lastSequenceNumber === null ? this.requestedSequenceNumber : BigInt(this.lastSequenceNumber) + 1n
+  }
+
+  #scheduleReconnect(serverDelayMs = 0) {
     if (this.stopped || this.timer) return
     this.metrics.reconnects += 1
+    const exponent = Math.min(this.reconnectAttempt, 16)
+    const backoffMs = Math.min(this.reconnectMaxMs, this.reconnectMs * 2 ** exponent)
+    const delayMs = Math.max(backoffMs, serverDelayMs)
+    this.reconnectAttempt += 1
+    this.nextReconnectAt = new Date(Date.now() + delayMs).toISOString()
     this.timer = setTimeout(() => {
       this.timer = null
+      this.nextReconnectAt = null
       this.#connect()
-    }, this.reconnectMs)
+    }, delayMs)
   }
 
   #connect() {
     if (this.stopped) return
     let socket
+    let terminal = false
+    const reconnect = (serverDelayMs = 0) => {
+      if (terminal) return
+      terminal = true
+      if (this.socket === socket) this.socket = null
+      this.#scheduleReconnect(serverDelayMs)
+    }
     try {
-      socket = new this.WebSocketImpl(this.url)
+      socket = new this.WebSocketImpl(this.url, [], {
+        headers: {
+          'Arbitrum-Feed-Client-Version': String(FEED_CLIENT_VERSION),
+          'Arbitrum-Requested-Sequence-Number': this.#nextRequestedSequenceNumber().toString(),
+        },
+        perMessageDeflate: true,
+        handshakeTimeout: this.handshakeTimeoutMs,
+      })
     } catch (error) {
       this.metrics.errors += 1
+      this.lastStatus = 'ERROR'
       this.onStatus({ status: 'ERROR', error: String(error) })
       this.#scheduleReconnect()
       return
     }
     this.socket = socket
+    if (typeof socket.once === 'function') {
+      socket.once('upgrade', (response) => {
+        this.lastHttpStatus = response?.statusCode || 101
+      })
+      socket.once('unexpected-response', (_request, response) => {
+        this.metrics.errors += 1
+        this.metrics.rejections += 1
+        this.lastStatus = 'REJECTED'
+        this.lastHttpStatus = response?.statusCode || null
+        const delayMs = retryAfterMs(response?.headers?.['retry-after'])
+        this.onStatus({
+          status: 'REJECTED',
+          httpStatus: this.lastHttpStatus,
+          retryAt: delayMs > 0 ? new Date(Date.now() + delayMs).toISOString() : null,
+        })
+        response?.resume?.()
+        reconnect(delayMs)
+        socket.terminate?.()
+      })
+    }
     socket.addEventListener('open', () => {
       this.metrics.connects += 1
+      this.reconnectAttempt = 0
+      this.lastStatus = 'CONNECTED'
+      this.lastHttpStatus = 101
+      this.nextReconnectAt = null
       this.onStatus({ status: 'CONNECTED', at: new Date().toISOString() })
     })
     socket.addEventListener('message', async (event) => {
@@ -162,7 +255,12 @@ export class SequencerFeedWakeClient {
         ) {
           return
         }
-        if (envelope.firstSequenceNumber !== null) this.lastSequenceNumber = envelope.firstSequenceNumber
+        if (envelope.firstSequenceNumber !== null) {
+          const highestSequenceNumber = Math.max(
+            ...source.messages.map((item) => integer(item?.sequenceNumber)).filter((item) => item !== null),
+          )
+          this.lastSequenceNumber = highestSequenceNumber
+        }
         this.metrics.frames += 1
         const matchedAddresses = sequencerFeedAddressMatches(source, this.watchedAddresses)
         const signal = { ...envelope, matchedAddresses, receivedAt: new Date().toISOString() }
@@ -178,15 +276,21 @@ export class SequencerFeedWakeClient {
       }
     })
     socket.addEventListener('error', () => {
+      if (terminal) return
       this.metrics.errors += 1
+      this.lastStatus = 'ERROR'
       this.onStatus({ status: 'ERROR', at: new Date().toISOString() })
+      socket.terminate?.()
+      reconnect()
     })
     socket.addEventListener('close', () => {
-      if (this.socket === socket) this.socket = null
+      if (terminal) return
+      this.lastStatus = this.stopped ? 'STOPPED' : 'DISCONNECTED'
       this.onStatus({ status: this.stopped ? 'STOPPED' : 'DISCONNECTED', at: new Date().toISOString() })
-      this.#scheduleReconnect()
+      reconnect()
     })
   }
 }
 
 export const ROBINHOOD_SEQUENCER_FEED_URL = DEFAULT_FEED_URL
+export const NITRO_FEED_CLIENT_VERSION = FEED_CLIENT_VERSION
