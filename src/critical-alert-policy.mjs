@@ -1,4 +1,4 @@
-export const CRITICAL_ALERT_POLICY = 'MINIMUM_NECESSARY_TRADING_ALERTS_V2'
+export const CRITICAL_ALERT_POLICY = 'MINIMUM_NECESSARY_TRADING_ALERTS_V3'
 export const DEFAULT_RUNTIME_STALE_MS = 180_000
 export const DEFAULT_PLANNED_STOP_GRACE_MS = 15 * 60_000
 export const DEFAULT_ARM_START_GRACE_MS = 5 * 60_000
@@ -29,7 +29,8 @@ function result(state, reasonCode, reasonLabel, details = {}) {
  * This policy intentionally ignores ordinary no-shot decisions and isolated
  * transport errors. It pages only when an active authorization has lost the
  * ability to trade, entered a terminal safety state, gone stale, or sustained
- * repeated lane failures.
+ * repeated failures that remove every independent discovery adapter. One
+ * degraded market adapter is operational telemetry, not a user-facing page.
  *
  * @param {{arm?: Record<string, any> | null, revocation?: Record<string, any> | null, runtime?: Record<string, any> | null, processAlive?: boolean, nowMs?: number, staleMs?: number, plannedStopGraceMs?: number, armStartGraceMs?: number, reconciliationAlertMs?: number, sustainedLaneErrors?: number, sustainedBoardErrors?: number}} input
  */
@@ -106,32 +107,39 @@ export function evaluateCriticalTradingHealth(input = {}) {
     return result('CRITICAL', 'RECONCILIATION_STALLED', '一笔交易长时间未能自动核对', details)
   }
 
-  const laneErrors = [
-    { key: 'global', count: Number(runtime.consecutiveGlobalErrors || 0), threshold: sustainedLaneErrors },
-    { key: 'earn', count: Number(runtime.consecutiveEarnErrors || 0), threshold: sustainedLaneErrors },
-    { key: 'execution', count: Number(runtime.consecutiveExecutionRpcErrors || 0), threshold: sustainedLaneErrors },
-    { key: 'board', count: Number(runtime.consecutiveBoardErrors || 0), threshold: sustainedBoardErrors },
-  ]
-  const impaired = laneErrors.find(({ count, threshold }) => Number.isFinite(count) && count >= threshold)
-  if (impaired) {
-    const laneLabel =
-      impaired.key === 'global'
-        ? '全局跨池'
-        : impaired.key === 'earn'
-          ? 'Earn'
-          : impaired.key === 'board'
-            ? '候选数据'
-            : '基础执行'
-    return result('CRITICAL', `SUSTAINED_${impaired.key.toUpperCase()}_FAILURE`, `${laneLabel}通道连续故障`, {
+  const executionErrors = Number(runtime.consecutiveExecutionRpcErrors || 0)
+  if (Number.isFinite(executionErrors) && executionErrors >= sustainedLaneErrors) {
+    return result('CRITICAL', 'SUSTAINED_EXECUTION_FAILURE', '交易提交基础能力连续故障', {
       ageMs,
-      consecutiveErrors: impaired.count,
-      threshold: impaired.threshold,
-      impactLabel:
-        impaired.key === 'execution'
-          ? '自动交易暂缓；市场扫描仍在继续。'
-          : '部分市场暂时无法完整扫描；其他市场继续运行。',
+      consecutiveErrors: executionErrors,
+      threshold: sustainedLaneErrors,
+      impactLabel: '新的自动交易暂缓；市场扫描仍在继续。',
       automaticActionLabel: '系统正在自动重试，未降低利润和安全门槛。',
       userActionLabel: '暂时无需操作。',
+    })
+  }
+
+  const discoveryAdapters = [
+    { key: 'global', count: Number(runtime.consecutiveGlobalErrors || 0), threshold: sustainedLaneErrors },
+    { key: 'earn', count: Number(runtime.consecutiveEarnErrors || 0), threshold: sustainedLaneErrors },
+    { key: 'board', count: Number(runtime.consecutiveBoardErrors || 0), threshold: sustainedBoardErrors },
+  ]
+  const impairedDiscovery = discoveryAdapters.filter(
+    ({ count, threshold }) => Number.isFinite(count) && count >= threshold,
+  )
+  if (impairedDiscovery.length === discoveryAdapters.length) {
+    return result('CRITICAL', 'ALL_MARKET_DISCOVERY_UNAVAILABLE', '所有市场扫描通道持续不可用', {
+      ageMs,
+      impairedAdapters: impairedDiscovery.map(({ key }) => key),
+      impactLabel: '当前无法发现新的套利机会；尚未发现未决交易。',
+      automaticActionLabel: '系统保留实盘进程并分别重试各通道，不会盲目发送交易。',
+      userActionLabel: '先无需操作；若 10 分钟内未收到恢复通知，请在 Codex 中说“检查实盘”。',
+    })
+  }
+  if (impairedDiscovery.length > 0) {
+    return result('DEGRADED', 'PARTIAL_MARKET_COVERAGE', '部分市场扫描降级，其他通道继续运行', {
+      ageMs,
+      impairedAdapters: impairedDiscovery.map(({ key }) => key),
     })
   }
   return result('HEALTHY', 'TRADING_HEALTHY', '实盘交易进程运行正常', { ageMs })
@@ -144,7 +152,11 @@ export function criticalAlertTransition(previous, current) {
     if (previousHealth?.state !== 'CRITICAL') return 'ALERT'
     return 'NONE'
   }
-  if (current.state === 'HEALTHY' && previousHealth?.state === 'CRITICAL' && previous?.notification === 'DELIVERED') {
+  if (
+    ['HEALTHY', 'DEGRADED'].includes(current.state) &&
+    previousHealth?.state === 'CRITICAL' &&
+    previous?.notification === 'DELIVERED'
+  ) {
     return 'RECOVERY'
   }
   return 'NONE'
@@ -169,26 +181,32 @@ export function formatCriticalAlert(kind, health, now = new Date()) {
     return [
       '【只保留重要提醒】',
       `时间：${beijingTime(now)}`,
-      '会提醒：实盘停止、交易长时间无法核对、市场扫描持续故障。',
-      '不会提醒：没有机会、利润不足、单次网络波动。',
+      '会提醒：实盘停止、交易长时间无法核对、全部市场扫描同时中断。',
+      '不会提醒：没有机会、利润不足、单条路线回退或单个市场短时故障。',
     ].join('\n')
   }
   if (kind === 'RECOVERY') {
     return [
       '【实盘已恢复】',
       `恢复时间：${beijingTime(now)}`,
-      '状态：市场扫描和自动交易均已恢复。',
+      `状态：${
+        health.state === 'DEGRADED'
+          ? '至少一条市场扫描与自动交易路径已恢复；其余通道继续自动重试。'
+          : '市场扫描和自动交易均已恢复。'
+      }`,
       '你需要做：无。',
     ].join('\n')
   }
   const title =
     health.reasonCode === 'RECONCILIATION_STALLED'
       ? '【交易核对超时】'
-      : String(health.reasonCode || '').startsWith('SUSTAINED_')
-        ? '【部分市场扫描异常】'
-        : PAUSED_REASON_CODES.has(health.reasonCode)
-          ? '【实盘已暂停】'
-          : '【实盘需要检查】'
+      : health.reasonCode === 'ALL_MARKET_DISCOVERY_UNAVAILABLE'
+        ? '【市场扫描已中断】'
+        : health.reasonCode === 'SUSTAINED_EXECUTION_FAILURE'
+          ? '【交易提交持续异常】'
+          : PAUSED_REASON_CODES.has(health.reasonCode)
+            ? '【实盘已暂停】'
+            : '【实盘需要检查】'
   return [
     title,
     `时间：${beijingTime(now)}`,

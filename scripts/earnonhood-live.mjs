@@ -27,6 +27,7 @@ import {
   deriveEarnOnHoodExecutionBounds,
   earnOnHoodQuoteBracket,
   earnOnHoodGasSolvency,
+  earnOnHoodRouteQuarantine,
   preservesEarnOnHoodLongTermProfit,
   selectEarnOnHoodGasCandidates,
 } from '../src/earnonhood-live-policy.mjs'
@@ -36,7 +37,10 @@ import {
   enumerateEarnOnHoodCycles,
   routeExistsInCatalog,
 } from '../src/earnonhood-graph.mjs'
-import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
+import {
+  loadEarnOnHoodOnchainCatalog,
+  refreshEarnOnHoodCachedDynamicCatalog,
+} from '../src/earnonhood-onchain-catalog.mjs'
 import {
   EARN_BATCH_ROUTER as BATCH_ROUTER,
   EARN_LEGACY_REVIEWED_ROUTES,
@@ -200,6 +204,7 @@ const usdgStatePath = path.join(runDir, 'generic-state.json')
 const wethStatePath = path.join(runDir, 'weth-state.json')
 const dualWatchArmPath = path.join(runDir, 'dual-watch-arm.json')
 const dualWatchRevocationPath = path.join(runDir, 'dual-watch-revocation.json')
+const globalCatalogPath = path.join(runDir, 'global-catalog.json')
 const signedTransactionDir = path.join(runDir, 'signed', 'earnonhood')
 
 function stringify(value) {
@@ -365,8 +370,63 @@ function routePath(route, amountIn, minimumAmountOut) {
   }
 }
 
-async function loadDynamicRouteBook(client, blockNumber) {
-  const catalog = await loadEarnOnHoodOnchainCatalog(client, blockNumber)
+function cachedEarnCatalog(blockNumber, focusPools) {
+  let snapshot
+  let generatedAt
+  let cachedBlock
+  try {
+    snapshot = readJson(globalCatalogPath)
+    generatedAt = Date.parse(String(snapshot?.generatedAt || ''))
+    cachedBlock = snapshot?.blockNumber === undefined ? null : BigInt(snapshot.blockNumber)
+  } catch {
+    return null
+  }
+  const ageMs = Date.now() - generatedAt
+  const fresh =
+    snapshot?.schemaVersion === 1 &&
+    snapshot?.earn?.source === EARN_ROUTE_DISCOVERY_POLICY.catalogSource &&
+    Array.isArray(snapshot?.earn?.pools) &&
+    snapshot.earn.pools.length > 0 &&
+    snapshot.earn.pools.length <= EARN_ROUTE_DISCOVERY_POLICY.maximumCatalogPools &&
+    Number.isFinite(generatedAt) &&
+    ageMs >= 0 &&
+    ageMs <= 6 * 60 * 60 * 1_000 &&
+    cachedBlock !== null &&
+    cachedBlock <= blockNumber
+  if (!fresh) return null
+  const cachedPools = new Set((snapshot.earn.pools || []).map((pool) => String(pool?.address || '').toLowerCase()))
+  if ((focusPools || []).some((pool) => !cachedPools.has(getAddress(pool).toLowerCase()))) return null
+  return snapshot.earn
+}
+
+function routeBookFromCandidateHint(candidateHint) {
+  const route = assertEarnRouteShape(candidateHint.route)
+  const snapshot = candidateHint.routeBookSnapshot
+  if (!snapshot || !Array.isArray(snapshot.pools) || snapshot.pools.length === 0) {
+    throw new Error('public-screen candidate lacks its canonical route snapshot')
+  }
+  const requiredPools = new Set(route.steps.map((step) => step.pool.toLowerCase()))
+  const snapshotPools = new Set(snapshot.pools.map((pool) => String(pool?.address || '').toLowerCase()))
+  if (snapshot.pools.some((pool) => !pool) || [...requiredPools].some((pool) => !snapshotPools.has(pool))) {
+    throw new Error('public-screen candidate snapshot is missing a committed route pool')
+  }
+  const routes = enumerateEarnOnHoodCycles(snapshot.pools)
+  if (!routeExistsInCatalog(route, routes)) {
+    throw new Error('public-screen candidate route is absent from its canonical route snapshot')
+  }
+  return {
+    ...snapshot,
+    routes,
+    poolByAddress: new Map(snapshot.pools.map((pool) => [pool.address.toLowerCase(), pool])),
+  }
+}
+
+async function loadDynamicRouteBook(client, blockNumber, { candidateHint = null, focusPools = [] } = {}) {
+  if (candidateHint) return routeBookFromCandidateHint(candidateHint)
+  const cached = cachedEarnCatalog(blockNumber, focusPools)
+  const catalog = cached
+    ? await refreshEarnOnHoodCachedDynamicCatalog(client, cached, blockNumber)
+    : await loadEarnOnHoodOnchainCatalog(client, blockNumber)
   const routes = enumerateEarnOnHoodCycles(catalog.pools)
   if (routes.length === 0) throw new Error('EarnOnHood dynamic graph contains no WETH-settled cycle')
   return {
@@ -384,6 +444,7 @@ function routeBookEvidence(routeBook) {
     reviewedLegacyPoolCount: routeBook.reviewedLegacyPools,
     eligiblePoolCount: routeBook.pools.length,
     rejectedCatalogPoolCount: routeBook.rejected.length,
+    catalogRefreshMode: routeBook.refreshMode || 'FULL_CANONICAL_FACTORY_REFRESH',
   }
 }
 
@@ -545,7 +606,7 @@ async function optimizeEarnOnHoodQuotes(
   routeBook,
   gasPriceWei,
   candidateHint = null,
-  focusPool = null,
+  focusPools = [],
 ) {
   if (candidateHint) {
     const route = assertEarnRouteShape(candidateHint.route)
@@ -582,7 +643,7 @@ async function optimizeEarnOnHoodQuotes(
     routes: routeBook.routes,
     amounts: sizing.amounts,
     gasPriceWei,
-    focusPool,
+    focusPools,
   })
   const coarseQuotes = await exactQuotesAtBlock(client, shortlist.quoteInputs, blockNumber)
   const bestByRoute = new Map()
@@ -619,18 +680,27 @@ function currentGasSolvency(sharedContext) {
   return earnOnHoodGasSolvency(readJsonLines(auditPath))
 }
 
-async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = null, focusPool = null } = {}) {
-  const blockNumber = await client.getBlockNumber()
-  const block = await client.getBlock({ blockNumber })
-  await assertCoreProtocolIdentity(client, blockNumber)
-  const routeBook = await loadDynamicRouteBook(client, blockNumber)
-  const [walletBalance, nonceLatest, noncePending, gasPrice, fees] = await Promise.all([
-    client.getBalance({ address: WALLET, blockNumber }),
-    client.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
-    client.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
-    client.getGasPrice(),
-    client.estimateFeesPerGas(),
+async function prepareOnClient(
+  client,
+  gasSolvency,
+  rpcRole,
+  { candidateHint = null, focusPools = [], excludedRouteIds = new Set() } = {},
+) {
+  const block = await client.getBlock()
+  const blockNumber = block.number
+  const managedExact = rpcRole === 'MANAGED_RPC_EXACT'
+  const [routeBook, , walletState] = await Promise.all([
+    loadDynamicRouteBook(client, blockNumber, { candidateHint, focusPools }),
+    managedExact ? assertCoreProtocolIdentity(client, blockNumber) : Promise.resolve(),
+    Promise.all([
+      client.getBalance({ address: WALLET, blockNumber }),
+      client.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
+      client.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
+      client.getGasPrice(),
+      client.estimateFeesPerGas(),
+    ]),
   ])
+  const [walletBalance, nonceLatest, noncePending, gasPrice, fees] = walletState
   if (nonceLatest !== noncePending) throw new Error('wallet latest and pending nonce differ')
   const perAttemptGasCeilingWei = parseEther(runtimeConfig.earnLiveMaxFailedGasWeth)
   const retainedWalletReserveWei = parseEther(runtimeConfig.earnLiveWalletReserveWeth)
@@ -663,24 +733,49 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
       },
     }
   }
+  const eligibleRoutes = routeBook.routes.filter((route) => !excludedRouteIds.has(route.id))
+  if (eligibleRoutes.length === 0) {
+    return {
+      report: {
+        status: 'NO_SHOT',
+        evidence: `${rpcRole}_ROUTE_LOCAL_QUARANTINE_NO_SIGNATURE_NO_BROADCAST`,
+        reasons: ['ROUTES_AWAITING_RELEVANT_STATE_CHANGE'],
+        blockNumber,
+        blockTimestamp: block.timestamp,
+        wallet: WALLET,
+        walletBalanceEth: formatEther(walletBalance),
+        nonceLatest,
+        noncePending,
+        dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
+        principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
+        lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
+        routeGraphCount: routeBook.routes.length,
+        shortlistedRouteCount: 0,
+        quarantinedRouteCount: excludedRouteIds.size,
+        ...routeBookEvidence(routeBook),
+      },
+    }
+  }
+  const eligibleRouteBook = { ...routeBook, routes: eligibleRoutes }
   const optimizer = await optimizeEarnOnHoodQuotes(
     client,
     sizing,
     blockNumber,
-    routeBook,
+    eligibleRouteBook,
     gasPrice > (fees.maxFeePerGas || 0n) ? gasPrice : fees.maxFeePerGas || gasPrice,
     candidateHint,
-    focusPool,
+    focusPools,
   )
   const { quotes } = optimizer
-  const positiveGross = quotes.filter((quote) => !quote.error && quote.amountOut > quote.amountIn)
+  const allPositiveGross = quotes.filter((quote) => !quote.error && quote.amountOut > quote.amountIn)
+  const positiveGross = allPositiveGross.filter((quote) => !excludedRouteIds.has(quote.route.id))
   if (positiveGross.length === 0) {
-    const best = quotes[0]
+    const best = allPositiveGross[0] || quotes[0]
     return {
       report: {
         status: 'NO_SHOT',
         evidence: `${rpcRole}_SAME_BLOCK_IDENTITY_AND_EXACT_QUOTES_NO_SIGNATURE_NO_BROADCAST`,
-        reasons: ['NO_POSITIVE_GROSS_QUOTE'],
+        reasons: [allPositiveGross.length > 0 ? 'ROUTES_AWAITING_RELEVANT_STATE_CHANGE' : 'NO_POSITIVE_GROSS_QUOTE'],
         blockNumber,
         blockTimestamp: block.timestamp,
         wallet: WALLET,
@@ -701,6 +796,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
         maximumExactQuoteCount: optimizer.maximumExactQuoteCount,
         routeGraphCount: optimizer.routeGraphCount,
         shortlistedRouteCount: optimizer.shortlistedRouteCount,
+        quarantinedRouteCount: excludedRouteIds.size,
         ...routeBookEvidence(routeBook),
       },
     }
@@ -712,10 +808,11 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
   const evaluations = []
   const gasCandidates = selectEarnOnHoodGasCandidates(
     positiveGross,
-    candidateHint ? 1 : EARN_ROUTE_DISCOVERY_POLICY.maximumGasCandidates,
+    candidateHint ? 1 : focusPools.length > 0 ? 2 : EARN_ROUTE_DISCOVERY_POLICY.maximumGasCandidates,
     { observedFeePerGasWei: observedFeePerGas },
   )
   const identityChecks = await mapWithConcurrency(gasCandidates, 4, async (candidate) => {
+    if (!managedExact) return { candidate, error: null }
     try {
       await assertDynamicRouteIdentity(client, blockNumber, [candidate.route], routeBook)
       return { candidate, error: null }
@@ -831,6 +928,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
         lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
         routeGraphCount: optimizer.routeGraphCount,
         shortlistedRouteCount: optimizer.shortlistedRouteCount,
+        quarantinedRouteCount: excludedRouteIds.size,
         ...routeBookEvidence(routeBook),
       },
     }
@@ -878,6 +976,7 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
     publicScreenBlockNumber: optimizer.publicScreenBlockNumber,
     routeGraphCount: optimizer.routeGraphCount,
     shortlistedRouteCount: optimizer.shortlistedRouteCount,
+    quarantinedRouteCount: excludedRouteIds.size,
     ...routeBookEvidence(routeBook),
     sizingBracketLowerEth: formatEther(quoteBracket.lowerBoundWei),
     sizingBracketUpperEth: formatEther(quoteBracket.upperBoundWei),
@@ -896,6 +995,22 @@ async function prepareOnClient(client, gasSolvency, rpcRole, { candidateHint = n
     candidateHint: {
       routeId: candidate.route.id,
       route: candidate.route,
+      routeBookSnapshot: {
+        source: routeBook.source,
+        blockNumber: routeBook.blockNumber,
+        refreshMode: routeBook.refreshMode || 'FULL_CANONICAL_FACTORY_REFRESH',
+        discoveredFactoryPools: routeBook.discoveredFactoryPools,
+        reviewedLegacyPools: routeBook.reviewedLegacyPools,
+        rejected: [],
+        pools: [
+          ...new Map(
+            candidate.route.steps.map((step) => [
+              step.pool.toLowerCase(),
+              routeBook.poolByAddress.get(step.pool.toLowerCase()),
+            ]),
+          ).values(),
+        ],
+      },
       amountInWei: candidate.amountIn,
       lowerBoundWei: quoteBracket.lowerBoundWei,
       upperBoundWei: quoteBracket.upperBoundWei,
@@ -908,8 +1023,17 @@ async function preflight({ print = true } = {}) {
   const sharedContext = sharedExecutionContext()
   const watcherPid = activeLock(dualWatchLockPath)
   const gasSolvency = currentGasSolvency(sharedContext)
-  const focusPool = process.env.EARN_WAKE_POOL ? getAddress(process.env.EARN_WAKE_POOL) : null
-  const screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN', { focusPool })
+  const focusPools = String(process.env.EARN_WAKE_POOLS || process.env.EARN_WAKE_POOL || '')
+    .split(',')
+    .filter(Boolean)
+    .map((value) => getAddress(value))
+  const auditRecords = readJsonLines(sharedContext ? sharedAuditPath : auditPath)
+  const routeQuarantine = earnOnHoodRouteQuarantine(auditRecords)
+  const excludedRouteIds = new Set(routeQuarantine.map((entry) => entry.routeId))
+  const screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN', {
+    focusPools,
+    excludedRouteIds,
+  })
   if (screened.report.status !== 'SHOT_READY') {
     appendAudit('preflight', screened.report)
     if (print) console.log(stringify(screened.report))
@@ -936,6 +1060,7 @@ async function preflight({ print = true } = {}) {
   const exactGasSolvency = currentGasSolvency(sharedContext)
   const prepared = await prepareOnClient(executionClient, exactGasSolvency, 'MANAGED_RPC_EXACT', {
     candidateHint: screened.candidateHint,
+    excludedRouteIds,
   })
   if (!sharedContext && watcherPid) {
     prepared.report.status = 'NO_SHOT'
@@ -960,8 +1085,8 @@ async function execute() {
       console.log(stringify({ ...prepared.report, status: 'NO_SHOT_NO_SIGNATURE_NO_BROADCAST' }))
       return
     }
-    const latestBlockNumber = await executionClient.getBlockNumber()
-    const latestBlock = await executionClient.getBlock({ blockNumber: latestBlockNumber })
+    const latestBlock = await executionClient.getBlock()
+    const latestBlockNumber = latestBlock.number
     const [latestNonce, pendingNonce, latestWalletBalance, latestGasPrice, latestFees] = await Promise.all([
       executionClient.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
       executionClient.getTransactionCount({ address: WALLET, blockTag: 'pending' }),
@@ -993,34 +1118,33 @@ async function execute() {
     ) {
       throw new Error('shared EarnOnHood nonce differs from the authorization ledger')
     }
-    const latestQuote = await exactQuote(
-      executionClient,
-      prepared.candidate.route,
-      prepared.candidate.amountIn,
-      latestBlockNumber,
-    )
-    if (latestQuote < prepared.bounds.minimumAmountOutWei)
-      throw new Error('quote fell below the protected output floor')
     const latestDeadline = latestBlock.timestamp + DEADLINE_SECONDS
     const latestData = encodeFunctionData({
       abi: batchRouterAbi,
       functionName: 'swapExactIn',
       args: [[prepared.transactionPath], latestDeadline, true, '0x'],
     })
-    await executionClient.call({
-      account: WALLET,
-      to: BATCH_ROUTER,
-      data: latestData,
-      value: prepared.candidate.amountIn,
-      blockNumber: latestBlockNumber,
-    })
-    const latestGasEstimate = await executionClient.estimateGas({
-      account: WALLET,
-      to: BATCH_ROUTER,
-      data: latestData,
-      value: prepared.candidate.amountIn,
-      blockNumber: latestBlockNumber,
-    })
+    const finalGateStartedAt = Date.now()
+    const [latestQuote, , latestGasEstimate] = await Promise.all([
+      exactQuote(executionClient, prepared.candidate.route, prepared.candidate.amountIn, latestBlockNumber),
+      executionClient.call({
+        account: WALLET,
+        to: BATCH_ROUTER,
+        data: latestData,
+        value: prepared.candidate.amountIn,
+        blockNumber: latestBlockNumber,
+      }),
+      executionClient.estimateGas({
+        account: WALLET,
+        to: BATCH_ROUTER,
+        data: latestData,
+        value: prepared.candidate.amountIn,
+        blockNumber: latestBlockNumber,
+      }),
+    ])
+    const finalGateDurationMs = Date.now() - finalGateStartedAt
+    if (latestQuote < prepared.bounds.minimumAmountOutWei)
+      throw new Error('quote fell below the protected output floor')
     if (latestGasEstimate > prepared.bounds.gasLimit) {
       throw new Error('latest gas estimate exceeds the protected gas limit')
     }
@@ -1057,6 +1181,8 @@ async function execute() {
       sizingAlgorithm: EARN_SIZING_ALGORITHM,
       quoteMode: prepared.report.quoteMode,
       exactQuoteCount: prepared.report.exactQuoteCount,
+      finalGateBlockNumber: latestBlockNumber,
+      finalGateDurationMs,
     })
     appendAudit('mutation_plan', plan, { mirrorShared: Boolean(sharedContext) })
     if (sharedContext)
@@ -1137,6 +1263,11 @@ async function execute() {
           intentId: plan.intentId,
           planHash: plan.planHash,
           gasSpentWei,
+          blockNumber: receipt.blockNumber,
+          routeId: prepared.candidate.route.id,
+          pools: prepared.candidate.route.steps.map((step) => step.pool),
+          quotedAmountOutWei: latestQuote,
+          minimumAmountOutWei: prepared.bounds.minimumAmountOutWei,
         },
         { mirrorShared: Boolean(sharedContext) },
       )
@@ -1146,6 +1277,8 @@ async function execute() {
         transaction: hash,
         explorer: `https://robinhoodchain.blockscout.com/tx/${hash}`,
         blockNumber: receipt.blockNumber,
+        routeId: prepared.candidate.route.id,
+        pools: prepared.candidate.route.steps.map((step) => step.pool),
         route: prepared.candidate.route.symbols.join(' -> '),
         amountInEth: formatEther(prepared.candidate.amountIn),
         gasUsed: receipt.gasUsed,
@@ -1174,6 +1307,8 @@ async function execute() {
       transaction: hash,
       explorer: `https://robinhoodchain.blockscout.com/tx/${hash}`,
       blockNumber: receipt.blockNumber,
+      routeId: prepared.candidate.route.id,
+      pools: prepared.candidate.route.steps.map((step) => step.pool),
       route: prepared.candidate.route.symbols.join(' -> '),
       amountInEth: formatEther(prepared.candidate.amountIn),
       gasUsed: receipt.gasUsed,
@@ -1333,10 +1468,22 @@ async function reconcile() {
           planHash: unresolved.planHash,
           gasSpentWei,
           reconciled: true,
+          blockNumber: receipt.blockNumber,
+          routeId: plan.routeId || route.id,
+          pools: plan.routeSteps?.map((step) => step.pool) || plan.pools || [],
+          quotedAmountOutWei: plan.quotedAmountOutWei || null,
+          minimumAmountOutWei: plan.minimumAmountOutWei || null,
         },
         { mirrorShared },
       )
-      const result = { status: 'RECONCILED_REVERTED', transaction: unresolved.hash, gasSpentWei }
+      const result = {
+        status: 'RECONCILED_REVERTED',
+        transaction: unresolved.hash,
+        blockNumber: receipt.blockNumber,
+        routeId: plan.routeId || route.id,
+        pools: plan.routeSteps?.map((step) => step.pool) || plan.pools || [],
+        gasSpentWei,
+      }
       console.log(stringify(result))
       return result
     }
@@ -1363,6 +1510,8 @@ async function reconcile() {
         intentId: unresolved.intentId,
         planHash: unresolved.planHash,
         blockNumber: receipt.blockNumber,
+        routeId: plan.routeId || route.id,
+        pools: plan.routeSteps?.map((step) => step.pool) || plan.pools || [],
         route: route.symbols.join(' -> '),
         amountInEth: formatEther(BigInt(plan.value)),
         gasSpentWei,
@@ -1379,6 +1528,9 @@ async function reconcile() {
     const result = {
       status: 'RECONCILED_SUCCESS',
       transaction: unresolved.hash,
+      blockNumber: receipt.blockNumber,
+      routeId: plan.routeId || route.id,
+      pools: plan.routeSteps?.map((step) => step.pool) || plan.pools || [],
       realizedNetProfitEth: formatEther(realizedNetProfitWei),
     }
     console.log(stringify(result))

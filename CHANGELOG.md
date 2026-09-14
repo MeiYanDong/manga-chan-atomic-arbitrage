@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Route one shared ordered Sequencer Feed into typed Earn and Global adapters instead of treating platform names as
+  separate bots. Exact Earn pool/asset frames now run the Earn adapter first while leaving the broader cross-protocol
+  search queued, every pool matched in a coalesced wake participates in local route ranking, and public discovery
+  reuses protected canonical static metadata while refreshing only fixed-block dynamic balances. The managed signer
+  still rechecks the exact selected route, nonce, quote, simulation, Gas, balance and profit floor before signing.
+- Turn a canonical Earn revert into an exact-route quarantine rather than a platform-wide pause. Only a newer event on
+  one of that route's pools, or a confirmed success for the same route, releases it; unrelated routes and adapters keep
+  running. Preserve the 2026-09-15 WETH/AI exit-pool state race as an address-only regression fixture, explicitly marked
+  as strong inference rather than a historical execution trace, and run the final quote/call/Gas gate concurrently at
+  one fixed block to reduce post-quote drift.
+- Make critical Feishu paging reflect user impact: an isolated Earn, Global or board failure is a silent degraded state;
+  paging begins only when the shared execution foundation is repeatedly unavailable, every independent discovery
+  adapter is simultaneously down, the signer stops, or transaction reconciliation stalls. Recovery copy now says
+  whether full or partial coverage returned and continues to omit hashes, nonce, RPC and authorization internals.
 - Make Feishu's headline number the actual receipt-gated result after both profitable-transaction Gas and failed-transaction
   Gas, and replace internal operator phrasing with direct Chinese labels for impact, automatic handling and required user
   action. Persist `STOPPED_BY_SIGNAL` immediately on SIGTERM/SIGINT so a bounded child process cannot make a controlled

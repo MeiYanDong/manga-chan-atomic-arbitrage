@@ -570,6 +570,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.doesNotMatch(dualSource, /args: \{ pool: EARN_POOL_ADDRESSES \}/)
   assert.match(dualSource, /sourceReceivedAt/)
   assert.match(dualSource, /EARN_WAKE_RECEIVED_AT/)
+  assert.match(dualSource, /EARN_WAKE_POOLS/)
+  assert.match(dualSource, /classifyEarnFeedMatches/)
+  const earnFeedPriority = dualWatchSource.indexOf("if (pendingEarnWake === 'FILTERED_SEQUENCER_FEED')")
+  const globalFeedExecution = dualWatchSource.indexOf('if (pendingGlobalWake &&')
+  assert.ok(earnFeedPriority >= 0, 'an Earn feed match must have a dedicated priority dispatch')
+  assert.ok(earnFeedPriority < globalFeedExecution, 'Earn feed work must run before the broader global adapter')
   assert.match(dualWatchSource, /freezeDualExecutionTrigger\(board\.snapshot, candidate/)
   assert.match(dualWatchSource, /frozenTrigger,/)
   const executeStart = dualSource.indexOf('async function execute(')
@@ -591,6 +597,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const earnLiveSource = fs.readFileSync(path.join(root, 'scripts', 'earnonhood-live.mjs'), 'utf8')
   const globalLiveSource = fs.readFileSync(path.join(root, 'scripts', 'global-arb.mjs'), 'utf8')
   assert.match(earnLiveSource, /status: 'CONFIRMED_REVERTED'/)
+  assert.match(earnLiveSource, /earnOnHoodRouteQuarantine/)
+  assert.match(earnLiveSource, /refreshEarnOnHoodCachedDynamicCatalog/)
+  assert.match(
+    earnLiveSource,
+    /Promise\.all\(\[\s*exactQuote\([\s\S]*executionClient\.call\([\s\S]*executionClient\.estimateGas\(/,
+  )
   assert.match(globalLiveSource, /status: 'GLOBAL_EXECUTION_REVERTED_CONFIRMED'/)
   assert.match(dualSource, /status: 'DUAL_BASE_EXECUTION_REVERTED_CONFIRMED'/)
   assert.doesNotMatch(earnLiveSource, /throw new Error\(`EarnOnHood transaction reverted/)

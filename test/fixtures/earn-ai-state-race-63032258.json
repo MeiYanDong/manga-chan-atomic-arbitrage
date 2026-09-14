@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "evidenceStatus": "STRONG_STATE_RACE_INFERENCE_NOT_HISTORICAL_TRACE",
+  "chainId": 4663,
+  "route": {
+    "id": "EARN_DYNAMIC_64E5765949100B5D",
+    "symbols": ["WETH", "AI", "WETH"],
+    "pools": ["0xcDe242535A75F8ccB5D4b14686e312c196B28855", "0x00e7B76d0C0F0370C28A07aA9d9fDF92736238A6"],
+    "exitDirection": {
+      "tokenIn": "0x2E8c31162b855A2ffa90F6F8634643Ad6F111e18",
+      "tokenOut": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73"
+    }
+  },
+  "ourAttempt": {
+    "transaction": "0x3a2c2d1b6f7c6dd20bd5445a2079b2aa5930573ab8ec1d57878e7ca0b2b10cc1",
+    "blockNumber": "63032258",
+    "transactionIndex": 3,
+    "status": "CANONICAL_REVERT",
+    "amountInWei": "1501341875674918",
+    "quotedAmountOutWei": "1562809508580310",
+    "minimumAmountOutWei": "1540666560591359",
+    "gasSpentWei": "16626753360000",
+    "sourceObservedAt": "2026-09-14T18:48:19.944Z",
+    "signedAt": "2026-09-14T18:48:50.205Z",
+    "sequencerAcceptedAt": "2026-09-14T18:48:50.677Z"
+  },
+  "stateChangingTransaction": {
+    "transaction": "0xc30118adc35883ec06a68c966fa5233c6154061b29ac4178bcc9bcecd1e4b265",
+    "blockNumber": "63032256",
+    "transactionIndex": 8,
+    "actor": "0x2a818a31d9e4cc51217adda95b2b754acd9e58f1",
+    "helper": "0x43c8976ddee758277229427dda4da305a7ae3dba",
+    "pool": "0x00e7B76d0C0F0370C28A07aA9d9fDF92736238A6",
+    "tokenIn": "0x2E8c31162b855A2ffa90F6F8634643Ad6F111e18",
+    "tokenOut": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+    "amountInWei": "14334014520481396107",
+    "amountOutWei": "1779291835419718"
+  },
+  "currentStateReplay": {
+    "errorSelector": "0xe2ea151b",
+    "errorName": "SwapLimit",
+    "actualAmountOutWei": "1514535541258272",
+    "minimumAmountOutWei": "1540666560591359"
+  }
+}

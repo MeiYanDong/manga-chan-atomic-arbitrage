@@ -66,9 +66,14 @@ import {
   GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
   GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
   buildGlobalFeedWatchPolicy,
+  classifyEarnFeedMatches,
   classifyGlobalFeedMatches,
 } from '../src/global-wake-policy.mjs'
-import { EARN_SIZING_ALGORITHM, earnOnHoodGasSolvency } from '../src/earnonhood-live-policy.mjs'
+import {
+  EARN_SIZING_ALGORITHM,
+  earnOnHoodGasSolvency,
+  earnOnHoodRouteQuarantine,
+} from '../src/earnonhood-live-policy.mjs'
 import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
 import {
   EARN_BATCH_ROUTER,
@@ -2302,6 +2307,7 @@ async function pollEarnOnHoodWake(cursor) {
     eventTransactionHash: latestRouteLog?.transactionHash ?? null,
     eventLogIndex: latestRouteLog?.logIndex ?? null,
     eventPool: latestRouteLog?.args?.pool ?? null,
+    eventPools: [...new Set(routeLogs.map((log) => log.args?.pool).filter(Boolean))],
   }
 }
 
@@ -2332,7 +2338,8 @@ async function runEarnOnHoodChild(command, extraEnvironment = {}, timeoutMs = 18
   return parseEarnChildOutput(result.stdout)
 }
 
-function runEarnOnHoodShared(arm, signal) {
+function runEarnOnHoodShared(arm, signal, wakeReason) {
+  const eventPools = [...new Set([...(signal?.eventPools || []), signal?.eventPool].filter(Boolean))]
   return runEarnOnHoodChild(
     'execute',
     {
@@ -2343,6 +2350,8 @@ function runEarnOnHoodShared(arm, signal) {
       EARN_WAKE_BLOCK_NUMBER: signal?.eventBlockNumber === null ? '' : String(signal?.eventBlockNumber || ''),
       EARN_WAKE_TRANSACTION_HASH: signal?.eventTransactionHash || '',
       EARN_WAKE_POOL: signal?.eventPool || '',
+      EARN_WAKE_POOLS: eventPools.join(','),
+      EARN_WAKE_REASON: wakeReason || '',
     },
     RUNTIME_CONFIG.earnWatchChildTimeoutMs,
   )
@@ -2395,7 +2404,8 @@ function reconcileSharedMutation(arm, mutation) {
 
 function globalFeedWatchPolicy() {
   return buildGlobalFeedWatchPolicy(readJson(GLOBAL_CATALOG_PATH), {
-    protocolAddresses: [EARN_VAULT, EARN_ROUTER, POOL_MANAGER],
+    protocolAddresses: [EARN_VAULT, EARN_ROUTER, EARN_BATCH_ROUTER, POOL_MANAGER],
+    earnProtocolAddresses: [EARN_VAULT, EARN_ROUTER, EARN_BATCH_ROUTER],
     settlementAddresses: globalSettlementSeeds(
       [GENERIC_USDG, GENERIC_WETH],
       RUNTIME_CONFIG.globalExtraSettlementAssets,
@@ -2407,7 +2417,11 @@ function globalFeedWatchPolicy() {
 function applyGlobalFeedWatchPolicy(feed) {
   const policy = globalFeedWatchPolicy()
   feed.setWatchedAddresses(policy.watchedAddresses)
-  feed.setMatchFilter((signal) => classifyGlobalFeedMatches(signal.matchedAddresses, policy).actionable)
+  feed.setMatchFilter((signal) => {
+    const globalMatch = classifyGlobalFeedMatches(signal.matchedAddresses, policy)
+    const earnMatch = classifyEarnFeedMatches(signal.matchedAddresses, policy)
+    return globalMatch.actionable || earnMatch.actionable
+  })
   return policy
 }
 
@@ -2524,6 +2538,10 @@ async function executeEarnWatcherWake({
     eventBlockNumber: signal?.eventBlockNumber ?? null,
     eventTransactionHash: signal?.eventTransactionHash || null,
     eventLogIndex: signal?.eventLogIndex ?? null,
+    eventPool: signal?.eventPool || null,
+    eventPools: signal?.eventPools || (signal?.eventPool ? [signal.eventPool] : []),
+    feedSequenceNumber: signal?.firstSequenceNumber ?? null,
+    classificationReason: signal?.classificationReason || null,
   })
   let nextState = {
     ...watchState,
@@ -2539,11 +2557,17 @@ async function executeEarnWatcherWake({
     },
   }
   writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
-  const earnResult = await runEarnOnHoodShared(arm, signal)
+  const earnResult = await runEarnOnHoodShared(arm, signal, wakeReason)
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const earnUsage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = earnResult.status === 'CONFIRMED_NET_PROFIT'
   const reverted = earnResult.status === 'CONFIRMED_REVERTED'
+  const activeRouteQuarantine = earnOnHoodRouteQuarantine(readAuditRecords())
+  const lastQuarantinedRoute =
+    activeRouteQuarantine.reduce((latest, entry) => {
+      if (!latest) return entry
+      return Date.parse(String(entry.revertedAt || '')) > Date.parse(String(latest.revertedAt || '')) ? entry : latest
+    }, null) || null
   nextState = {
     ...nextState,
     status: 'RUNNING',
@@ -2563,6 +2587,24 @@ async function executeEarnWatcherWake({
       status: 'WATCHING',
       lastResult: earnResult.status,
       lastTransaction: earnResult.transaction || nextState.earnOnHood.lastTransaction,
+      lastRouteId: earnResult.routeId || nextState.earnOnHood.lastRouteId || null,
+      lastRoutePools: earnResult.pools || nextState.earnOnHood.lastRoutePools || [],
+      routeQuarantine: reverted
+        ? {
+            routeId: earnResult.routeId || null,
+            pools: earnResult.pools || [],
+            receiptBlockNumber: earnResult.blockNumber ?? null,
+            reason: 'CANONICAL_REVERT_AWAITING_RELEVANT_POOL_CHANGE',
+          }
+        : lastQuarantinedRoute
+          ? {
+              routeId: lastQuarantinedRoute.routeId,
+              pools: lastQuarantinedRoute.pools,
+              receiptBlockNumber: lastQuarantinedRoute.blockNumber,
+              reason: 'CANONICAL_REVERT_AWAITING_RELEVANT_POOL_CHANGE',
+            }
+          : null,
+      quarantinedRouteCount: activeRouteQuarantine.length,
       lastRealizedNetProfitEth: earnResult.realizedNetProfitEth || null,
       lastDynamicMaximumPrincipalEth: earnResult.dynamicMaximumPrincipalEth || null,
       lastQuotedNetAtGasCapEth: earnResult.quotedNetAtGasCapEth || earnResult.bestQuotedNetAtGasCapEth || null,
@@ -2576,6 +2618,10 @@ async function executeEarnWatcherWake({
     status: earnResult.status,
     transaction: earnResult.transaction || null,
     realizedNetProfitEth: earnResult.realizedNetProfitEth || null,
+    routeId: earnResult.routeId || null,
+    pools: earnResult.pools || [],
+    blockNumber: earnResult.blockNumber ?? null,
+    gasSpentEth: earnResult.gasSpentEth || null,
   })
   return { watchState: nextState, deployments: nextDeployments }
 }
@@ -2707,8 +2753,8 @@ async function watchDual() {
       },
       startedAt,
       updatedAt: startedAt,
-      triggerMode: 'LOOPBACK_OR_EARN_EVENT_OR_FILTERED_SEQUENCER_FEED_THEN_EXACT_PREFLIGHT',
-      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_EVENT_PLUS_ORDERED_FEED_FILTER',
+      triggerMode: 'ONE_SUPERVISOR_ROUTES_LOOPBACK_EVENTS_AND_ORDERED_FEED_TO_TYPED_ADAPTERS',
+      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_EVENT_PLUS_SHARED_ORDERED_FEED_FILTER',
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
       authorizationLifetime: arm.authorizationLifetime,
       principalPolicy: arm.principalPolicy,
@@ -2726,7 +2772,7 @@ async function watchDual() {
       lastDecision: 'STARTING',
       earnOnHood: {
         status: 'STARTING',
-        triggerMode: 'PUBLIC_SWAP_EVENT_OR_PERIODIC_RECOVERY',
+        triggerMode: 'FILTERED_ORDERED_FEED_OR_PUBLIC_SWAP_EVENT_OR_PERIODIC_RECOVERY',
         principalPolicy: arm.earnOnHood.principalPolicy,
         fixedPrincipalCap: null,
         routeCommitment: arm.earnOnHood.routeCommitment,
@@ -2779,6 +2825,7 @@ async function watchDual() {
     let nextEarnPeriodicAt = Date.now()
     let pendingEarnWake = 'STARTUP'
     let pendingEarnSignal = { sourceReceivedAt: new Date().toISOString() }
+    let coalescedEarnWakes = 0
     let nextGlobalPeriodicAt = Date.now()
     let lastGlobalRunAt = 0
     let pendingGlobalWake = 'STARTUP'
@@ -2795,17 +2842,36 @@ async function watchDual() {
       requestedSequenceNumber: startup.wallet.blockNumber,
       watchedAddresses: activeGlobalFeedPolicy.watchedAddresses,
       minimumAddressMatches: 1,
-      matchFilter: (signal) => classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy).actionable,
+      matchFilter: (signal) => {
+        const globalMatch = classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
+        const earnMatch = classifyEarnFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
+        return globalMatch.actionable || earnMatch.actionable
+      },
       onWake: (signal) => {
-        const classification = classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
-        if (!classification.actionable) return
-        if (pendingGlobalWake) coalescedGlobalWakes += 1
-        pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
-        pendingGlobalSignal = {
-          ...signal,
-          routeAddresses: classification.routeAddresses,
-          classificationReason: classification.reason,
-          coalescedWakeCount: coalescedGlobalWakes,
+        const globalClassification = classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
+        const earnClassification = classifyEarnFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
+        if (earnClassification.actionable) {
+          if (pendingEarnWake) coalescedEarnWakes += 1
+          pendingEarnWake = 'FILTERED_SEQUENCER_FEED'
+          pendingEarnSignal = {
+            ...signal,
+            sourceReceivedAt: signal.receivedAt,
+            eventPool: earnClassification.matchedPoolAddresses[0] || null,
+            eventPools: earnClassification.matchedPoolAddresses,
+            routeAddresses: earnClassification.routeAddresses,
+            classificationReason: earnClassification.reason,
+            coalescedWakeCount: coalescedEarnWakes,
+          }
+        }
+        if (globalClassification.actionable) {
+          if (pendingGlobalWake) coalescedGlobalWakes += 1
+          pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
+          pendingGlobalSignal = {
+            ...signal,
+            routeAddresses: globalClassification.routeAddresses,
+            classificationReason: globalClassification.reason,
+            coalescedWakeCount: coalescedGlobalWakes,
+          }
         }
       },
     })
@@ -2987,6 +3053,27 @@ async function watchDual() {
         if (Date.now() >= nextGlobalPeriodicAt && !pendingGlobalWake) {
           pendingGlobalWake = 'PERIODIC_RECOVERY'
           pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
+        }
+        if (pendingEarnWake === 'FILTERED_SEQUENCER_FEED') {
+          const wakeReason = pendingEarnWake
+          const signal = pendingEarnSignal
+          pendingEarnWake = null
+          pendingEarnSignal = null
+          nextEarnPeriodicAt = Date.now() + RUNTIME_CONFIG.earnWatchPeriodicMs
+          phase = 'EARN'
+          const earnRun = await executeEarnWatcherWake({
+            arm: currentArm,
+            watchState,
+            deployments,
+            wakeReason,
+            signal,
+            eventCursor: earnEventCursor,
+            nextPeriodicAt: nextEarnPeriodicAt,
+          })
+          watchState = earnRun.watchState
+          deployments = earnRun.deployments
+          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+          continue
         }
         if (pendingGlobalWake && Date.now() - lastGlobalRunAt >= RUNTIME_CONFIG.globalWatchMinIntervalMs) {
           const wakeReason = pendingGlobalWake

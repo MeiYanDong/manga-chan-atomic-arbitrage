@@ -344,6 +344,83 @@ export function earnOnHoodGasSolvency(records, options = {}) {
   }
 }
 
+function normalizedPoolList(values) {
+  if (!Array.isArray(values)) return []
+  return [
+    ...new Set(
+      values.map((value) => String(value || '').toLowerCase()).filter((value) => /^0x[0-9a-f]{40}$/.test(value)),
+    ),
+  ].sort()
+}
+
+/**
+ * Rebuild route-local retry quarantine from the append-only audit. A
+ * canonical revert quarantines only that exact route. A later relevant pool
+ * wake or a confirmed successful effect releases it; unrelated routes and
+ * discovery remain active throughout.
+ *
+ * @param {Array<Record<string, any>>} records
+ */
+export function earnOnHoodRouteQuarantine(records) {
+  if (!Array.isArray(records)) throw new Error('EarnOnHood route quarantine records must be an array')
+  const plans = new Map()
+  for (const record of records) {
+    if (
+      record?.event === 'mutation_plan' &&
+      record?.kind === 'earnonhood-execute' &&
+      typeof record.planHash === 'string'
+    ) {
+      plans.set(record.planHash, record)
+    }
+  }
+  const quarantined = new Map()
+  for (const record of records) {
+    const plan = typeof record?.planHash === 'string' ? plans.get(record.planHash) : null
+    const routeId = String(record?.routeId || plan?.routeId || '')
+    if (record?.event === 'mutation_reverted' && (record?.kind === 'earnonhood-execute' || plan)) {
+      if (!routeId) continue
+      quarantined.set(routeId, {
+        routeId,
+        pools: normalizedPoolList(record.pools || plan?.pools || plan?.routeSteps?.map((step) => step.pool)),
+        revertedAt: record.at || null,
+        blockNumber:
+          record.blockNumber === undefined || record.blockNumber === null ? null : String(record.blockNumber),
+        transaction: record.hash || record.transaction || null,
+      })
+      continue
+    }
+    if (record?.event === 'mutation_effect' && routeId) {
+      quarantined.delete(routeId)
+      continue
+    }
+    if (record?.event !== 'earn_watch_wake') continue
+    const wakePools = normalizedPoolList(record.eventPools || [record.eventPool])
+    if (wakePools.length === 0) continue
+    // Feed callbacks can be coalesced while another child is running and only
+    // appended later. Compare the source observation time, not the delayed
+    // parent-consumption time, so the state-changing frame that caused a
+    // revert cannot immediately release that same route.
+    const wakeAt = Date.parse(String(record.sourceReceivedAt || record.at || ''))
+    for (const [candidateRouteId, entry] of quarantined) {
+      if (!entry.pools.some((pool) => wakePools.includes(pool))) continue
+      const revertedAt = Date.parse(String(entry.revertedAt || ''))
+      const sourceBlock =
+        record.eventBlockNumber === undefined || record.eventBlockNumber === null
+          ? null
+          : BigInt(record.eventBlockNumber)
+      const revertedBlock = entry.blockNumber === null ? null : BigInt(entry.blockNumber)
+      const newerCanonicalBlock = sourceBlock !== null && revertedBlock !== null && sourceBlock > revertedBlock
+      const newerOrderedSignal =
+        (sourceBlock === null || revertedBlock === null) &&
+        Number.isFinite(wakeAt) &&
+        Number.isFinite(revertedAt) &&
+        wakeAt > revertedAt
+      if (newerCanonicalBlock || newerOrderedSignal) quarantined.delete(candidateRouteId)
+    }
+  }
+  return [...quarantined.values()].sort((left, right) => left.routeId.localeCompare(right.routeId))
+}
+
 /**
  * Permit a new attempt only when charging its entire buffered Gas limit would
  * leave the lifetime Earn lane strictly net-positive.

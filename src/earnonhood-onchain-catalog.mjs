@@ -369,3 +369,78 @@ export async function loadEarnOnHoodOnchainCatalog(client, blockNumber, options 
     reviewedLegacyPools: EARN_REVIEWED_LEGACY_OMNIPOOLS.length,
   }
 }
+
+/**
+ * Refresh only the mutable weighted-pool state from a previously canonical,
+ * protected catalog. Factory membership, immutable tokens/weights, labels and
+ * Permit2 probes are reused; a selected route is still checked against the
+ * canonical Vault again on the managed signing path. This keeps public event
+ * wakes to bounded multicalls instead of repeating every static metadata read.
+ */
+export async function refreshEarnOnHoodCachedDynamicCatalog(client, cached, blockNumber) {
+  if (
+    cached?.source !== EARN_ROUTE_DISCOVERY_POLICY.catalogSource ||
+    !Array.isArray(cached.pools) ||
+    cached.pools.length === 0 ||
+    cached.pools.length > EARN_ROUTE_DISCOVERY_POLICY.maximumCatalogPools
+  ) {
+    throw new Error('cached EarnOnHood catalog is absent or outside policy')
+  }
+  const dynamicResults = await boundedMulticall(
+    client,
+    cached.pools.map((pool) => ({
+      address: getAddress(pool.address),
+      abi: weightedPoolAbi,
+      functionName: 'getWeightedPoolDynamicData',
+    })),
+    blockNumber,
+  )
+  const sourcePools = []
+  const refreshRejected = []
+  for (let index = 0; index < cached.pools.length; index += 1) {
+    const pool = cached.pools[index]
+    const result = dynamicResults[index]
+    if (result?.status !== 'success') {
+      refreshRejected.push({
+        address: pool.address,
+        name: pool.name || shortAddress(pool.address),
+        reason: publicError(result?.error || 'dynamic weighted pool read failed'),
+      })
+      continue
+    }
+    const dynamicData = result.result
+    const balances = dynamicData?.balancesLiveScaled18 || []
+    if (!Array.isArray(pool.tokens) || balances.length !== pool.tokens.length) {
+      refreshRejected.push({
+        address: pool.address,
+        name: pool.name || shortAddress(pool.address),
+        reason: 'cached token list and current balances differ',
+      })
+      continue
+    }
+    sourcePools.push({
+      ...pool,
+      initialized: dynamicData.isPoolInitialized === true,
+      paused: dynamicData.isPoolPaused === true,
+      recoveryMode: dynamicData.isPoolInRecoveryMode === true,
+      swapFee: Number(BigInt(dynamicData.staticSwapFeePercentage)) / 1e16,
+      tokens: pool.tokens.map((token, tokenIndex) => ({
+        ...token,
+        balance: BigInt(balances[tokenIndex]).toString(),
+      })),
+    })
+  }
+  const normalized = normalizeEarnOnHoodCatalog({
+    ready: true,
+    calculatedAt: new Date().toISOString(),
+    pools: sourcePools,
+  })
+  return {
+    ...cached,
+    ...normalized,
+    rejected: [...refreshRejected, ...normalized.rejected],
+    source: EARN_ROUTE_DISCOVERY_POLICY.catalogSource,
+    blockNumber: BigInt(blockNumber).toString(),
+    refreshMode: 'PROTECTED_CANONICAL_STATIC_CACHE_PLUS_FIXED_BLOCK_DYNAMIC_MULTICALL',
+  }
+}

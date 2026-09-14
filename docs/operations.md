@@ -110,6 +110,14 @@ strategy daemons. New PAIR, LONG or other protocol integrations add typed discov
 adapters to the same graph and supervisor; they do not receive a separate signer or private route budget merely because
 their front-end brand differs.
 
+The shared ordered Sequencer Feed also routes frames by adapter. An exact Earn pool match, or canonical Earn protocol
+plus a non-settlement Earn asset, queues the Earn local-cycle adapter first; the same frame remains queued for Global
+when it is also relevant to a cross-protocol route. All matched Earn pools are focus inputs. The event hot path reuses
+the protected canonical static catalog and refreshes only fixed-block dynamic pool state; the managed signing path still
+revalidates the exact selected pools and core contracts. A canonical revert quarantines only its exact route until a
+newer event touches one of its pools or that route later succeeds. This quarantine does not hide failed Gas or pause
+unrelated routes.
+
 ## Universal cross-protocol promotion
 
 The universal executor is a fourth execution generation inside the existing dual watcher and single wallet nonce lane.
@@ -201,10 +209,12 @@ The dual watcher separates temporary process failure from safety-terminal exits.
 `RestartPreventExitStatus` and remain fail closed.
 
 The minimum-necessary Feishu health check runs once per minute. It pages only when an armed signer process is down,
-the runtime is terminal or stale, an execution lane has failed three times, or the noisier board lane has failed for 30
-consecutive watcher loops; it sends one recovery transition after the incident. No-shot decisions, candidate filtering
-and isolated RPC or child-process timeouts do not page. Provision its dedicated webhook independently from the
-business-report webhook:
+the runtime is terminal or stale, shared execution RPC has failed three times, every discovery adapter is simultaneously
+beyond its sustained-failure threshold, or asynchronous transaction reconciliation has stalled. One Earn, Global or
+board adapter may enter a visible `DEGRADED` state while the others continue; that condition, a canonical route revert,
+no-shot, candidate filtering and isolated RPC/child timeout stay silent. After a delivered incident it sends one recovery
+when full or partial viable coverage returns. Provision its dedicated webhook independently from the business-report
+webhook:
 
 ```bash
 sudo systemd-creds encrypt --name=manga-critical-alert-webhook - /etc/credstore.encrypted/manga-critical-alert-webhook

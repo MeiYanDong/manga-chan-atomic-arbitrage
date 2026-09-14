@@ -4,10 +4,12 @@ import test from 'node:test'
 import {
   GLOBAL_FEED_MATCH_POLICY,
   buildGlobalFeedWatchPolicy,
+  classifyEarnFeedMatches,
   classifyGlobalFeedMatches,
 } from '../src/global-wake-policy.mjs'
 
 const PROTOCOL = '0x0000000000000000000000000000000000000001'
+const EARN_PROTOCOL = '0x0000000000000000000000000000000000000007'
 const MORPHO = '0x0000000000000000000000000000000000000002'
 const FACTORY = '0x0000000000000000000000000000000000000003'
 const EARN_POOL = '0x0000000000000000000000000000000000000004'
@@ -33,6 +35,7 @@ function policy() {
     },
     {
       protocolAddresses: [PROTOCOL],
+      earnProtocolAddresses: [EARN_PROTOCOL],
       settlementAddresses: [WETH],
       ignoredAddresses: [MORPHO, FACTORY],
     },
@@ -43,16 +46,20 @@ test('builds a classified feed policy without funding or factory noise', () => {
   const built = policy()
   assert.equal(built.policy, GLOBAL_FEED_MATCH_POLICY)
   assert.ok(built.protocolAddresses.some((address) => address.toLowerCase() === PROTOCOL))
+  assert.ok(built.protocolAddresses.some((address) => address.toLowerCase() === EARN_PROTOCOL))
+  assert.deepEqual(built.earnProtocolAddresses, [EARN_PROTOCOL])
   assert.equal(
     built.poolAddresses.some((address) => address.toLowerCase() === PROTOCOL),
     false,
   )
   assert.ok(built.poolAddresses.some((address) => address.toLowerCase() === EARN_POOL))
+  assert.deepEqual(built.earnPoolAddresses, [EARN_POOL])
   assert.ok(built.triggerAddresses.some((address) => address.toLowerCase() === PROTOCOL))
   assert.ok(built.triggerAddresses.some((address) => address.toLowerCase() === EARN_POOL))
   assert.ok(built.triggerAddresses.some((address) => address.toLowerCase() === V3_POOL))
   assert.ok(built.triggerAddresses.some((address) => address.toLowerCase() === HOOK))
   assert.ok(built.assetAddresses.some((address) => address.toLowerCase() === WETH))
+  assert.ok(built.earnAssetAddresses.some((address) => address.toLowerCase() === ASSET))
   assert.deepEqual(built.settlementAddresses, [WETH])
   assert.equal(
     built.watchedAddresses.some((address) => address.toLowerCase() === MORPHO),
@@ -62,6 +69,17 @@ test('builds a classified feed policy without funding or factory noise', () => {
     built.watchedAddresses.some((address) => address.toLowerCase() === FACTORY),
     false,
   )
+})
+
+test('routes exact Earn feed frames to the Earn adapter without accepting protocol-only noise', () => {
+  const built = policy()
+  assert.deepEqual(classifyEarnFeedMatches([EARN_POOL], built).matchedPoolAddresses, [EARN_POOL])
+  assert.equal(classifyEarnFeedMatches([EARN_POOL], built).reason, 'EARN_POOL_MATCH')
+  assert.equal(classifyEarnFeedMatches([EARN_PROTOCOL], built).actionable, false)
+  assert.equal(classifyEarnFeedMatches([EARN_PROTOCOL, ASSET], built).actionable, true)
+  assert.equal(classifyEarnFeedMatches([EARN_PROTOCOL, ASSET], built).reason, 'EARN_PROTOCOL_ASSET_PATH_MATCH')
+  assert.equal(classifyEarnFeedMatches([PROTOCOL, ASSET], built).actionable, false)
+  assert.equal(classifyEarnFeedMatches([V3_POOL], built).actionable, false)
 })
 
 test('projects only route-specific pools and non-hub assets into event work', () => {
