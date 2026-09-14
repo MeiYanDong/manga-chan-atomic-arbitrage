@@ -25,7 +25,7 @@ net positive. It is not a second autonomous signer. See
 [ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md) and
 [ADR 0059](docs/decisions/0059-earn-onchain-factory-catalog.md).
 
-The v0.14.6 lane adds a typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4. It can
+The v0.14.7 lane adds a typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4. It can
 atomically combine swaps and Earn BPT premium/discount actions, settle in USDG, WETH or an explicitly allowlisted asset,
 and fund a route with zero-fee Morpho flash liquidity or protected executor inventory. The Sequencer Feed only wakes
 exact state checks; signed raw transactions are persisted before direct Sequencer submission, and any managed-RPC
