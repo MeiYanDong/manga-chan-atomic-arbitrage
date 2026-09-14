@@ -16,8 +16,10 @@ Environment=MANGA_BOARD_RUN_DIR=/var/lib/manga-opportunity-board
 Environment=MANGA_BOARD_EXECUTION_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
 Environment=MANGA_BOARD_OPERATIONS_SNAPSHOT=/run/manga-opportunity-board-feed/operations-snapshot.json
 Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=/var/lib/manga-business-report/business-snapshot.json
-# Keep V8 below the cgroup ceiling while retaining measured headroom for the
-# growing compact source index.
+# Keep V8 below the cgroup ceiling while retaining measured headroom for
+# SQLite and JSON serialization spikes. A 512 MiB high watermark can throttle
+# V8 before it reaches the collection point; the 640 MiB hard stop still keeps
+# the board bounded on the shared host.
 Environment=NODE_OPTIONS=--max-old-space-size=320
 UMask=0027
 # ExecStart-level values intentionally override a retained live.env from an
@@ -32,8 +34,8 @@ StateDirectoryMode=0750
 RuntimeDirectory=manga-opportunity-board-feed
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=restart
-MemoryHigh=512M
-MemoryMax=576M
+MemoryHigh=576M
+MemoryMax=640M
 TasksMax=48
 CPUQuota=60%
 OOMPolicy=stop
