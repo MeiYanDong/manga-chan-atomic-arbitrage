@@ -563,6 +563,10 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   )
   assert.match(dualSource, /buildGlobalFeedWatchPolicy/)
   assert.match(dualSource, /classifyGlobalFeedMatches/)
+  assert.match(dualSource, /settlementAddresses: globalSettlementAssets/)
+  assert.match(dualSource, /GLOBAL_WAKE_ROUTE_ADDRESSES: \(signal\?\.routeAddresses \|\| \[\]\)\.join/)
+  assert.doesNotMatch(dualSource, /GLOBAL_WAKE_MATCHED_ADDRESSES/)
+  assert.match(globalSource, /process\.env\.GLOBAL_WAKE_ROUTE_ADDRESSES/)
   assert.match(dualSource, /routeWorksetPolicy/)
 
   const forkSource = fs.readFileSync(path.join(root, 'scripts', 'universal-mainnet-fork-test.mjs'), 'utf8')

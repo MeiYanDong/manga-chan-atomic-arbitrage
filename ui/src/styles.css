@@ -542,6 +542,10 @@ td small {
   font-variant-numeric: tabular-nums;
 }
 
+.execution-facts {
+  border-top: 1px solid var(--line);
+}
+
 .competition-table .route-cell {
   min-width: 220px;
   max-width: 420px;

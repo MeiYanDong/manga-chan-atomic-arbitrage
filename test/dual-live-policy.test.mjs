@@ -147,7 +147,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v9 authorization binds event relevance, RPC cost, executor identity, and Earn sizing ceilings', () => {
+test('v10 authorization binds route-specific event relevance, RPC cost, executor identity, and Earn sizing ceilings', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -204,26 +204,14 @@ test('v9 authorization binds event relevance, RPC cost, executor identity, and E
   }
 })
 
-test('superseded v8 authorization cannot bypass the v9 feed and per-wake cost policy', () => {
-  const legacy = arm({ policyVersion: 'dual-base-loopback-escalation-v8' })
-  assert.deepEqual(evaluateDualAuthorizationBudget(legacy, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
-    allowed: false,
-    reason: 'invalid-authorization-policy',
-  })
-  const oldShape = arm({
-    policyVersion: 'dual-base-loopback-escalation-v8',
-    global: {
-      ...legacy.global,
-      maximumEventRoutesPerWake: undefined,
-      managedFallbackEventLogicalCallCap: undefined,
-      managedFallbackRecoveryLogicalCallCap: undefined,
-      feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
-    },
-  })
-  assert.deepEqual(evaluateDualAuthorizationBudget(oldShape, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
-    allowed: false,
-    reason: 'invalid-authorization-policy',
-  })
+test('superseded v9 and v8 authorizations cannot bypass the v10 route projection policy', () => {
+  for (const policyVersion of ['dual-base-loopback-escalation-v9', 'dual-base-loopback-escalation-v8']) {
+    const legacy = arm({ policyVersion })
+    assert.deepEqual(evaluateDualAuthorizationBudget(legacy, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
+      allowed: false,
+      reason: 'invalid-authorization-policy',
+    })
+  }
 })
 
 test('selects the largest same-block normalized exact net across bases', () => {

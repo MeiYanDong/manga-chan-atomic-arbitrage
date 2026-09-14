@@ -6,6 +6,7 @@ import { selectGlobalRouteWorkset } from '../src/global-route-selection.mjs'
 const WETH = '0x0000000000000000000000000000000000000001'
 const ASSET = '0x0000000000000000000000000000000000000002'
 const OTHER = '0x0000000000000000000000000000000000000003'
+const THIRD = '0x0000000000000000000000000000000000000004'
 
 function route(id, tokenIn, tokenOut, type = 'CYCLE') {
   return {
@@ -22,25 +23,43 @@ function route(id, tokenIn, tokenOut, type = 'CYCLE') {
   }
 }
 
-test('event workset ranks two-asset relevance and never fills unrelated routes', () => {
+test('event workset receives projected non-hub dependencies and never fills hub-related routes', () => {
   const best = route('route-1', WETH, ASSET)
   const oneAsset = Array.from({ length: 9 }, (_, index) => route(`route-${index + 2}`, WETH, OTHER))
   const unrelated = route('route-99', OTHER, OTHER)
   const selected = selectGlobalRouteWorkset({
     routes: [unrelated, ...oneAsset, best],
-    wakeAddresses: [WETH, ASSET],
+    wakeAddresses: [ASSET],
     blockNumber: 123n,
     maximumRoutesPerWake: 32,
     maximumEventRoutesPerWake: 8,
   })
   assert.equal(selected.wakeKind, 'EVENT')
-  assert.equal(selected.routes.length, 8)
+  assert.equal(selected.routes.length, 1)
   assert.equal(selected.routes[0].id, best.id)
   assert.equal(
     selected.routes.some((item) => item.id === unrelated.id),
     false,
   )
-  assert.equal(selected.touchedRoutes, 10)
+  assert.equal(selected.touchedRoutes, 1)
+})
+
+test('event workset ranks a route containing every changed non-hub asset first', () => {
+  const both = route('route-1', ASSET, OTHER)
+  const onlyFirst = route('route-2', ASSET, THIRD)
+  const onlySecond = route('route-3', OTHER, THIRD)
+  const selected = selectGlobalRouteWorkset({
+    routes: [onlySecond, onlyFirst, both],
+    wakeAddresses: [ASSET, OTHER],
+    blockNumber: 123n,
+    maximumRoutesPerWake: 32,
+    maximumEventRoutesPerWake: 2,
+  })
+  assert.deepEqual(
+    selected.routes.map((item) => item.id),
+    ['route-1', 'route-2'],
+  )
+  assert.equal(selected.touchedRoutes, 3)
 })
 
 test('recovery workset retains BPT priority plus bounded broad rotation', () => {

@@ -562,7 +562,7 @@ async function normalizedUsdg(settlementToken, amount, blockNumber) {
 
 function wakeAddressSet() {
   return new Set(
-    String(process.env.GLOBAL_WAKE_MATCHED_ADDRESSES || '')
+    String(process.env.GLOBAL_WAKE_ROUTE_ADDRESSES || '')
       .split(',')
       .map((value) => value.trim().toLowerCase())
       .filter((value) => /^0x[0-9a-f]{40}$/i.test(value)),
@@ -648,6 +648,7 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
       settlementToken,
       ...selectedRoutes,
       routes: undefined,
+      selectedRoutes: selectedRoutes.routes.length,
       morphoLiquidity,
       inventory,
     })
@@ -837,6 +838,8 @@ async function exactNetEvaluation(candidate, deployment, block, gasPrice) {
 }
 
 async function globalPreflight({ print = true } = {}) {
+  const preflightStartedAtMs = Date.now()
+  const preflightStartedAt = new Date(preflightStartedAtMs).toISOString()
   const deployment = await assertDeployment()
   const block = await discoveryClient.getBlock()
   const discovery = await discoverExactCandidates({ deployment, block })
@@ -869,6 +872,26 @@ async function globalPreflight({ print = true } = {}) {
   }
   exact.sort((left, right) => (left.normalizedNetUsdg > right.normalizedNetUsdg ? -1 : 1))
   const selected = exact[0] || null
+  const preflightCompletedAtMs = Date.now()
+  const sourceReceivedAt = process.env.GLOBAL_WAKE_RECEIVED_AT || null
+  const sourceReceivedAtMs = Number.isFinite(Date.parse(sourceReceivedAt || '')) ? Date.parse(sourceReceivedAt) : null
+  const routeAddresses = wakeAddressSet()
+  const workset = {
+    policy: GLOBAL_ROUTE_WORKSET_POLICY,
+    wakeKind: routeAddresses.size > 0 ? 'EVENT' : 'RECOVERY',
+    totalRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.totalRoutes || 0), 0),
+    touchedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.touchedRoutes || 0), 0),
+    selectedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.selectedRoutes || 0), 0),
+    settlementAssets: discovery.routeCoverage.length,
+  }
+  const timing = {
+    preflightStartedAt,
+    preflightCompletedAt: new Date(preflightCompletedAtMs).toISOString(),
+    sourceToPreflightStartMs:
+      sourceReceivedAtMs === null ? null : Math.max(0, preflightStartedAtMs - sourceReceivedAtMs),
+    preflightDurationMs: preflightCompletedAtMs - preflightStartedAtMs,
+    sourceToDecisionMs: sourceReceivedAtMs === null ? null : Math.max(0, preflightCompletedAtMs - sourceReceivedAtMs),
+  }
   const snapshot = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -894,9 +917,20 @@ async function globalPreflight({ print = true } = {}) {
     managedEvaluated: managedCandidates.length,
     managedMaximumCandidates: GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
     exactNetPositive: exact.length,
+    wake: {
+      reason: process.env.GLOBAL_WAKE_REASON || null,
+      classification: process.env.GLOBAL_WAKE_CLASSIFICATION || null,
+      sourceReceivedAt,
+      feedSequenceNumber: /^\d+$/.test(String(process.env.GLOBAL_WAKE_SEQUENCE_NUMBER || ''))
+        ? process.env.GLOBAL_WAKE_SEQUENCE_NUMBER
+        : null,
+      routeAddressCount: routeAddresses.size,
+    },
+    workset,
+    timing,
     rpc: {
       discoveryPolicy: 'PUBLIC_FIRST_BATCHED_WITH_BOUNDED_MANAGED_TRANSPORT_FALLBACK',
-      wakeKind: wakeAddressSet().size > 0 ? 'EVENT' : 'RECOVERY',
+      wakeKind: workset.wakeKind,
       wakeReason: process.env.GLOBAL_WAKE_REASON || null,
       managedFallbackWakeBudget: managedFallbackWakeBudgetSnapshot(),
       managedFallbackBudget: managedFallbackBudgetSnapshot(),
@@ -917,7 +951,10 @@ async function globalPreflight({ print = true } = {}) {
       : null,
   }
   writeProtectedJson(GLOBAL_SNAPSHOT_PATH, snapshot)
-  appendAudit('global_preflight', snapshot)
+  appendAudit('global_preflight', {
+    authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
+    ...snapshot,
+  })
   if (print) console.log(stringify(snapshot))
   return { snapshot, selected, deployment }
 }
@@ -1418,6 +1455,14 @@ async function execute() {
       normalizedNetProfitUsdg: formatUnits(BigInt(record.normalizedNetProfitUsdgWei), 6),
       directSequencer: record.directSequencerStatus,
       evidence: record.evidence,
+      graph: prepared.snapshot.graph,
+      evaluated: prepared.snapshot.evaluated,
+      grossPositive: prepared.snapshot.grossPositive,
+      exactNetPositive: prepared.snapshot.exactNetPositive,
+      wake: prepared.snapshot.wake,
+      workset: prepared.snapshot.workset,
+      timing: prepared.snapshot.timing,
+      rpc: prepared.snapshot.rpc,
     }
     console.log(stringify(output))
     return output

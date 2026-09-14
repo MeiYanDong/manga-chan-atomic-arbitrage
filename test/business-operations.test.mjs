@@ -70,6 +70,7 @@ function fixture() {
       initialGasSurplusWei: '131868227091194',
     },
   }
+  /** @type {Array<Record<string, any>>} */
   const auditRecords = [
     {
       event: 'mutation_reverted',
@@ -295,9 +296,27 @@ test('includes only receipt-gated universal executions in the operating totals',
   input.runtime.global = {
     status: 'WATCHING',
     lastResult: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED',
+    feed: { frames: 1_200, wakes: 80, filtered: 1_120 },
+    coalescedFeedWakes: 9,
+    workset: { wakeKind: 'EVENT', totalRoutes: 12_091, touchedRoutes: 14, selectedRoutes: 8 },
+    timing: { sourceToDecisionMs: 1_234 },
     rpc: { managedFallbackBudget: { consumedLogicalCalls: 432 } },
   }
   input.runtime.usage.confirmedByBase.GLOBAL = 1
+  input.auditRecords.push(
+    {
+      event: 'global_watch_exact_preflight_started',
+      authorizationId: input.arm.authorizationId,
+      at: '2026-09-08T02:48:00.000Z',
+    },
+    {
+      event: 'global_preflight',
+      authorizationId: input.arm.authorizationId,
+      grossPositive: 1,
+      exactNetPositive: 1,
+      at: '2026-09-08T02:49:00.000Z',
+    },
+  )
   const snapshot = buildBusinessSnapshot(input)
   assert.equal(snapshot.economics.today.verifiedExecutionNetUsdg, '1.5')
   assert.equal(snapshot.economics.today.confirmedExecutions, 4)
@@ -310,6 +329,24 @@ test('includes only receipt-gated universal executions in the operating totals',
   assert.equal(snapshot.strategy.global.confirmedExecutions, 1)
   assert.equal(snapshot.strategy.global.managedFallbackLogicalCallsToday, 432)
   assert.equal(snapshot.strategy.global.managedFallbackDailyLogicalCallCap, 20_000)
+  assert.deepEqual(snapshot.strategy.global.executionFunnel, {
+    feedMessages: 1_200,
+    relevantSignals: 80,
+    filteredSignals: 1_120,
+    coalescedSignals: 9,
+    exactPreflights: 1,
+    grossPositiveRounds: 1,
+    exactNetPositiveRounds: 1,
+    confirmedExecutions: 1,
+  })
+  assert.deepEqual(snapshot.strategy.global.latestWorkset, {
+    wakeKind: 'EVENT',
+    totalRoutes: 12_091,
+    touchedRoutes: 14,
+    selectedRoutes: 8,
+  })
+  assert.equal(snapshot.strategy.global.latestDecisionLatencyMs, 1_234)
+  assert.equal(snapshot.strategy.global.attribution.confirmedLostRaces, null)
   assert.equal(snapshot.recentExecutions[0].route, '跨平台 2 跳循环')
 })
 

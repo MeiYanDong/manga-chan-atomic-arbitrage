@@ -32,7 +32,7 @@ exact state checks; signed raw transactions are persisted before direct Sequence
 fallback must broadcast the identical raw. Broad discovery batches through the official public endpoint first; a
 transport/rate-limit fallback has a persisted 20,000-logical-call daily ceiling. Feed wakes require one protocol/pool
 address or two distinct graph assets, evaluate at most eight related routes without filling unrelated work, and have
-separate 32-call event and 8-call recovery fallback ceilings committed by authorization v9. See
+separate 32-call event and 8-call recovery fallback ceilings committed by authorization v10. See
 [ADR 0060](docs/decisions/0060-universal-cross-protocol-atomic-execution.md),
 [ADR 0063](docs/decisions/0063-bounded-public-first-global-rpc-fallback.md),
 [ADR 0064](docs/decisions/0064-sequencer-wake-relevance-and-per-wake-rpc-budget.md) and

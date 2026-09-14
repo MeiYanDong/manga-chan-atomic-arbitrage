@@ -1,6 +1,6 @@
 import { getAddress } from 'viem'
 
-export const GLOBAL_FEED_MATCH_POLICY = 'PROTOCOL_OR_POOL_OR_TWO_ASSETS_V1'
+export const GLOBAL_FEED_MATCH_POLICY = 'SPECIFIC_POOL_OR_NON_HUB_ASSET_PATH_V2'
 export const GLOBAL_EVENT_MAX_ROUTES_PER_WAKE = 8
 export const GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP = 32
 export const GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP = 8
@@ -17,13 +17,13 @@ function normalizedAddress(value) {
 }
 
 /**
- * Split the global catalog into low-noise protocol/pool triggers and asset
- * evidence. A single common token transfer is intentionally insufficient to
- * wake the expensive graph scan; router calldata normally contains both path
- * assets, while direct pool calls contain the pool/protocol address.
+ * Split the global catalog into shared protocol roots, route-specific pool or
+ * hook triggers, settlement hubs and non-hub asset evidence. Shared protocol
+ * roots and WETH/USDG-like settlement hubs may occur in nearly every route, so
+ * they are wake context but never route dependencies by themselves.
  *
  * @param {Record<string, any> | null} catalog
- * @param {{protocolAddresses?: string[], ignoredAddresses?: string[]}} [options]
+ * @param {{protocolAddresses?: string[], settlementAddresses?: string[], ignoredAddresses?: string[]}} [options]
  */
 export function buildGlobalFeedWatchPolicy(catalog, options = {}) {
   const ignored = new Set()
@@ -31,41 +31,49 @@ export function buildGlobalFeedWatchPolicy(catalog, options = {}) {
     const address = normalizedAddress(value)
     if (address) ignored.add(address.toLowerCase())
   }
-  const triggers = new Map()
+  const protocols = new Map()
+  const pools = new Map()
   const assets = new Map()
+  const settlements = new Map()
   const add = (target, value) => {
     const address = normalizedAddress(value)
     if (!address || ignored.has(address.toLowerCase())) return
     target.set(address.toLowerCase(), address)
   }
 
-  for (const value of options.protocolAddresses || []) add(triggers, value)
+  for (const value of options.protocolAddresses || []) add(protocols, value)
+  for (const value of options.settlementAddresses || []) add(settlements, value)
   for (const pool of catalog?.earn?.pools || []) {
-    add(triggers, pool.address)
+    add(pools, pool.address)
     for (const token of pool.tokens || []) add(assets, token.address)
   }
   for (const venue of ['v2Pools', 'v3Pools', 'v4Pools']) {
     for (const pool of catalog?.uniswap?.[venue] || []) {
-      add(triggers, pool.address || pool.pool)
-      add(triggers, pool.hooks)
+      add(pools, pool.address || pool.pool)
+      add(pools, pool.hooks)
       add(assets, pool.token0)
       add(assets, pool.token1)
     }
   }
 
+  const triggers = new Map([...protocols, ...pools])
   const watched = new Map([...triggers, ...assets])
   if (watched.size > 1_024) throw new Error('global feed address filter exceeds its safety bound')
   return {
     policy: GLOBAL_FEED_MATCH_POLICY,
     triggerAddresses: [...triggers.values()],
+    protocolAddresses: [...protocols.values()],
+    poolAddresses: [...pools.values()],
     assetAddresses: [...assets.values()],
+    settlementAddresses: [...settlements.values()],
     watchedAddresses: [...watched.values()],
   }
 }
 
 /**
  * @param {string[]} matches
- * @param {{triggerAddresses: string[], assetAddresses: string[]}} policy
+ * @param {{protocolAddresses?: string[], poolAddresses?: string[], triggerAddresses?: string[],
+ * assetAddresses: string[], settlementAddresses?: string[]}} policy
  */
 export function classifyGlobalFeedMatches(matches, policy) {
   const matched = new Set(
@@ -74,21 +82,39 @@ export function classifyGlobalFeedMatches(matches, policy) {
       .filter(Boolean)
       .map((address) => address.toLowerCase()),
   )
-  const triggers = new Set((policy?.triggerAddresses || []).map((value) => value.toLowerCase()))
+  const protocols = new Set((policy?.protocolAddresses || []).map((value) => value.toLowerCase()))
+  const pools = new Set((policy?.poolAddresses || policy?.triggerAddresses || []).map((value) => value.toLowerCase()))
   const assets = new Set((policy?.assetAddresses || []).map((value) => value.toLowerCase()))
-  const matchedTriggerAddresses = [...matched].filter((address) => triggers.has(address)).sort()
+  const settlements = new Set((policy?.settlementAddresses || []).map((value) => value.toLowerCase()))
+  const matchedProtocolAddresses = [...matched].filter((address) => protocols.has(address)).sort()
+  const matchedPoolAddresses = [...matched].filter((address) => pools.has(address)).sort()
+  const matchedTriggerAddresses = [...new Set([...matchedProtocolAddresses, ...matchedPoolAddresses])].sort()
   const matchedAssetAddresses = [...matched].filter((address) => assets.has(address)).sort()
-  const actionable = matchedTriggerAddresses.length > 0 || matchedAssetAddresses.length >= 2
+  const matchedSettlementAddresses = matchedAssetAddresses.filter((address) => settlements.has(address))
+  const matchedNonSettlementAssetAddresses = matchedAssetAddresses.filter((address) => !settlements.has(address))
+  const routeAddresses = [...new Set([...matchedPoolAddresses, ...matchedNonSettlementAssetAddresses])].sort()
+  const exactPool = matchedPoolAddresses.length > 0
+  const nonHubPath =
+    matchedNonSettlementAssetAddresses.length > 0 &&
+    (matchedAssetAddresses.length >= 2 || matchedProtocolAddresses.length > 0)
+  const actionable = exactPool || nonHubPath
   return {
     actionable,
     reason: actionable
-      ? matchedTriggerAddresses.length > 0
-        ? 'PROTOCOL_OR_POOL_MATCH'
-        : 'TWO_ASSET_PATH_MATCH'
-      : matchedAssetAddresses.length === 1
-        ? 'SINGLE_ASSET_ONLY'
-        : 'NO_ACTIONABLE_MATCH',
+      ? exactPool
+        ? 'SPECIFIC_POOL_OR_HOOK_MATCH'
+        : 'NON_HUB_ASSET_PATH_MATCH'
+      : matchedProtocolAddresses.length > 0 || matchedSettlementAddresses.length > 0
+        ? 'SHARED_HUB_CONTEXT_ONLY'
+        : matchedAssetAddresses.length === 1
+          ? 'SINGLE_NON_HUB_ASSET_ONLY'
+          : 'NO_ACTIONABLE_MATCH',
     matchedTriggerAddresses,
+    matchedProtocolAddresses,
+    matchedPoolAddresses,
     matchedAssetAddresses,
+    matchedSettlementAddresses,
+    matchedNonSettlementAssetAddresses,
+    routeAddresses,
   }
 }

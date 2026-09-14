@@ -56,6 +56,22 @@ export function competitionStrategyLabel(strategyShape) {
   return 'Earn 内部闭环'
 }
 
+export function globalExecutionOutcome(value) {
+  const labels = {
+    GLOBAL_LIVE_NET_PROFIT_CONFIRMED: '已成交并核对净收益',
+    NO_EXACT_NET_OPPORTUNITY: '精确报价后没有净利润过线',
+    NO_SIGNATURE_RPC_BUDGET_EXHAUSTED: '读取额度不足，本轮未签名',
+    RPC_ERROR_NO_SIGNATURE_OR_UNRESOLVED_MUTATION: '读取异常，本轮未签名',
+  }
+  return labels[value] || '结果待核验'
+}
+
+export function globalWakeKindLabel(value) {
+  if (value === 'EVENT') return '市场事件即时触发'
+  if (value === 'RECOVERY') return '周期完整性扫描'
+  return '触发方式待核验'
+}
+
 export function opportunityStageLabel(stage) {
   const labels = {
     NOW: '现在能做',

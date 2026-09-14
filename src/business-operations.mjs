@@ -282,6 +282,15 @@ export function buildBusinessSnapshot({
   ]
   const earnExecutions = canonicalEarnExecutions(earnOnHoodRecords)
   const authorizationId = arm?.authorizationId || null
+  const globalPreflightRecords = auditRecords.filter(
+    (record) => record?.event === 'global_preflight' && record?.authorizationId === authorizationId,
+  )
+  const globalWakeRecords = auditRecords.filter(
+    (record) => record?.event === 'global_watch_exact_preflight_started' && record?.authorizationId === authorizationId,
+  )
+  const latestGlobalPreflight = globalPreflightRecords.at(-1) || null
+  const globalWorkset = runtime?.global?.workset || latestGlobalPreflight?.workset || null
+  const globalTiming = runtime?.global?.timing || latestGlobalPreflight?.timing || null
   const today = shanghaiDateKey(timestamp)
   const yesterday = shiftDateKey(today, -1)
   const verifiedWallet = lastRuntimeVerification(auditRecords)
@@ -339,6 +348,38 @@ export function buildBusinessSnapshot({
               runtime?.global?.rpc?.managedFallbackBudget?.consumedLogicalCalls || 0,
             ),
             managedFallbackDailyLogicalCallCap: Number(arm.global.managedFallbackDailyLogicalCallCap || 0),
+            executionFunnel: {
+              feedMessages: Number(runtime?.global?.feed?.frames || 0),
+              relevantSignals: Number(runtime?.global?.feed?.wakes || 0),
+              filteredSignals: Number(runtime?.global?.feed?.filtered || 0),
+              coalescedSignals: Number(runtime?.global?.coalescedFeedWakes || 0),
+              exactPreflights: globalWakeRecords.length,
+              grossPositiveRounds: globalPreflightRecords.filter((record) => Number(record?.grossPositive || 0) > 0)
+                .length,
+              exactNetPositiveRounds: globalPreflightRecords.filter(
+                (record) => Number(record?.exactNetPositive || 0) > 0,
+              ).length,
+              confirmedExecutions: Number(runtime?.usage?.confirmedByBase?.GLOBAL || 0),
+            },
+            latestWorkset: globalWorkset
+              ? {
+                  wakeKind: globalWorkset.wakeKind || null,
+                  totalRoutes: Number(globalWorkset.totalRoutes || 0),
+                  touchedRoutes: Number(globalWorkset.touchedRoutes || 0),
+                  selectedRoutes: Number(globalWorkset.selectedRoutes || 0),
+                }
+              : null,
+            latestDecisionLatencyMs:
+              globalTiming?.sourceToDecisionMs !== null &&
+              globalTiming?.sourceToDecisionMs !== undefined &&
+              Number.isFinite(Number(globalTiming.sourceToDecisionMs))
+                ? Number(globalTiming.sourceToDecisionMs)
+                : null,
+            attribution: {
+              coverage: 'PARTIAL_NO_SAME_BLOCK_COUNTERFACTUAL',
+              confirmedLostRaces: null,
+              latestOutcome: runtime?.global?.lastResult || null,
+            },
           }
         : null,
     },
