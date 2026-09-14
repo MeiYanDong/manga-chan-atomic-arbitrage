@@ -26,7 +26,9 @@ function policy() {
       uniswap: {
         v2Pools: [],
         v3Pools: [{ address: V3_POOL, token0: WETH, token1: ASSET }],
-        v4Pools: [{ hooks: HOOK, token0: WETH, token1: ASSET }],
+        // v4 repeats the shared PoolManager in every catalog row. It is
+        // protocol context, not a route-specific pool address.
+        v4Pools: [{ address: PROTOCOL, hooks: HOOK, token0: WETH, token1: ASSET }],
       },
     },
     {
@@ -41,6 +43,10 @@ test('builds a classified feed policy without funding or factory noise', () => {
   const built = policy()
   assert.equal(built.policy, GLOBAL_FEED_MATCH_POLICY)
   assert.ok(built.protocolAddresses.some((address) => address.toLowerCase() === PROTOCOL))
+  assert.equal(
+    built.poolAddresses.some((address) => address.toLowerCase() === PROTOCOL),
+    false,
+  )
   assert.ok(built.poolAddresses.some((address) => address.toLowerCase() === EARN_POOL))
   assert.ok(built.triggerAddresses.some((address) => address.toLowerCase() === PROTOCOL))
   assert.ok(built.triggerAddresses.some((address) => address.toLowerCase() === EARN_POOL))
@@ -73,6 +79,7 @@ test('projects only route-specific pools and non-hub assets into event work', ()
   })
   assert.deepEqual(classifyGlobalFeedMatches([PROTOCOL, WETH], built).routeAddresses, [])
   assert.equal(classifyGlobalFeedMatches([PROTOCOL, WETH], built).actionable, false)
+  assert.equal(classifyGlobalFeedMatches([PROTOCOL], built).reason, 'SHARED_HUB_CONTEXT_ONLY')
   assert.deepEqual(classifyGlobalFeedMatches([WETH, ASSET], built).routeAddresses, [ASSET])
   assert.equal(classifyGlobalFeedMatches([WETH, ASSET], built).reason, 'NON_HUB_ASSET_PATH_MATCH')
   assert.deepEqual(classifyGlobalFeedMatches([PROTOCOL, ASSET], built).routeAddresses, [ASSET])

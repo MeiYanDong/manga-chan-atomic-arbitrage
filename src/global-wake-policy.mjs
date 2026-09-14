@@ -1,6 +1,6 @@
 import { getAddress } from 'viem'
 
-export const GLOBAL_FEED_MATCH_POLICY = 'SPECIFIC_POOL_OR_NON_HUB_ASSET_PATH_V2'
+export const GLOBAL_FEED_MATCH_POLICY = 'SPECIFIC_POOL_OR_NON_HUB_ASSET_PATH_V3'
 export const GLOBAL_EVENT_MAX_ROUTES_PER_WAKE = 8
 export const GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP = 32
 export const GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP = 8
@@ -56,14 +56,19 @@ export function buildGlobalFeedWatchPolicy(catalog, options = {}) {
     }
   }
 
-  const triggers = new Map([...protocols, ...pools])
+  // Uniswap v4 catalogs expose the shared PoolManager as each pool's
+  // transaction target. It is still useful wake context, but it must not be
+  // mistaken for a route-specific pool dependency. The same rule protects us
+  // from any future adapter that repeats a protocol root in its pool field.
+  const specificPools = new Map([...pools].filter(([key]) => !protocols.has(key)))
+  const triggers = new Map([...protocols, ...specificPools])
   const watched = new Map([...triggers, ...assets])
   if (watched.size > 1_024) throw new Error('global feed address filter exceeds its safety bound')
   return {
     policy: GLOBAL_FEED_MATCH_POLICY,
     triggerAddresses: [...triggers.values()],
     protocolAddresses: [...protocols.values()],
-    poolAddresses: [...pools.values()],
+    poolAddresses: [...specificPools.values()],
     assetAddresses: [...assets.values()],
     settlementAddresses: [...settlements.values()],
     watchedAddresses: [...watched.values()],
