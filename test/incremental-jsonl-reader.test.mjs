@@ -82,6 +82,53 @@ test('does not parse or retain large unrelated diagnostics', (context) => {
   assert.equal(JSON.stringify(reader.records).includes('<html>'), false)
 })
 
+test('streams past the one known oversized legacy global wake without retaining it', (context) => {
+  const { file } = fixture(context)
+  const wake = {
+    at: '2026-09-14T22:02:38.791Z',
+    lane: 'dual-v3',
+    event: 'global_watch_wake',
+    classificationReason: 'NON_HUB_ASSET_PATH_MATCH+'.repeat(275_000),
+  }
+  fs.writeFileSync(file, `${JSON.stringify(wake)}\n${JSON.stringify({ event: 'mutation_signed', hash: '0xlegacy' })}\n`)
+  const reader = new IncrementalJsonlEventReader(file, {
+    events: ['mutation_signed'],
+    chunkBytes: 64 * 1024,
+    maxLineBytes: 2 * 1024 * 1024,
+  })
+  assert.deepEqual(reader.read(), [{ event: 'mutation_signed', hash: '0xlegacy' }])
+  assert.equal(reader.skippingOversize, false)
+  assert.equal(reader.pending.length, 0)
+})
+
+test('does not let an oversized legacy wake conceal a later safety event marker', (context) => {
+  const { file } = fixture(context)
+  fs.writeFileSync(
+    file,
+    `{"at":"2026-09-14T22:02:38.791Z","lane":"dual-v3","event":"global_watch_wake","pad":"${'x'.repeat(768)}","event":"mutation_signed"}\n`,
+  )
+  const reader = new IncrementalJsonlEventReader(file, {
+    events: ['mutation_signed'],
+    chunkBytes: 67,
+    maxLineBytes: 256,
+  })
+  assert.throws(() => reader.read(), /oversized diagnostic JSONL record contains a safety event/)
+})
+
+test('fails closed for an oversized unknown diagnostic event', (context) => {
+  const { file } = fixture(context)
+  fs.writeFileSync(
+    file,
+    `${JSON.stringify({ at: new Date(0).toISOString(), lane: 'dual-v3', event: 'rpc_error', body: 'x'.repeat(1024) })}\n`,
+  )
+  const reader = new IncrementalJsonlEventReader(file, {
+    events: ['mutation_signed'],
+    chunkBytes: 64,
+    maxLineBytes: 256,
+  })
+  assert.throws(() => reader.read(), /safety JSONL record exceeds/)
+})
+
 test('repeated safety checks do not reparse a production-sized diagnostic history', (context) => {
   const { file } = fixture(context)
   const diagnostic = `${JSON.stringify({ event: 'rpc_error', body: '<html>' + 'x'.repeat(256 * 1024) })}\n`

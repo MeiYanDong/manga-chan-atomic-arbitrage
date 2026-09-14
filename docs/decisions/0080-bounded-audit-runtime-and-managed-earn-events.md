@@ -28,6 +28,10 @@ discovery could not reach the exact-profit gates even though the managed executi
   block/transaction/log identities suppress reconnect replay under a bounded 4,096-key cache. The public HTTP event
   reader remains a 60-second recovery backstop rather than a one-second paid polling substitute.
 - Bind the event-source and RPC-cost policies to authorization v12. A v11 arm cannot run this release.
+- Permit bounded streaming discard of an oversized row only when its controlled JSON prefix identifies the exact
+  legacy `global_watch_wake` scheduler event. Continue scanning discarded chunks for every accepted safety-event
+  marker; fail closed on a match, an unknown prefix or any other oversized event. This preserves the historical file
+  byte-for-byte while allowing the v0.16.6 diagnostic row to migrate.
 
 ## Consequences
 

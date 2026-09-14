@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve fail-closed signer startup while migrating the one production-observed 6.9 MiB legacy
+  `global_watch_wake` row. The incremental reader may stream-discard only that exact signer-free scheduler event;
+  unknown and safety-event rows still fail when oversized, and the discard scanner rejects any accepted safety-event
+  marker hidden later in the row. No ledger data is deleted or rewritten.
 - Keep the live signer heap bounded as audit history grows. Authorization, nonce reconciliation, receipt economics and
   route quarantine now stream append-only JSONL in 64 KiB chunks, cache only safety-relevant events and read only new
   bytes; normal provider errors are redacted and capped before persistence. Earn discovery remains public-first but may
