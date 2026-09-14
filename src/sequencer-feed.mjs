@@ -69,6 +69,7 @@ export class SequencerFeedWakeClient {
     this.url = options.url || DEFAULT_FEED_URL
     this.onWake = options.onWake || (() => {})
     this.onStatus = options.onStatus || (() => {})
+    this.matchFilter = options.matchFilter || (() => true)
     this.reconnectMs = Number(options.reconnectMs || 1_000)
     this.watchedAddresses = []
     this.setWatchedAddresses(options.watchedAddresses || [])
@@ -119,6 +120,11 @@ export class SequencerFeedWakeClient {
     this.watchedAddresses = [...unique.values()]
   }
 
+  setMatchFilter(matchFilter) {
+    if (typeof matchFilter !== 'function') throw new Error('sequencer feed match filter must be a function')
+    this.matchFilter = matchFilter
+  }
+
   #scheduleReconnect() {
     if (this.stopped || this.timer) return
     this.metrics.reconnects += 1
@@ -159,12 +165,13 @@ export class SequencerFeedWakeClient {
         if (envelope.firstSequenceNumber !== null) this.lastSequenceNumber = envelope.firstSequenceNumber
         this.metrics.frames += 1
         const matchedAddresses = sequencerFeedAddressMatches(source, this.watchedAddresses)
-        if (matchedAddresses.length < this.minimumAddressMatches) {
+        const signal = { ...envelope, matchedAddresses, receivedAt: new Date().toISOString() }
+        if (matchedAddresses.length < this.minimumAddressMatches || !this.matchFilter(signal)) {
           this.metrics.filtered += 1
           return
         }
         this.metrics.wakes += 1
-        this.onWake({ ...envelope, matchedAddresses, receivedAt: new Date().toISOString() })
+        this.onWake(signal)
       } catch (error) {
         this.metrics.malformed += 1
         this.onStatus({ status: 'MALFORMED_FRAME', error: String(error) })

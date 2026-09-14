@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Require a Sequencer Feed frame to match one reviewed protocol/pool address or at least two distinct graph assets
+  before waking global discovery. Event wakes now rank and quote at most eight related routes without filling unused
+  slots with unrelated rotations; startup and periodic recovery retain bounded broad coverage. Add non-persistent
+  managed-fallback ceilings of 32 logical calls per event wake and eight per recovery wake, keep the existing persisted
+  20,000-call daily ceiling, and bind all four limits to a fresh v9 authorization. A cap refusal is recorded as degraded
+  signer-free coverage and cannot be reported as a zero-opportunity result.
 - Cap global public discovery batches at eight logical calls, matching the live Robinhood Chain RPC boundary. Larger
   `eth_call` batches returned HTTP 429 and consumed 4,560 managed fallback calls without producing a signed attempt;
   the watcher was disarmed cleanly before this production correction.

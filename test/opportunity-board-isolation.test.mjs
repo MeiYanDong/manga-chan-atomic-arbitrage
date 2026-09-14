@@ -540,20 +540,29 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(globalSource, /global-rpc-fallback-budget\.json/)
   assert.match(globalSource, /BigInt\(arm\.global\.minimumNetProfitUsdgWei\) !== MINIMUM_NET_USDG/)
   assert.match(globalSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== runtime\.globalMaxRoutesPerWake/)
+  assert.match(globalSource, /Number\(arm\.global\.maximumEventRoutesPerWake\) !== GLOBAL_EVENT_MAX_ROUTES_PER_WAKE/)
   assert.match(globalSource, /Number\(arm\.global\.quoteConcurrency\) !== runtime\.globalQuoteConcurrency/)
   assert.match(globalSource, /managedMaximumCandidatesPerWake\) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE/)
   assert.match(
     globalSource,
     /Number\(arm\.global\.managedFallbackDailyLogicalCallCap\) !==[\s\S]*runtime\.globalManagedFallbackDailyLogicalCallCap/,
   )
+  assert.match(globalSource, /managedFallbackEventLogicalCallCap/)
+  assert.match(globalSource, /managedFallbackRecoveryLogicalCallCap/)
+  assert.match(globalSource, /routeWorksetPolicy/)
+  assert.match(globalSource, /NO_SIGNATURE_RPC_BUDGET_EXHAUSTED/)
   assert.match(globalSource, /arm\.global\.settlementAssets\.length !== SETTLEMENT_TOKENS\.length/)
   assert.match(dualSource, /arm\.global\.settlementAssets\.length !== configuredGlobalSettlementAssets\.length/)
   assert.match(dualSource, /Number\(arm\.global\.maximumRoutesPerWake\) !== RUNTIME_CONFIG\.globalMaxRoutesPerWake/)
+  assert.match(dualSource, /Number\(arm\.global\.maximumEventRoutesPerWake\) !== GLOBAL_EVENT_MAX_ROUTES_PER_WAKE/)
   assert.match(dualSource, /Number\(arm\.global\.quoteConcurrency\) !== RUNTIME_CONFIG\.globalQuoteConcurrency/)
   assert.match(
     dualSource,
     /Number\(arm\.global\.managedFallbackDailyLogicalCallCap\) !==[\s\S]*RUNTIME_CONFIG\.globalManagedFallbackDailyLogicalCallCap/,
   )
+  assert.match(dualSource, /buildGlobalFeedWatchPolicy/)
+  assert.match(dualSource, /classifyGlobalFeedMatches/)
+  assert.match(dualSource, /routeWorksetPolicy/)
 
   const forkSource = fs.readFileSync(path.join(root, 'scripts', 'universal-mainnet-fork-test.mjs'), 'utf8')
   assert.match(forkSource, /loadUniversalContractArtifact/)

@@ -17,6 +17,13 @@ import {
 } from '../src/dual-live-policy.mjs'
 import { EARN_SIZING_ALGORITHM } from '../src/earnonhood-live-policy.mjs'
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from '../src/earnonhood-routes.mjs'
+import { GLOBAL_ROUTE_WORKSET_POLICY } from '../src/global-route-selection.mjs'
+import {
+  GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+  GLOBAL_FEED_MATCH_POLICY,
+  GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+} from '../src/global-wake-policy.mjs'
 
 function arm(overrides = {}) {
   const value = {
@@ -77,12 +84,16 @@ function arm(overrides = {}) {
       settlementAssets: ['0x0000000000000000000000000000000000000002', '0x0000000000000000000000000000000000000003'],
       graphPolicy: 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
       routePolicy: 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS',
+      routeWorksetPolicy: GLOBAL_ROUTE_WORKSET_POLICY,
       maximumRoutesPerWake: 32,
+      maximumEventRoutesPerWake: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
       quoteConcurrency: 8,
       managedMaximumCandidatesPerWake: 16,
       managedFallbackDailyLogicalCallCap: 20_000,
+      managedFallbackEventLogicalCallCap: GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+      managedFallbackRecoveryLogicalCallCap: GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
       submissionPolicy: 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK',
-      feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
+      feedPolicy: GLOBAL_FEED_MATCH_POLICY,
     },
     ...overrides,
   }
@@ -136,7 +147,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v8 authorization binds global RPC cost, executor identity, and Earn sizing ceilings', () => {
+test('v9 authorization binds event relevance, RPC cost, executor identity, and Earn sizing ceilings', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -152,6 +163,22 @@ test('v8 authorization binds global RPC cost, executor identity, and Earn sizing
         }),
         { failedGasWei: 0n, earnGasSurplusWei: 5_000n },
       ),
+      { allowed: false, reason: 'invalid-global-policy' },
+    )
+  }
+
+  for (const global of [
+    { ...valid.global, maximumEventRoutesPerWake: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE + 1 },
+    { ...valid.global, managedFallbackEventLogicalCallCap: GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP + 1 },
+    { ...valid.global, managedFallbackRecoveryLogicalCallCap: GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP + 1 },
+    { ...valid.global, feedPolicy: 'SINGLE_COMMON_ASSET_WAKE' },
+    { ...valid.global, routeWorksetPolicy: 'FILL_UNRELATED_ROUTES' },
+  ]) {
+    assert.deepEqual(
+      evaluateDualAuthorizationBudget(arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION, global }), {
+        failedGasWei: 0n,
+        earnGasSurplusWei: 5_000n,
+      }),
       { allowed: false, reason: 'invalid-global-policy' },
     )
   }
@@ -175,6 +202,28 @@ test('v8 authorization binds global RPC cost, executor identity, and Earn sizing
       { allowed: false, reason: 'invalid-earnonhood-sizing-policy' },
     )
   }
+})
+
+test('superseded v8 authorization cannot bypass the v9 feed and per-wake cost policy', () => {
+  const legacy = arm({ policyVersion: 'dual-base-loopback-escalation-v8' })
+  assert.deepEqual(evaluateDualAuthorizationBudget(legacy, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
+    allowed: false,
+    reason: 'invalid-authorization-policy',
+  })
+  const oldShape = arm({
+    policyVersion: 'dual-base-loopback-escalation-v8',
+    global: {
+      ...legacy.global,
+      maximumEventRoutesPerWake: undefined,
+      managedFallbackEventLogicalCallCap: undefined,
+      managedFallbackRecoveryLogicalCallCap: undefined,
+      feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
+    },
+  })
+  assert.deepEqual(evaluateDualAuthorizationBudget(oldShape, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
+    allowed: false,
+    reason: 'invalid-authorization-policy',
+  })
 })
 
 test('selects the largest same-block normalized exact net across bases', () => {

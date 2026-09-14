@@ -36,10 +36,22 @@ import {
   GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
+import { GLOBAL_ROUTE_WORKSET_POLICY, selectGlobalRouteWorkset } from '../src/global-route-selection.mjs'
 import { globalSettlementAssets } from '../src/global-settlement-assets.mjs'
 import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
-import { DailyHotRpcBudget, jsonRpcCallCount } from '../src/hot-rpc-lane.mjs'
+import {
+  DailyHotRpcBudget,
+  LogicalCallBudget,
+  consumeNestedLogicalCallBudgets,
+  jsonRpcCallCount,
+} from '../src/hot-rpc-lane.mjs'
+import {
+  GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+  GLOBAL_FEED_MATCH_POLICY,
+  GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+} from '../src/global-wake-policy.mjs'
 import { classifyReconciliation, errorText, latestUnresolvedMutation } from '../src/policy.mjs'
 import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
@@ -87,6 +99,7 @@ const chain = defineChain({
   rpcUrls: { default: { http: [RPC_URL] } },
 })
 let managedFallbackBudget = null
+let managedFallbackWakeBudget = null
 
 function currentManagedFallbackBudget() {
   if (!managedFallbackBudget) {
@@ -100,9 +113,33 @@ function currentManagedFallbackBudget() {
   return managedFallbackBudget
 }
 
+function currentManagedFallbackWakeBudget() {
+  if (!managedFallbackWakeBudget) {
+    const eventWake = wakeAddressSet().size > 0
+    managedFallbackWakeBudget = new LogicalCallBudget({
+      logicalCallCap: eventWake
+        ? GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP
+        : GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+      label: eventWake ? 'EVENT_WAKE' : 'RECOVERY_WAKE',
+    })
+  }
+  return managedFallbackWakeBudget
+}
+
 function consumeManagedFallbackBudget(body) {
-  const debit = currentManagedFallbackBudget().consumeLogicalCalls(jsonRpcCallCount(body))
-  if (!debit.consumed) throw new Error('managed RPC fallback daily logical-call budget exhausted')
+  const count = jsonRpcCallCount(body)
+  const debit = consumeNestedLogicalCallBudgets({
+    perWakeBudget: currentManagedFallbackWakeBudget(),
+    dailyBudget: currentManagedFallbackBudget(),
+    count,
+  })
+  if (!debit.consumed) {
+    throw new Error(
+      debit.exhausted === 'PER_WAKE'
+        ? 'managed RPC fallback per-wake logical-call budget exhausted'
+        : 'managed RPC fallback daily logical-call budget exhausted',
+    )
+  }
 }
 
 const executionClient = createPublicClient({
@@ -153,6 +190,10 @@ function readJson(file) {
 
 function managedFallbackBudgetSnapshot() {
   return currentManagedFallbackBudget().snapshot()
+}
+
+function managedFallbackWakeBudgetSnapshot() {
+  return currentManagedFallbackWakeBudget().snapshot()
 }
 
 function writeProtectedJson(file, value) {
@@ -528,16 +569,6 @@ function wakeAddressSet() {
   )
 }
 
-function routeAddresses(route) {
-  const values = new Set()
-  if (route.pool) values.add(route.pool.toLowerCase())
-  for (const edge of route.edges || []) {
-    values.add(edge.pool.toLowerCase())
-    if (edge.hooks) values.add(edge.hooks.toLowerCase())
-  }
-  return values
-}
-
 function selectRouteDefinitions(graph, settlementToken, blockNumber) {
   const bpt = buildEarnBptArbitrageTemplates(graph, settlementToken).map((template) => ({
     type: 'BPT',
@@ -570,29 +601,17 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
     edges: cycle.edges,
   }))
   const all = [...bpt, ...swaps]
-  const wakeAddresses = wakeAddressSet()
-  const touched = all
-    .filter((route) => [...routeAddresses(route)].some((address) => wakeAddresses.has(address)))
-    .sort((left, right) => left.id.localeCompare(right.id))
-  const fixed = [...touched, ...bpt.filter((route) => !touched.includes(route))]
-  const fixedIds = new Set(fixed.map((route) => route.id))
-  const rotating = all
-    .filter((route) => !fixedIds.has(route.id))
-    .sort(
-      (left, right) =>
-        left.edges.length - right.edges.length ||
-        left.opportunityKind.localeCompare(right.opportunityKind) ||
-        left.id.localeCompare(right.id),
-    )
-  const room = Math.max(0, runtime.globalMaxRoutesPerWake - fixed.length)
-  const offset = rotating.length === 0 ? 0 : Number(BigInt(blockNumber) % BigInt(rotating.length))
-  const rotated = [...rotating.slice(offset), ...rotating.slice(0, offset)].slice(0, room)
+  const selected = selectGlobalRouteWorkset({
+    routes: all,
+    wakeAddresses: [...wakeAddressSet()],
+    blockNumber,
+    maximumRoutesPerWake: runtime.globalMaxRoutesPerWake,
+    maximumEventRoutesPerWake: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+  })
   return {
-    routes: [...fixed.slice(0, runtime.globalMaxRoutesPerWake), ...rotated].slice(0, runtime.globalMaxRoutesPerWake),
-    totalRoutes: all.length,
+    ...selected,
     bptRoutes: bpt.length,
     cycleRoutes: swaps.length,
-    touchedRoutes: touched.length,
     maximumCycleHops,
   }
 }
@@ -877,6 +896,9 @@ async function globalPreflight({ print = true } = {}) {
     exactNetPositive: exact.length,
     rpc: {
       discoveryPolicy: 'PUBLIC_FIRST_BATCHED_WITH_BOUNDED_MANAGED_TRANSPORT_FALLBACK',
+      wakeKind: wakeAddressSet().size > 0 ? 'EVENT' : 'RECOVERY',
+      wakeReason: process.env.GLOBAL_WAKE_REASON || null,
+      managedFallbackWakeBudget: managedFallbackWakeBudgetSnapshot(),
       managedFallbackBudget: managedFallbackBudgetSnapshot(),
     },
     selected: selected
@@ -1235,9 +1257,14 @@ function assertSharedAuthorization(deployment) {
     arm.global.runtimeCodeHash !== deployment.state.runtimeCodeHash ||
     BigInt(arm.global.minimumNetProfitUsdgWei) !== MINIMUM_NET_USDG ||
     Number(arm.global.maximumRoutesPerWake) !== runtime.globalMaxRoutesPerWake ||
+    Number(arm.global.maximumEventRoutesPerWake) !== GLOBAL_EVENT_MAX_ROUTES_PER_WAKE ||
     Number(arm.global.quoteConcurrency) !== runtime.globalQuoteConcurrency ||
     Number(arm.global.managedMaximumCandidatesPerWake) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE ||
     Number(arm.global.managedFallbackDailyLogicalCallCap) !== runtime.globalManagedFallbackDailyLogicalCallCap ||
+    Number(arm.global.managedFallbackEventLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP ||
+    Number(arm.global.managedFallbackRecoveryLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP ||
+    arm.global.feedPolicy !== GLOBAL_FEED_MATCH_POLICY ||
+    arm.global.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||
     arm.global.settlementAssets.length !== SETTLEMENT_TOKENS.length ||
     arm.global.settlementAssets.some((token, index) => token.toLowerCase() !== SETTLEMENT_TOKENS[index].toLowerCase())
   ) {
@@ -1254,7 +1281,27 @@ async function execute() {
     if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
     const deployment = await assertDeployment()
     const shared = assertSharedAuthorization(deployment)
-    const prepared = await globalPreflight({ print: false })
+    let prepared
+    try {
+      prepared = await globalPreflight({ print: false })
+    } catch (error) {
+      if (/managed RPC fallback (?:per-wake|daily) logical-call budget exhausted/i.test(errorText(error))) {
+        const output = {
+          status: 'NO_SIGNATURE_RPC_BUDGET_EXHAUSTED',
+          evidence: 'BOUNDED_READ_FAILURE_BEFORE_SIGNER_LOAD_OR_MUTATION',
+          reason: errorText(error),
+          rpc: {
+            wakeKind: wakeAddressSet().size > 0 ? 'EVENT' : 'RECOVERY',
+            wakeReason: process.env.GLOBAL_WAKE_REASON || null,
+            managedFallbackWakeBudget: managedFallbackWakeBudgetSnapshot(),
+            managedFallbackBudget: managedFallbackBudgetSnapshot(),
+          },
+        }
+        console.log(stringify(output))
+        return output
+      }
+      throw error
+    }
     if (!prepared.selected) {
       const output = { status: 'NO_EXACT_NET_OPPORTUNITY', ...prepared.snapshot }
       console.log(stringify(output))
