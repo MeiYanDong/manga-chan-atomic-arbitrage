@@ -145,7 +145,8 @@ not profit and a negative result must not be turned into a Gas-spending probe. S
 then execute a route only after current exact simulation; accepted effects require receipt, `Executed` event and balance
 delta.
 
-Broad graph discovery uses the official public RPC first and batches concurrent reads. A transport failure, HTTP 429 or
+Broad graph discovery uses the official public RPC first and batches at most eight concurrent reads per HTTP request,
+which is the verified live `eth_call` ceiling. A transport failure, HTTP 429 or
 viem-proven missing batch-response item may retry only the failed logical call on the managed endpoint while the
 restart-durable UTC-day budget has capacity. The default ceiling is
 `GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=20000`; changing it requires a fresh authorization. A deterministic EVM

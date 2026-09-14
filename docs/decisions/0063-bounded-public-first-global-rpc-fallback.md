@@ -15,7 +15,9 @@ all discovery to the managed endpoint would hide the failure at an unbounded rec
 
 Global discovery uses one public-first transport with these boundaries:
 
-1. concurrent JSON-RPC calls are batched on both providers, with at most 32 logical calls per HTTP request;
+1. concurrent public JSON-RPC calls are batched with at most eight logical calls per HTTP request, matching the live
+   Robinhood Chain RPC `eth_call` ceiling observed on 2026-09-14; the transport still has a hard configurable maximum of
+   1,000 for isolated tests and other providers;
 2. the official public endpoint is always attempted first;
 3. only transport, rate-limit or a viem-proven missing batch-response item may fall back to the managed endpoint;
    deterministic EVM reverts and malformed requests remain final;

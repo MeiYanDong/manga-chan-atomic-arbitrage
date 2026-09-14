@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Cap global public discovery batches at eight logical calls, matching the live Robinhood Chain RPC boundary. Larger
+  `eth_call` batches returned HTTP 429 and consumed 4,560 managed fallback calls without producing a signed attempt;
+  the watcher was disarmed cleanly before this production correction.
 - Treat viem's exact missing-batch-item failure as a transport fault and retry only that omitted logical call on the
   authorization-bounded managed fallback. Arbitrary `TypeError`, malformed RPC requests and EVM reverts still fail
   without provider fanout.

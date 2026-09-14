@@ -56,6 +56,11 @@ const MORPHO = getAddress('0x9D53d5E3bd5E8d4Cbfa6DB1ca238AEA02E651010')
 const V3_QUOTER = getAddress('0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7')
 const DEADLINE_SECONDS = 45n
 const V3_FEES = [100, 500, 3_000, 10_000]
+// The official Robinhood Chain RPC accepts eight concurrent eth_call items,
+// while larger call batches are rate-limited. Keep broad discovery inside the
+// observed public boundary instead of spilling oversized batches into the
+// authorization-bounded managed fallback.
+const PUBLIC_DISCOVERY_BATCH_SIZE = 8
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtime = loadRuntimeConfig()
@@ -107,6 +112,7 @@ const executionClient = createPublicClient({
 const discoveryClient = createPublicClient({
   chain,
   transport: publicFirstRpcTransport(PUBLIC_RPC, RPC_URL, {
+    batchSize: PUBLIC_DISCOVERY_BATCH_SIZE,
     managedFetchFn: async (input, init) => {
       consumeManagedFallbackBudget(init?.body)
       return globalThis.fetch(input, init)

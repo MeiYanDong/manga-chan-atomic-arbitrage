@@ -106,6 +106,47 @@ test('does not contact the managed fallback when the public batch succeeds', asy
   assert.equal(fallbackCalls, 0)
 })
 
+test('splits public calls at an eight-item provider ceiling without using the managed fallback', async (context) => {
+  const primaryBodies = []
+  let fallbackCalls = 0
+  const primary = await listen(async (request, response) => {
+    const body = await requestBody(request)
+    primaryBodies.push(body)
+    if (Array.isArray(body) && body.length > 8) {
+      response.writeHead(429, { 'content-type': 'text/plain' })
+      response.end('provider batch limit')
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(rpcResponse(body)))
+  })
+  const secondary = await listen((_request, response) => {
+    fallbackCalls += 1
+    response.writeHead(500).end()
+  })
+  context.after(async () => {
+    await Promise.all([primary.close(), secondary.close()])
+  })
+
+  const client = createPublicClient({
+    chain,
+    transport: publicFirstRpcTransport(primary.url, secondary.url, { batchSize: 8, batchWaitMs: 5 }),
+  })
+  const balances = await Promise.all(
+    Array.from({ length: 16 }, (_, index) =>
+      client.getBalance({ address: `0x${(index + 1).toString(16).padStart(40, '0')}` }),
+    ),
+  )
+
+  assert.deepEqual(balances, Array(16).fill(1_000_000_000n))
+  assert.equal(primaryBodies.length, 2)
+  assert.deepEqual(
+    primaryBodies.map((body) => body.length),
+    [8, 8],
+  )
+  assert.equal(fallbackCalls, 0)
+})
+
 test('falls back only for the logical call omitted from a malformed public batch', async (context) => {
   const primaryBodies = []
   const fallbackBodies = []
