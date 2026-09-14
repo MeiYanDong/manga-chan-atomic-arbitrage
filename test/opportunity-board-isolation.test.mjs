@@ -544,6 +544,7 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     dualSource.indexOf('async function watchDual()'),
     dualSource.indexOf('async function dualWatchStatus()'),
   )
+  assert.match(dualWatchSource, /const requestStop = \(\) => \{[\s\S]*persistStopRequested\(\)/)
   const unresolvedGuard = dualWatchSource.indexOf('if (unresolvedNow)')
   const childDeadlineRecovery = dualWatchSource.indexOf('if (isChildProcessDeadlineError(error)')
   assert.ok(unresolvedGuard >= 0, 'dual watcher must inspect unresolved mutations after child failure')

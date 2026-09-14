@@ -379,15 +379,23 @@ test('daily Feishu copy reports business outcomes without raw execution identifi
   const report = formatFeishuDailyReport(snapshot, '2026-09-07')
 
   assert.match(report, /【套利日报｜9月7日】/)
-  assert.match(report, /净收益：\+1\.70 USDG；\+0\.000020 ETH/)
-  assert.match(report, /成交：2 笔已确认/)
-  assert.match(report, /当前实盘累计：\+1\.30 USDG；\+0\.000030 ETH（3 笔）/)
-  assert.match(report, /可用资金：11\.00 USDG；0\.0011 WETH/)
-  assert.match(report, /需要你处理：无/)
-  assert.match(report, /只计算链上已确认且已扣 Gas/)
+  assert.match(report, /今日净结果：\+1\.70 USDG；\+0\.000020 ETH/)
+  assert.match(report, /盈利成交：2 笔/)
+  assert.match(report, /本轮实盘累计：\+1\.30 USDG；\+0\.000010 ETH（3 笔盈利成交）/)
+  assert.match(report, /可用交易资金：11\.00 USDG；0\.0011 WETH/)
+  assert.match(report, /你需要做：无/)
+  assert.match(report, /已扣成功与失败交易 Gas/)
   assert.doesNotMatch(report, /USDG 本金|Earn ETH|全局跨池|当前机会|资金监控/)
   assert.doesNotMatch(report, /扫描 863 个标的|canonical receipt/)
   assert.doesNotMatch(report, /0x[0-9a-f]{64}|authorization|webhook/i)
+})
+
+test('daily Feishu headline deducts failed Gas from the same-day ETH result', () => {
+  const snapshot = buildBusinessSnapshot(fixture())
+  const report = formatFeishuDailyReport(snapshot, '2026-09-08')
+
+  assert.match(report, /今日净结果：\+1\.30 USDG；\+0\.000010 ETH/)
+  assert.match(report, /失败成本：1 笔，共 0\.000020 ETH/)
 })
 
 test('recovers delivery state from the durable success receipt', () => {

@@ -92,7 +92,10 @@ cursor and no unresolved mutation. For v4 it must also report `BALANCE_SCALED_BR
 `EARN_NO_NET_OPPORTUNITY` is a healthy no-trade decision; it proves no signature or broadcast, not that every Earn pool
 or future block lacks an opportunity.
 
-If an Earn broadcast becomes UNKNOWN, stop the watcher and run:
+If an Earn broadcast becomes UNKNOWN, the watcher enters `RECONCILING_UNKNOWN` itself. It freezes only the shared
+wallet/nonce signer, continues the board, Earn event and Sequencer Feed read paths, and retries the typed reconciler
+every five seconds. Do not stop it merely to run a manual reconciliation. If the supervisor itself is no longer alive,
+or an explicit investigation requires a read-only snapshot, run:
 
 ```bash
 npm run dual:reconcile
@@ -101,6 +104,11 @@ npm run dual:reconcile
 The dual reconciler delegates only the `earnonhood-execute` mutation to the Earn receipt verifier. It verifies the
 persisted raw transaction, receipt finality, the exact committed Swap sequence, canonical Gas and exact-block wallet
 delta. It never rebuilds, reprices or replaces the signed transaction.
+
+Earn, Global, USDG and WETH are adapter names inside one supervisor and one wallet/nonce safety domain, not independent
+strategy daemons. New PAIR, LONG or other protocol integrations add typed discovery/quote/execution/reconciliation
+adapters to the same graph and supervisor; they do not receive a separate signer or private route budget merely because
+their front-end brand differs.
 
 ## Universal cross-protocol promotion
 
@@ -209,6 +217,18 @@ sudo systemctl enable --now manga-critical-health.timer
 Enter the webhook through encrypted standard input only. Never put it in argv, an environment file, the release or a
 remote-command payload. A response code `0` from `node scripts/critical-alert.mjs test` proves delivery transport only;
 the timer state and an actual health transition remain separate evidence.
+
+For a planned production promotion, prevent a maintenance switch from becoming a user incident:
+
+1. stop `manga-critical-health.timer` while the operator is actively supervising the cutover;
+2. stop the watcher and require its runtime state to become `STOPPED_BY_SIGNAL`;
+3. install and verify the immutable release, then start the watcher;
+4. require the new PID, exact release cwd, current authorization and `RUNNING`/`EXECUTING` runtime state;
+5. start the critical timer, run one health check and require `TRADING_HEALTHY` before ending the cutover.
+
+From v0.16.3 onward SIGTERM/SIGINT writes the maintenance state immediately, even while a bounded adapter child is
+finishing. The explicit timer sequence remains the preferred production procedure because it also covers upgrades from
+older releases that lack that behavior.
 
 The release installer compiles and verifies the code before atomically moving the `current` symlink. The hardened runtime service only reads that release and writes under `/var/lib/manga-chan-arbitrage`; it does not attempt to compile inside the read-only `/opt` tree at service start.
 
