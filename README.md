@@ -546,6 +546,9 @@ creates a commit-addressed artifact; deployment and arm promotion to a signing h
 the systemd materials in [`deploy/systemd`](deploy/systemd).
 
 Follow [`docs/operations.md`](docs/operations.md). In particular, never run the macOS and cloud signer lanes at the same time.
+The relationship with the separate Base/BNB `atomic-cycle-engine`, the target incremental-state architecture and its
+evidence-gated migration order are documented in
+[`docs/research/incremental-engine-upgrade.md`](docs/research/incremental-engine-upgrade.md).
 
 ## License and disclosure
 

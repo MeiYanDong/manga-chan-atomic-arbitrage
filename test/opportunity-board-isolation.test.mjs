@@ -572,6 +572,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualSource, /EARN_WAKE_RECEIVED_AT/)
   assert.match(dualSource, /EARN_WAKE_POOLS/)
   assert.match(dualSource, /classifyEarnFeedMatches/)
+  assert.match(dualSource, /mergePendingMarketSignals\(pendingEarnSignal, signal/)
+  assert.match(dualSource, /mergePendingMarketSignals\(pendingGlobalSignal, signal/)
+  assert.doesNotMatch(
+    dualWatchSource,
+    /pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'[\s\S]{0,100}pendingEarnSignal = wake/,
+  )
   const earnFeedPriority = dualWatchSource.indexOf("if (pendingEarnWake === 'FILTERED_SEQUENCER_FEED')")
   const globalFeedExecution = dualWatchSource.indexOf('if (pendingGlobalWake &&')
   assert.ok(earnFeedPriority >= 0, 'an Earn feed match must have a dedicated priority dispatch')

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Make Sequencer Feed intake lossless at the message boundary: an overlapping replay such as `[100, 101]` now drops
+  only message `100` and still dispatches `101`, while fully replayed frames, gaps and out-of-order evidence receive
+  explicit bounded metrics. Coalesce every pending Earn and Global pool/asset dependency by set union instead of
+  letting a newer event overwrite an older route. Feed remains a wake hint; public-log/periodic recovery, exact state,
+  simulation, Gas, nonce, balance, authorization and receipt gates are unchanged.
 - Route one shared ordered Sequencer Feed into typed Earn and Global adapters instead of treating platform names as
   separate bots. Exact Earn pool/asset frames now run the Earn adapter first while leaving the broader cross-protocol
   search queued, every pool matched in a coalesced wake participates in local route ranking, and public discovery
