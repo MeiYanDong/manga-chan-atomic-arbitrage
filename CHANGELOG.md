@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Protect Earn and Global recovery coverage with one explicit fair scheduler. Overdue periodic work now runs before
+  ordinary event or board work, event wakes never move the periodic deadline, coalesced dependencies retain the
+  highest-priority reason, and Global throttling cannot block an eligible Earn lane. The signer remains serial; the
+  change adds no wallet, capital, Gas, profit, simulation or broadcast authority.
 - Make Sequencer Feed intake lossless at the message boundary: an overlapping replay such as `[100, 101]` now drops
   only message `100` and still dispatches `101`, while fully replayed frames, gaps and out-of-order evidence receive
   explicit bounded metrics. Coalesce every pending Earn and Global pool/asset dependency by set union instead of
