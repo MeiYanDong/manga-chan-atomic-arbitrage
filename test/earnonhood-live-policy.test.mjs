@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 import { encodeAbiParameters } from 'viem'
 import { decodeEarnOnHoodReceiptRoute } from '../src/earnonhood-receipt.mjs'
@@ -10,6 +11,7 @@ import {
   deriveEarnOnHoodExecutionBounds,
   earnOnHoodQuoteBracket,
   earnOnHoodGasSolvency,
+  earnOnHoodRouteQuarantine,
   preservesEarnOnHoodLongTermProfit,
   selectEarnOnHoodGasCandidates,
 } from '../src/earnonhood-live-policy.mjs'
@@ -179,6 +181,163 @@ test('lifetime Gas solvency rebuilds old and current receipt evidence without do
   assert.equal(ledger.surplusWei, 91_868_227_091_194n)
   assert.equal(preservesEarnOnHoodLongTermProfit(ledger.surplusWei, 90_000_000_000_000n), true)
   assert.equal(preservesEarnOnHoodLongTermProfit(ledger.surplusWei, ledger.surplusWei), false)
+})
+
+test('a canonical revert quarantines only its route until a newer relevant pool wake', () => {
+  const poolA = '0x0000000000000000000000000000000000000001'
+  const poolB = '0x0000000000000000000000000000000000000002'
+  const records = /** @type {Array<Record<string, any>>} */ ([
+    {
+      at: '2026-09-14T18:48:50.000Z',
+      event: 'mutation_plan',
+      kind: 'earnonhood-execute',
+      planHash: '0xplan-a',
+      routeId: 'route-a',
+      pools: [poolA],
+    },
+    {
+      at: '2026-09-14T18:48:54.000Z',
+      event: 'mutation_reverted',
+      kind: 'earnonhood-execute',
+      planHash: '0xplan-a',
+      hash: '0xrevert-a',
+      blockNumber: '100',
+      gasSpentWei: '1',
+    },
+    {
+      at: '2026-09-14T18:48:55.000Z',
+      event: 'earn_watch_wake',
+      wakeReason: 'REVIEWED_POOL_SWAP_EVENT',
+      eventBlockNumber: '101',
+      eventPools: [poolB],
+    },
+  ])
+  assert.deepEqual(
+    earnOnHoodRouteQuarantine(records).map((entry) => entry.routeId),
+    ['route-a'],
+  )
+
+  records.push({
+    at: '2026-09-14T18:48:56.000Z',
+    event: 'earn_watch_wake',
+    wakeReason: 'REVIEWED_POOL_SWAP_EVENT',
+    eventBlockNumber: '101',
+    eventPools: [poolA],
+  })
+  assert.deepEqual(earnOnHoodRouteQuarantine(records), [])
+})
+
+test('a later successful effect clears only the matching route quarantine', () => {
+  const plan = (routeId, pool, planHash) => ({
+    at: '2026-09-14T18:48:00.000Z',
+    event: 'mutation_plan',
+    kind: 'earnonhood-execute',
+    planHash,
+    routeId,
+    pools: [pool],
+  })
+  const poolA = '0x0000000000000000000000000000000000000001'
+  const poolB = '0x0000000000000000000000000000000000000002'
+  const records = /** @type {Array<Record<string, any>>} */ ([
+    plan('route-a', poolA, '0xplan-a'),
+    plan('route-b', poolB, '0xplan-b'),
+    { at: '2026-09-14T18:49:00.000Z', event: 'mutation_reverted', planHash: '0xplan-a' },
+    { at: '2026-09-14T18:49:00.000Z', event: 'mutation_reverted', planHash: '0xplan-b' },
+    { at: '2026-09-14T18:50:00.000Z', event: 'mutation_effect', planHash: '0xplan-a' },
+  ])
+  assert.deepEqual(
+    earnOnHoodRouteQuarantine(records).map((entry) => entry.routeId),
+    ['route-b'],
+  )
+})
+
+test('a delayed coalesced wake observed before the revert cannot release that route', () => {
+  const pool = '0x0000000000000000000000000000000000000001'
+  const records = /** @type {Array<Record<string, any>>} */ ([
+    {
+      at: '2026-09-14T18:48:40.000Z',
+      event: 'mutation_plan',
+      kind: 'earnonhood-execute',
+      planHash: '0xplan',
+      routeId: 'route-a',
+      pools: [pool],
+    },
+    {
+      at: '2026-09-14T18:48:54.000Z',
+      event: 'mutation_reverted',
+      planHash: '0xplan',
+    },
+    {
+      at: '2026-09-14T18:49:00.000Z',
+      sourceReceivedAt: '2026-09-14T18:48:50.000Z',
+      event: 'earn_watch_wake',
+      wakeReason: 'FILTERED_SEQUENCER_FEED',
+      eventPools: [pool],
+    },
+  ])
+  assert.deepEqual(
+    earnOnHoodRouteQuarantine(records).map((entry) => entry.routeId),
+    ['route-a'],
+  )
+})
+
+test('historical AI exit-pool race remains a route-local regression sample', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(new URL('./fixtures/earn-ai-state-race-63032258.json', import.meta.url), 'utf8'),
+  )
+  assert.equal(fixture.evidenceStatus, 'STRONG_STATE_RACE_INFERENCE_NOT_HISTORICAL_TRACE')
+  assert.equal(new Set(fixture.route.pools.map((pool) => pool.toLowerCase())).size, fixture.route.pools.length)
+  assert.equal(fixture.stateChangingTransaction.pool.toLowerCase(), fixture.route.pools.at(-1).toLowerCase())
+  assert.equal(
+    fixture.stateChangingTransaction.tokenIn.toLowerCase(),
+    fixture.route.exitDirection.tokenIn.toLowerCase(),
+  )
+  assert.equal(
+    fixture.stateChangingTransaction.tokenOut.toLowerCase(),
+    fixture.route.exitDirection.tokenOut.toLowerCase(),
+  )
+  assert.ok(BigInt(fixture.currentStateReplay.actualAmountOutWei) < BigInt(fixture.ourAttempt.minimumAmountOutWei))
+
+  const records = /** @type {Array<Record<string, any>>} */ ([
+    {
+      at: fixture.ourAttempt.signedAt,
+      event: 'mutation_plan',
+      kind: 'earnonhood-execute',
+      planHash: 'fixture-plan',
+      routeId: fixture.route.id,
+      pools: fixture.route.pools,
+    },
+    {
+      at: '2026-09-14T18:48:54.721Z',
+      event: 'mutation_reverted',
+      kind: 'earnonhood-execute',
+      planHash: 'fixture-plan',
+      hash: fixture.ourAttempt.transaction,
+      blockNumber: fixture.ourAttempt.blockNumber,
+      gasSpentWei: fixture.ourAttempt.gasSpentWei,
+    },
+    {
+      at: '2026-09-14T18:48:55.000Z',
+      sourceReceivedAt: fixture.ourAttempt.sequencerAcceptedAt,
+      event: 'earn_watch_wake',
+      wakeReason: 'FILTERED_SEQUENCER_FEED',
+      eventBlockNumber: fixture.stateChangingTransaction.blockNumber,
+      eventPools: [fixture.stateChangingTransaction.pool],
+    },
+  ])
+  assert.deepEqual(
+    earnOnHoodRouteQuarantine(records).map((entry) => entry.routeId),
+    [fixture.route.id],
+  )
+
+  records.push({
+    at: '2026-09-14T18:49:00.000Z',
+    event: 'earn_watch_wake',
+    wakeReason: 'FILTERED_SEQUENCER_FEED',
+    eventBlockNumber: String(BigInt(fixture.ourAttempt.blockNumber) + 1n),
+    eventPools: [fixture.stateChangingTransaction.pool],
+  })
+  assert.deepEqual(earnOnHoodRouteQuarantine(records), [])
 })
 
 test('reviewed Vault Swap topics wake only the committed Earn route book', () => {

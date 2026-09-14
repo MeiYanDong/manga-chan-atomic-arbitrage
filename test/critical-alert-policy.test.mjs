@@ -88,7 +88,7 @@ test('critical alert policy grants bounded maintenance and arm-start grace', () 
   )
 })
 
-test('critical alert policy pages only after a sustained lane failure', () => {
+test('isolated market adapter failures stay degraded and do not page', () => {
   assert.equal(
     evaluateCriticalTradingHealth({
       arm,
@@ -98,14 +98,14 @@ test('critical alert policy pages only after a sustained lane failure', () => {
     }).state,
     'HEALTHY',
   )
-  const critical = evaluateCriticalTradingHealth({
+  const globalDegraded = evaluateCriticalTradingHealth({
     arm,
     runtime: runtime({ status: 'DEGRADED_GLOBAL', consecutiveGlobalErrors: 3 }),
     processAlive: true,
     nowMs: NOW,
   })
-  assert.equal(critical.state, 'CRITICAL')
-  assert.equal(critical.reasonCode, 'SUSTAINED_GLOBAL_FAILURE')
+  assert.equal(globalDegraded.state, 'DEGRADED')
+  assert.equal(globalDegraded.reasonCode, 'PARTIAL_MARKET_COVERAGE')
 
   assert.equal(
     evaluateCriticalTradingHealth({
@@ -116,14 +116,39 @@ test('critical alert policy pages only after a sustained lane failure', () => {
     }).state,
     'HEALTHY',
   )
-  const boardCritical = evaluateCriticalTradingHealth({
+  const boardDegraded = evaluateCriticalTradingHealth({
     arm,
     runtime: runtime({ status: 'DEGRADED_BOARD', consecutiveBoardErrors: 30 }),
     processAlive: true,
     nowMs: NOW,
   })
-  assert.equal(boardCritical.state, 'CRITICAL')
-  assert.equal(boardCritical.reasonCode, 'SUSTAINED_BOARD_FAILURE')
+  assert.equal(boardDegraded.state, 'DEGRADED')
+  assert.equal(boardDegraded.reasonCode, 'PARTIAL_MARKET_COVERAGE')
+})
+
+test('critical alert policy pages only when execution is unusable or every market adapter is down', () => {
+  const executionCritical = evaluateCriticalTradingHealth({
+    arm,
+    runtime: runtime({ consecutiveExecutionRpcErrors: 3 }),
+    processAlive: true,
+    nowMs: NOW,
+  })
+  assert.equal(executionCritical.state, 'CRITICAL')
+  assert.equal(executionCritical.reasonCode, 'SUSTAINED_EXECUTION_FAILURE')
+
+  const allDiscoveryCritical = evaluateCriticalTradingHealth({
+    arm,
+    runtime: runtime({
+      consecutiveGlobalErrors: 3,
+      consecutiveEarnErrors: 3,
+      consecutiveBoardErrors: 30,
+    }),
+    processAlive: true,
+    nowMs: NOW,
+  })
+  assert.equal(allDiscoveryCritical.state, 'CRITICAL')
+  assert.equal(allDiscoveryCritical.reasonCode, 'ALL_MARKET_DISCOVERY_UNAVAILABLE')
+  assert.match(formatCriticalAlert('ALERT', allDiscoveryCritical, new Date(NOW)), /市场扫描已中断/)
 })
 
 test('critical notifications are transition-only and recovery is emitted once', () => {
@@ -137,6 +162,14 @@ test('critical notifications are transition-only and recovery is emitted once', 
     nowMs: NOW,
   })
   assert.equal(criticalAlertTransition({ health: critical, notification: 'DELIVERED' }, changedCritical), 'NONE')
+  const degraded = evaluateCriticalTradingHealth({
+    arm,
+    runtime: runtime({ consecutiveGlobalErrors: 3 }),
+    processAlive: true,
+    nowMs: NOW,
+  })
+  assert.equal(criticalAlertTransition({ health: critical, notification: 'DELIVERED' }, degraded), 'RECOVERY')
+  assert.match(formatCriticalAlert('RECOVERY', degraded, new Date(NOW)), /至少一条市场扫描/)
   const healthy = evaluateCriticalTradingHealth({ arm, runtime: runtime(), processAlive: true, nowMs: NOW })
   assert.equal(criticalAlertTransition({ health: critical, notification: 'DELIVERED' }, healthy), 'RECOVERY')
   assert.equal(criticalAlertTransition({ health: healthy, notification: 'DELIVERED' }, healthy), 'NONE')

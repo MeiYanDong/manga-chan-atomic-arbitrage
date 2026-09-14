@@ -23,7 +23,7 @@ function normalizedAddress(value) {
  * they are wake context but never route dependencies by themselves.
  *
  * @param {Record<string, any> | null} catalog
- * @param {{protocolAddresses?: string[], settlementAddresses?: string[], ignoredAddresses?: string[]}} [options]
+ * @param {{protocolAddresses?: string[], earnProtocolAddresses?: string[], settlementAddresses?: string[], ignoredAddresses?: string[]}} [options]
  */
 export function buildGlobalFeedWatchPolicy(catalog, options = {}) {
   const ignored = new Set()
@@ -32,8 +32,11 @@ export function buildGlobalFeedWatchPolicy(catalog, options = {}) {
     if (address) ignored.add(address.toLowerCase())
   }
   const protocols = new Map()
+  const earnProtocols = new Map()
   const pools = new Map()
+  const earnPools = new Map()
   const assets = new Map()
+  const earnAssets = new Map()
   const settlements = new Map()
   const add = (target, value) => {
     const address = normalizedAddress(value)
@@ -42,10 +45,18 @@ export function buildGlobalFeedWatchPolicy(catalog, options = {}) {
   }
 
   for (const value of options.protocolAddresses || []) add(protocols, value)
+  for (const value of options.earnProtocolAddresses || []) {
+    add(protocols, value)
+    add(earnProtocols, value)
+  }
   for (const value of options.settlementAddresses || []) add(settlements, value)
   for (const pool of catalog?.earn?.pools || []) {
     add(pools, pool.address)
-    for (const token of pool.tokens || []) add(assets, token.address)
+    add(earnPools, pool.address)
+    for (const token of pool.tokens || []) {
+      add(assets, token.address)
+      add(earnAssets, token.address)
+    }
   }
   for (const venue of ['v2Pools', 'v3Pools', 'v4Pools']) {
     for (const pool of catalog?.uniswap?.[venue] || []) {
@@ -68,10 +79,57 @@ export function buildGlobalFeedWatchPolicy(catalog, options = {}) {
     policy: GLOBAL_FEED_MATCH_POLICY,
     triggerAddresses: [...triggers.values()],
     protocolAddresses: [...protocols.values()],
+    earnProtocolAddresses: [...earnProtocols.values()],
     poolAddresses: [...specificPools.values()],
+    earnPoolAddresses: [...earnPools.values()],
     assetAddresses: [...assets.values()],
+    earnAssetAddresses: [...earnAssets.values()],
     settlementAddresses: [...settlements.values()],
     watchedAddresses: [...watched.values()],
+  }
+}
+
+/**
+ * Route an ordered-feed frame to the Earn adapter without turning the Earn
+ * protocol into a separate signer. Exact pool matches are strongest; a
+ * canonical Earn protocol plus a non-settlement Earn asset is a bounded
+ * fallback for wrappers whose calldata does not expose the pool address.
+ *
+ * @param {string[]} matches
+ * @param {{earnProtocolAddresses?: string[], earnPoolAddresses?: string[], earnAssetAddresses?: string[], settlementAddresses?: string[]}} policy
+ */
+export function classifyEarnFeedMatches(matches, policy) {
+  const matched = new Set(
+    (matches || [])
+      .map(normalizedAddress)
+      .filter(Boolean)
+      .map((address) => address.toLowerCase()),
+  )
+  const protocols = new Set((policy?.earnProtocolAddresses || []).map((value) => value.toLowerCase()))
+  const pools = new Set((policy?.earnPoolAddresses || []).map((value) => value.toLowerCase()))
+  const assets = new Set((policy?.earnAssetAddresses || []).map((value) => value.toLowerCase()))
+  const settlements = new Set((policy?.settlementAddresses || []).map((value) => value.toLowerCase()))
+  const matchedProtocolAddresses = [...matched].filter((address) => protocols.has(address)).sort()
+  const matchedPoolAddresses = [...matched].filter((address) => pools.has(address)).sort()
+  const matchedAssetAddresses = [...matched].filter((address) => assets.has(address)).sort()
+  const matchedNonSettlementAssetAddresses = matchedAssetAddresses.filter((address) => !settlements.has(address))
+  const exactPool = matchedPoolAddresses.length > 0
+  const protocolAssetPath = matchedProtocolAddresses.length > 0 && matchedNonSettlementAssetAddresses.length > 0
+  const actionable = exactPool || protocolAssetPath
+  return {
+    actionable,
+    reason: actionable
+      ? exactPool
+        ? 'EARN_POOL_MATCH'
+        : 'EARN_PROTOCOL_ASSET_PATH_MATCH'
+      : matchedProtocolAddresses.length > 0
+        ? 'EARN_PROTOCOL_CONTEXT_ONLY'
+        : 'NO_EARN_MATCH',
+    matchedProtocolAddresses,
+    matchedPoolAddresses,
+    matchedAssetAddresses,
+    matchedNonSettlementAssetAddresses,
+    routeAddresses: [...new Set([...matchedPoolAddresses, ...matchedNonSettlementAssetAddresses])].sort(),
   }
 }
 

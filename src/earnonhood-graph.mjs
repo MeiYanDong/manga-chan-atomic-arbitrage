@@ -265,13 +265,24 @@ function compareApproximate(left, right) {
  * Rank the full graph locally, then preserve hop-count diversity. The model is
  * never execution evidence; it only decides which bounded exact quotes to buy.
  */
-export function buildEarnOnHoodExactQuoteShortlist({ pools, routes, amounts, gasPriceWei, focusPool = null }) {
+export function buildEarnOnHoodExactQuoteShortlist({
+  pools,
+  routes,
+  amounts,
+  gasPriceWei,
+  focusPool = null,
+  focusPools = [],
+}) {
   if (!Array.isArray(amounts) || amounts.length < 2 || amounts.some((amount) => typeof amount !== 'bigint')) {
     throw new Error('Earn shortlist requires at least two bigint amounts')
   }
   if (typeof gasPriceWei !== 'bigint' || gasPriceWei <= 0n) throw new Error('Earn shortlist requires gasPriceWei')
   const poolMap = new Map(pools.map((pool) => [key(pool.address), pool]))
-  const focus = focusPool ? key(getAddress(focusPool)) : null
+  const focusedPools = new Set(
+    [focusPool, ...(Array.isArray(focusPools) ? focusPools : [])]
+      .filter(Boolean)
+      .map((value) => key(getAddress(value))),
+  )
   const ranked = []
   for (const route of routes) {
     let best = null
@@ -300,10 +311,13 @@ export function buildEarnOnHoodExactQuoteShortlist({ pools, routes, amounts, gas
     .slice(0, EARN_ROUTE_DISCOVERY_POLICY.shortlistRoutesPerHop)) {
     add(candidate)
   }
-  if (focus) {
+  if (focusedPools.size > 0) {
     for (const hops of [2, 3, 4]) {
       for (const candidate of ranked
-        .filter((item) => item.route.steps.length === hops && item.route.steps.some((step) => key(step.pool) === focus))
+        .filter(
+          (item) =>
+            item.route.steps.length === hops && item.route.steps.some((step) => focusedPools.has(key(step.pool))),
+        )
         .slice(0, Math.ceil(EARN_ROUTE_DISCOVERY_POLICY.shortlistRoutesPerHop / 2))) {
         add(candidate)
       }

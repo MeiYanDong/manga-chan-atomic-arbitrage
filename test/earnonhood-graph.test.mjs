@@ -7,7 +7,11 @@ import {
   enumerateEarnOnHoodCycles,
   normalizeEarnOnHoodCatalog,
 } from '../src/earnonhood-graph.mjs'
-import { buildEarnOnHoodCatalogFromOnchain, loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
+import {
+  buildEarnOnHoodCatalogFromOnchain,
+  loadEarnOnHoodOnchainCatalog,
+  refreshEarnOnHoodCachedDynamicCatalog,
+} from '../src/earnonhood-onchain-catalog.mjs'
 import {
   EARN_OMNIPOOL_FACTORY,
   EARN_REVIEWED_LEGACY_OMNIPOOLS,
@@ -99,7 +103,7 @@ test('shortlist locally ranks the full graph and preserves bounded hop diversity
     routes,
     amounts: [10_000_000_000_000n, 20_000_000_000_000n, 40_000_000_000_000n, 80_000_000_000_000n],
     gasPriceWei: 100_000_000n,
-    focusPool: '0x0000000000000000000000000000000000000014',
+    focusPools: ['0x0000000000000000000000000000000000000014', '0x0000000000000000000000000000000000000015'],
   })
   const directCount = routes.filter((route) => route.steps.length === 2).length
   assert.equal(
@@ -107,6 +111,11 @@ test('shortlist locally ranks the full graph and preserves bounded hop diversity
     Math.min(directCount, EARN_ROUTE_DISCOVERY_POLICY.shortlistRoutesPerHop),
   )
   assert.ok(shortlist.selectedRoutes.some((route) => route.steps.length === 3))
+  assert.ok(
+    shortlist.selectedRoutes.some((route) =>
+      route.steps.some((step) => step.pool.toLowerCase() === '0x0000000000000000000000000000000000000015'),
+    ),
+  )
   assert.ok(shortlist.selectedRoutes.length <= EARN_ROUTE_DISCOVERY_POLICY.maximumShortlistRoutes)
   assert.ok(
     shortlist.quoteInputs.length <=
@@ -253,4 +262,38 @@ test('onchain catalog quarantines a paused pool and rejects inconsistent weighte
   assert.equal(catalog.rejected.length, 2)
   assert.ok(catalog.rejected.some((record) => /paused/.test(record.reason)))
   assert.ok(catalog.rejected.some((record) => /sum to one/.test(record.reason)))
+})
+
+test('event hot path refreshes only mutable pool state from a canonical protected catalog', async () => {
+  const cached = {
+    ...catalog(),
+    source: EARN_ROUTE_DISCOVERY_POLICY.catalogSource,
+    blockNumber: '100',
+    discoveredFactoryPools: 5,
+    reviewedLegacyPools: 0,
+  }
+  let logicalCalls = 0
+  const client = {
+    async multicall({ contracts }) {
+      logicalCalls += contracts.length
+      return contracts.map(() => ({
+        status: 'success',
+        result: {
+          balancesLiveScaled18: [2_000n, 3_000n],
+          tokenRates: [1_000_000_000_000_000_000n, 1_000_000_000_000_000_000n],
+          staticSwapFeePercentage: 3_000_000_000_000_000n,
+          totalSupply: 1n,
+          isPoolInitialized: true,
+          isPoolPaused: false,
+          isPoolInRecoveryMode: false,
+        },
+      }))
+    },
+  }
+  const refreshed = await refreshEarnOnHoodCachedDynamicCatalog(client, cached, 101n)
+  assert.equal(logicalCalls, cached.pools.length)
+  assert.equal(refreshed.blockNumber, '101')
+  assert.equal(refreshed.pools.length, cached.pools.length)
+  assert.equal(refreshed.pools[0].tokens[0].balance, '2000')
+  assert.equal(refreshed.refreshMode, 'PROTECTED_CANONICAL_STATIC_CACHE_PLUS_FIXED_BLOCK_DYNAMIC_MULTICALL')
 })
