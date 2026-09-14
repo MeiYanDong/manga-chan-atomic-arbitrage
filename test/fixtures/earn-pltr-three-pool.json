@@ -1,0 +1,34 @@
+{
+  "evidence": "HISTORICAL_CANONICAL_RECEIPTS",
+  "actor": "0xf36468604c3824722b4cf12d1ba74d4cf6aeca78",
+  "transactionHashes": [
+    "0x356c6894d74e8ad55260bfe1dd67dd0b956543f14f6c2548c36d534656f37bab",
+    "0x45039ee60e4bfaa7d7da3178093e8749e72b9009a2fa72d897f0b23bcf899903",
+    "0x1c5046795a21adf62e94f5649c78b944016e810c15f0e12f903154b1aa2c7140",
+    "0x46b7314f984dd4d96a9544e92f4ef941db4fa0df26ae5b5a6f62e7cbf3ac65e"
+  ],
+  "settlementToken": "0x894E1EC2D74FFE5AEF8Dc8A9e84686acCB964F2A",
+  "pools": [
+    {
+      "address": "0x070F0Bcf458c2A836cF68c986df3BA86586e64FD",
+      "tokens": [
+        { "address": "0x894E1EC2D74FFE5AEF8Dc8A9e84686acCB964F2A", "decimals": 18 },
+        { "address": "0xA3b6AEe90017b72c0812dC1e013De70eB2917ba3", "decimals": 18 }
+      ]
+    },
+    {
+      "address": "0x9C22f8374aC9527162409BB28EF98B5f5E1708d2",
+      "tokens": [
+        { "address": "0xA3b6AEe90017b72c0812dC1e013De70eB2917ba3", "decimals": 18 },
+        { "address": "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa", "decimals": 18 }
+      ]
+    },
+    {
+      "address": "0xaAaBA0fde5d66C678e2Ac2b7DA552A577914d38a",
+      "tokens": [
+        { "address": "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa", "decimals": 18 },
+        { "address": "0x894E1EC2D74FFE5AEF8Dc8A9e84686acCB964F2A", "decimals": 18 }
+      ]
+    }
+  ]
+}

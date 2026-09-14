@@ -1,8 +1,17 @@
 import { keccak256, toHex } from 'viem'
 import { EARN_SIZING_ALGORITHM } from './earnonhood-live-policy.mjs'
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from './earnonhood-routes.mjs'
-import { GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE } from './global-liquidity-graph.mjs'
+import {
+  GLOBAL_ATOMIC_ROUTE_POLICY,
+  GLOBAL_GRAPH_POLICY,
+  GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
+} from './global-liquidity-graph.mjs'
 import { GLOBAL_ROUTE_WORKSET_POLICY } from './global-route-selection.mjs'
+import {
+  GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
+  GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
+  GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+} from './global-settlement-assets.mjs'
 import {
   GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
   GLOBAL_FEED_MATCH_POLICY,
@@ -14,7 +23,8 @@ import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v10'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v11'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10 = 'dual-base-loopback-escalation-v10'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9 = 'dual-base-loopback-escalation-v9'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8 = 'dual-base-loopback-escalation-v8'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7 = 'dual-base-loopback-escalation-v7'
@@ -337,6 +347,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7,
@@ -354,9 +365,11 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     return { allowed: false, reason: 'invalid-authorization-policy' }
   }
   if (
-    [LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9, LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8].includes(
-      arm.policyVersion,
-    )
+    [
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8,
+    ].includes(arm.policyVersion)
   ) {
     return { allowed: false, reason: 'invalid-authorization-policy' }
   }
@@ -367,15 +380,18 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       !/^0x[0-9a-f]{40}$/i.test(String(arm.global?.executor || '')) ||
       !/^0x[0-9a-f]{64}$/i.test(String(arm.global?.sourceHash || '')) ||
       !/^0x[0-9a-f]{64}$/i.test(String(arm.global?.runtimeCodeHash || '')) ||
-      !Array.isArray(arm.global?.settlementAssets) ||
-      arm.global.settlementAssets.length < 2 ||
-      arm.global.settlementAssets.length > 16 ||
-      arm.global.settlementAssets.some((asset) => !/^0x[0-9a-f]{40}$/i.test(String(asset))) ||
-      new Set(arm.global.settlementAssets.map((asset) => String(asset).toLowerCase())).size !==
-        arm.global.settlementAssets.length ||
+      !Array.isArray(arm.global?.settlementSeeds) ||
+      arm.global.settlementSeeds.length < 2 ||
+      arm.global.settlementSeeds.length > 16 ||
+      arm.global.settlementSeeds.some((asset) => !/^0x[0-9a-f]{40}$/i.test(String(asset))) ||
+      new Set(arm.global.settlementSeeds.map((asset) => String(asset).toLowerCase())).size !==
+        arm.global.settlementSeeds.length ||
+      arm.global?.settlementPolicy !== GLOBAL_SETTLEMENT_ADMISSION_POLICY ||
+      arm.global?.maximumSettlementFundingChecksPerWake !== GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE ||
+      arm.global?.maximumSettlementAssetsPerWake !== GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE ||
       arm.global?.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
-      arm.global?.graphPolicy !== 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY' ||
-      arm.global?.routePolicy !== 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS' ||
+      arm.global?.graphPolicy !== GLOBAL_GRAPH_POLICY.version ||
+      arm.global?.routePolicy !== GLOBAL_ATOMIC_ROUTE_POLICY ||
       arm.global?.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||
       !Number.isSafeInteger(arm.global?.maximumRoutesPerWake) ||
       arm.global.maximumRoutesPerWake < GLOBAL_EVENT_MAX_ROUTES_PER_WAKE ||

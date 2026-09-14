@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyGlobalEventRouteBudget, selectGlobalRouteWorkset } from '../src/global-route-selection.mjs'
+import {
+  applyGlobalEventRouteBudget,
+  applyGlobalRecoveryRouteBudget,
+  selectGlobalRouteWorkset,
+} from '../src/global-route-selection.mjs'
 
 const WETH = '0x0000000000000000000000000000000000000001'
 const ASSET = '0x0000000000000000000000000000000000000002'
@@ -121,4 +125,20 @@ test('an empty event lane yields its global route slots and recovery keeps its o
 
   const recovery = [{ wakeKind: 'RECOVERY', routes: Array.from({ length: 12 }, (_, index) => route(`route-${index}`)) }]
   assert.equal(applyGlobalEventRouteBudget(recovery, 8), recovery)
+})
+
+test('dynamic settlement recovery shares one bounded route budget fairly', () => {
+  const worksets = Array.from({ length: 4 }, (_, lane) => ({
+    wakeKind: 'RECOVERY',
+    routes: Array.from({ length: 12 }, (_, index) => route(`route-${lane * 20 + index + 1}`, WETH, OTHER)),
+  }))
+  const selected = applyGlobalRecoveryRouteBudget(worksets, 10)
+  assert.equal(
+    selected.reduce((total, workset) => total + workset.routes.length, 0),
+    10,
+  )
+  assert.deepEqual(
+    selected.map((workset) => workset.routes.length),
+    [3, 3, 2, 2],
+  )
 })

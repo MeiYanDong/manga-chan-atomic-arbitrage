@@ -143,7 +143,7 @@ export function buildBptExecutionPlan(template, options) {
   }
 }
 
-/** Convert a closed cross-venue swap cycle into the executor's typed ABI plan. */
+/** Convert a closed same-venue or cross-venue swap cycle into a typed atomic plan. */
 export function buildCycleExecutionPlan(cycle, options) {
   const principal = BigInt(options.principal)
   const minimumProfit = BigInt(options.minimumProfit)
@@ -159,18 +159,26 @@ export function buildCycleExecutionPlan(cycle, options) {
   ) {
     throw new Error('cycle is not closed over its settlement token')
   }
-  const venues = new Set()
+  const usedPools = new Set()
+  const usedTokens = new Set([key(settlementToken)])
   const tracked = new Map([[key(settlementToken), settlementToken]])
   const actions = cycle.edges.map((edge, index) => {
     if (index > 0 && key(cycle.edges[index - 1].tokenOut) !== key(edge.tokenIn)) {
       throw new Error('cycle edges are not contiguous')
     }
-    venues.add(edge.venue)
+    const poolIdentity = `${edge.venue}:${String(edge.poolId || edge.pool).toLowerCase()}`
+    if (usedPools.has(poolIdentity)) throw new Error('cycle repeats a pool')
+    usedPools.add(poolIdentity)
+    const closes = index === cycle.edges.length - 1
+    if (closes !== (key(edge.tokenOut) === key(settlementToken))) {
+      throw new Error('cycle must close only at the final edge')
+    }
+    if (!closes && usedTokens.has(key(edge.tokenOut))) throw new Error('cycle repeats an intermediate token')
+    if (!closes) usedTokens.add(key(edge.tokenOut))
     tracked.set(key(getAddress(edge.tokenIn)), getAddress(edge.tokenIn))
     tracked.set(key(getAddress(edge.tokenOut)), getAddress(edge.tokenOut))
     return executionActionFromEdge(edge, index === 0 ? principal : 0n)
   })
-  if (venues.size < 2) throw new Error('cycle must cross at least two venues')
   return {
     settlementToken,
     trackedTokens: [...tracked.values()].map((token) => ({ token, maximumResidual: 1n })),

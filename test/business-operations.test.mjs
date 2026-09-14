@@ -292,10 +292,11 @@ test('includes only receipt-gated universal executions in the operating totals',
       },
     ],
   }
-  input.arm.global = { settlementAssets: ['USDG', 'WETH'], managedFallbackDailyLogicalCallCap: 20_000 }
+  input.arm.global = { settlementSeeds: ['USDG', 'WETH'], managedFallbackDailyLogicalCallCap: 20_000 }
   input.runtime.global = {
     status: 'WATCHING',
     lastResult: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED',
+    graph: { settlementAdmission: { admitted: 0 } },
     feed: { frames: 1_200, wakes: 80, filtered: 1_120 },
     coalescedFeedWakes: 9,
     workset: { wakeKind: 'EVENT', totalRoutes: 12_091, touchedRoutes: 14, selectedRoutes: 8 },
@@ -327,6 +328,7 @@ test('includes only receipt-gated universal executions in the operating totals',
     snapshot.economics.today.confirmedExecutions,
   )
   assert.equal(snapshot.strategy.global.confirmedExecutions, 1)
+  assert.equal(snapshot.strategy.global.settlementAssets, 0)
   assert.equal(snapshot.strategy.global.managedFallbackLogicalCallsToday, 432)
   assert.equal(snapshot.strategy.global.managedFallbackDailyLogicalCallCap, 20_000)
   assert.deepEqual(snapshot.strategy.global.executionFunnel, {

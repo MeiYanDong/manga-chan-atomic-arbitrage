@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 
 import {
   buildEarnBptArbitrageTemplates,
   buildUnifiedLiquidityGraph,
+  enumerateAtomicSwapCycles,
   enumerateCrossVenueCycles,
   fundingCapability,
   selectBoundedManagedCandidates,
@@ -70,6 +72,55 @@ test('enumerates cross-venue cycles without token-name assumptions', () => {
         cycle.edges.map((edge) => edge.venue).includes('UNISWAP_V3'),
     ),
   )
+})
+
+test('enumerates a same-venue multi-pool cycle without named-route assumptions', () => {
+  const TOKEN_A = '0x0000000000000000000000000000000000000031'
+  const TOKEN_B = '0x0000000000000000000000000000000000000032'
+  const TOKEN_C = '0x0000000000000000000000000000000000000033'
+  const graph = buildUnifiedLiquidityGraph({
+    earnPools: [
+      {
+        address: '0x0000000000000000000000000000000000000041',
+        initialized: true,
+        tokens: [{ address: TOKEN_A }, { address: TOKEN_B }],
+      },
+      {
+        address: '0x0000000000000000000000000000000000000042',
+        initialized: true,
+        tokens: [{ address: TOKEN_B }, { address: TOKEN_C }],
+      },
+      {
+        address: '0x0000000000000000000000000000000000000043',
+        initialized: true,
+        tokens: [{ address: TOKEN_C }, { address: TOKEN_A }],
+      },
+    ],
+  })
+  const cycles = enumerateAtomicSwapCycles(graph, TOKEN_A, { maximumHops: 3, maximumCycles: 32 })
+  const triangle = cycles.find(
+    (cycle) => cycle.edges.length === 3 && cycle.edges.every((edge) => edge.venue === 'EARN'),
+  )
+  assert.ok(triangle)
+  assert.equal(new Set(triangle.edges.map((edge) => edge.pool.toLowerCase())).size, 3)
+})
+
+test('historical PLTR competitor fixture is reachable after removing every token label', () => {
+  const fixtureUrl = new URL('./fixtures/earn-pltr-three-pool.json', import.meta.url)
+  const historical = JSON.parse(fs.readFileSync(fixtureUrl, 'utf8'))
+  const graph = buildUnifiedLiquidityGraph({
+    earnPools: historical.pools.map((pool) => ({ ...pool, initialized: true })),
+  })
+  const cycle = enumerateAtomicSwapCycles(graph, historical.settlementToken, {
+    maximumHops: 3,
+    maximumCycles: 32,
+  }).find(
+    (candidate) =>
+      candidate.edges.length === 3 &&
+      candidate.edges.every((edge, index) => edge.pool.toLowerCase() === historical.pools[index].address.toLowerCase()),
+  )
+  assert.ok(cycle)
+  assert.ok(cycle.edges.every((edge) => edge.venue === 'EARN'))
 })
 
 test('derives both BPT price-dislocation shapes when every basket leg connects', () => {
