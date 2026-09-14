@@ -10,6 +10,7 @@ import {
   dailyReportSchedule,
   deriveDeliveryState,
   formatFeishuDailyReport,
+  publicRuntimeStatus,
   readPublicBusinessSnapshot,
 } from '../src/business-operations.mjs'
 import { readBusinessBoardSnapshot, resolveBusinessBoardProjection } from '../src/business-board-snapshot.mjs'
@@ -170,7 +171,7 @@ async function currentBoardProjection() {
 async function currentBusinessSnapshot(delivery = deliveryState()) {
   const runtime = readJson(path.join(RUN_DIR, 'dual-watch-state.json'))
   const processAlive = processIsAlive(Number(runtime?.pid))
-  const robinhoodServiceStatus = processStatusForPortfolio(runtime, processAlive)
+  const robinhoodServiceStatus = publicRuntimeStatus(runtime, processAlive)
   const [board, portfolio] = await Promise.all([
     currentBoardProjection(),
     collectPortfolioSnapshot({
@@ -198,12 +199,6 @@ async function currentBusinessSnapshot(delivery = deliveryState()) {
     reportMinute: REPORT_MINUTE,
     portfolio,
   })
-}
-
-function processStatusForPortfolio(runtime, processAlive) {
-  if (!runtime) return 'UNKNOWN'
-  if (!processAlive) return 'STOPPED'
-  return runtime.status === 'RUNNING' ? 'RUNNING' : runtime.status === 'HALTED_UNKNOWN' ? 'HALTED' : 'UNKNOWN'
 }
 
 function readWebhook() {

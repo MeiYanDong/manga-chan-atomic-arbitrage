@@ -45,6 +45,7 @@ function receipt(route = EARN_ROUTES[0], actor = EXTERNAL) {
     blockNumber: 100n,
     blockHash: `0x${'b'.repeat(64)}`,
     from: actor,
+    to: `0x${'c'.repeat(40)}`,
     gasUsed: 10_000n,
     effectiveGasPrice: 1_000_000_000n,
     logs,
@@ -69,6 +70,10 @@ test('receipt record keeps route economics as an estimate and aliases the actor'
   })
   assert.equal(record.actorClass, 'EXTERNAL')
   assert.match(record.actorAlias, /^外部地址 #[0-9a-f]{6}$/)
+  assert.equal(record.actorAddress, EXTERNAL)
+  assert.equal(record.strategyShape, 'EARN_VAULT_2_HOP_CLOSED_CYCLE')
+  assert.equal(record.assetEconomics[0].symbol, 'WETH')
+  assert.equal(record.assetEconomics[0].grossProfit, '0.0001')
   assert.equal(record.grossProfitWeth, '0.0001')
   assert.equal(record.gasCostEth, '0.00001')
   assert.equal(record.estimatedNetEth, '0.00009')
@@ -91,10 +96,15 @@ test('generic census detects an arbitrary non-AI closed cycle without inventing 
   const cycles = findEarnClosedCycles(closed)
   assert.equal(cycles.length, 1)
   assert.equal(cycles[0].baseToken.toLowerCase(), TOKEN_A.toLowerCase())
-  const record = reviewedReceiptRecord({ receipt: closed, occurredAt: '2026-09-13T00:00:00.000Z' })
+  const record = reviewedReceiptRecord({
+    receipt: closed,
+    occurredAt: '2026-09-13T00:00:00.000Z',
+    tokenMetadata: { [TOKEN_A.toLowerCase()]: { symbol: 'A', decimals: 18 } },
+  })
   assert.equal(record.nonWethCycleCount, 1)
   assert.equal(record.estimatedNetEth, null)
-  assert.equal(record.economicsState, 'NON_WETH_CLOSED_CYCLE_UNNORMALIZED')
+  assert.equal(record.assetEconomics[0].grossProfit, '0.0001')
+  assert.equal(record.economicsState, 'NATIVE_GROSS_CONFIRMED_GAS_NOT_NORMALIZED')
 })
 
 test('public census delays exact evidence and never invents a lost race count', () => {
@@ -124,6 +134,10 @@ test('public census delays exact evidence and never invents a lost race count', 
   })
   assert.equal(disclosed.summary.externalCycleReceipts, 1)
   assert.equal(disclosed.summary.distinctExternalActors, 1)
+  assert.equal(disclosed.summary.estimatedExternalNetEth, '0.00009')
+  assert.equal(disclosed.leaders[0].actorAddress, EXTERNAL)
+  assert.equal(disclosed.leaders[0].topRoute, 'WETH → AI → WETH')
+  assert.equal(disclosed.routes[0].distinctActors, 1)
   assert.equal(disclosed.recentEvidence[0].route, 'WETH → AI → WETH')
   assert.doesNotThrow(() => assertEarnCompetitorSnapshot(disclosed))
 })

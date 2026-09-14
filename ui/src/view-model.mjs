@@ -1,6 +1,7 @@
 export const PAGES = Object.freeze([
   { id: 'overview', label: '概览' },
   { id: 'opportunities', label: '机会' },
+  { id: 'competition', label: '竞争' },
   { id: 'activity', label: '交易' },
   { id: 'portfolio', label: '资金' },
   { id: 'strategy', label: '策略' },
@@ -38,12 +39,21 @@ export function currentPage(hash) {
     ledger: 'activity',
     radar: 'opportunities',
     episodes: 'opportunities',
+    competitors: 'competition',
+    market: 'competition',
     more: 'strategy',
     sources: 'strategy',
     system: 'strategy',
   }
   const normalized = aliases[candidate] || candidate
   return PAGES.some((page) => page.id === normalized) ? normalized : 'overview'
+}
+
+export function competitionStrategyLabel(strategyShape) {
+  const match = String(strategyShape || '').match(/^EARN_VAULT_(\d+)_HOP_CLOSED_CYCLE$/)
+  if (match) return `Earn 内部 ${match[1]} 跳闭环`
+  if (strategyShape === 'EARN_VAULT_MIXED_HOP_CLOSED_CYCLES') return 'Earn 内部多条闭环'
+  return 'Earn 内部闭环'
 }
 
 export function opportunityStageLabel(stage) {
