@@ -13,6 +13,7 @@ import {
   publicRuntimeStatus,
   readPublicBusinessSnapshot,
 } from '../src/business-operations.mjs'
+import { buildAgentDailyProfitSnapshot, buildAgentMarketValuation } from '../src/agent-daily-profit.mjs'
 import { readBusinessBoardSnapshot, resolveBusinessBoardProjection } from '../src/business-board-snapshot.mjs'
 import { isSecureSystemdCredential } from '../src/journal.mjs'
 import { requestLoopbackJson } from '../src/loopback-json-client.mjs'
@@ -26,6 +27,9 @@ const SNAPSHOT_PATH = path.resolve(
 )
 const DAILY_PROFIT_PATH = path.resolve(
   process.env.MANGA_BUSINESS_DAILY_PROFIT_PATH || path.join(REPORT_DIR, 'daily-profit.json'),
+)
+const AGENT_DAILY_PROFIT_PATH = path.resolve(
+  process.env.MANGA_BUSINESS_AGENT_DAILY_PROFIT_PATH || path.join(REPORT_DIR, 'agent-daily-profit.json'),
 )
 const DELIVERY_STATE_PATH = path.join(REPORT_DIR, 'delivery-state.json')
 const DELIVERY_RECEIPTS_PATH = path.join(REPORT_DIR, 'delivery-receipts.jsonl')
@@ -46,6 +50,10 @@ const portfolioClients = createPortfolioClients({
 const REPORT_HOUR = integer(process.env.MANGA_BUSINESS_REPORT_HOUR, 9, 0, 23)
 const REPORT_MINUTE = integer(process.env.MANGA_BUSINESS_REPORT_MINUTE, 5, 0, 59)
 const PROJECT_HISTORY_PATH = path.join(ROOT, 'deployments', 'project-history-mainnet.json')
+const COINGECKO_PRICE_URL =
+  'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,global-dollar&vs_currencies=usd&include_last_updated_at=true'
+const KRAKEN_PRICE_URL = 'https://api.kraken.com/0/public/Ticker?pair=ETHUSD,USDGUSD'
+const USD_CNY_URL = 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY'
 
 function integer(value, fallback, minimum, maximum) {
   if (value === undefined || value === '') return fallback
@@ -78,9 +86,32 @@ function writeJsonAtomic(file, value, mode) {
   fs.chmodSync(file, mode)
 }
 
-function writePublicSnapshots(snapshot) {
+async function requestPublicJson(url) {
+  const response = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': 'manga-business-report/agent-read-model' },
+    signal: AbortSignal.timeout(8_000),
+  })
+  if (!response.ok) throw new Error(`public market reference returned HTTP ${response.status}`)
+  const body = await response.text()
+  if (!body || Buffer.byteLength(body) > 128_000) throw new Error('public market reference has invalid size')
+  return JSON.parse(body)
+}
+
+async function currentAgentMarketValuation(now = new Date()) {
+  const results = await Promise.allSettled([
+    requestPublicJson(COINGECKO_PRICE_URL),
+    requestPublicJson(KRAKEN_PRICE_URL),
+    requestPublicJson(USD_CNY_URL),
+  ])
+  const value = (index) => (results[index].status === 'fulfilled' ? results[index].value : null)
+  return buildAgentMarketValuation({ now, coinGecko: value(0), kraken: value(1), frankfurter: value(2) })
+}
+
+function writePublicSnapshots(snapshot, valuation) {
+  const daily = buildDailyProfitSnapshot(snapshot)
   writeJsonAtomic(SNAPSHOT_PATH, snapshot, 0o640)
-  writeJsonAtomic(DAILY_PROFIT_PATH, buildDailyProfitSnapshot(snapshot), 0o644)
+  writeJsonAtomic(DAILY_PROFIT_PATH, daily, 0o644)
+  writeJsonAtomic(AGENT_DAILY_PROFIT_PATH, buildAgentDailyProfitSnapshot(daily, valuation), 0o644)
 }
 
 function appendDeliveryReceipt(receipt) {
@@ -234,8 +265,12 @@ async function tick() {
   const release = acquireLock()
   try {
     let delivery = deliveryState()
-    let snapshot = await currentBusinessSnapshot(delivery)
-    writePublicSnapshots(snapshot)
+    const [initialSnapshot, valuation] = await Promise.all([
+      currentBusinessSnapshot(delivery),
+      currentAgentMarketValuation(),
+    ])
+    let snapshot = initialSnapshot
+    writePublicSnapshots(snapshot, valuation)
     const schedule = dailyReportSchedule(new Date(), REPORT_HOUR, REPORT_MINUTE)
     const delivered = readJsonLines(DELIVERY_RECEIPTS_PATH).some(
       (receipt) => receipt?.periodKey === schedule.periodKey && receipt?.status === 'DELIVERED',
@@ -266,7 +301,7 @@ async function tick() {
     delivery = { lastSuccessAt: receipt.sentAt, lastPeriodKey: receipt.periodKey }
     writeJsonAtomic(DELIVERY_STATE_PATH, delivery, 0o600)
     snapshot = await currentBusinessSnapshot(delivery)
-    writePublicSnapshots(snapshot)
+    writePublicSnapshots(snapshot, valuation)
     console.log(
       JSON.stringify({ status: 'DAILY_REPORT_DELIVERED', periodKey: receipt.periodKey, sentAt: receipt.sentAt }),
     )

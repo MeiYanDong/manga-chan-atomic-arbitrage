@@ -300,6 +300,7 @@ sudo apt-get update
 sudo apt-get install -y nginx
 sudo ./deploy/install-public-dashboard.sh deploy/nginx/manga-public-dashboard.conf
 curl --fail --silent --show-error http://127.0.0.1/healthz
+curl --fail --silent --show-error http://127.0.0.1/api/v1/agent/daily-profit
 ```
 
 Open only TCP port 80 in the SWAS firewall with source `0.0.0.0/0`. The Nginx server is the catch-all virtual host: it
@@ -310,6 +311,11 @@ configuration if validation fails. Verify the public IP from a separate client, 
 security headers, a current business snapshot, a rejected POST and an inaccessible `/api/event-metrics`. A stale cache
 fallback preserves the last timestamped read model during a board event-loop delay; it is availability evidence, not a
 new chain observation.
+
+The Agent endpoint is written atomically to `/var/lib/manga-business-report/agent-daily-profit.json` by the existing
+oneshot reporter. Verify `accounting.failedTransactionGasDeducted=true`,
+`accounting.projectResultByAssetIncluded=false`, current `valuation.observedAt`, and a rejected public `POST`. A
+`PARTIAL` valuation is a valid native-profit response, not permission to assume USDG parity or replace missing prices.
 
 The exact current source catalog is the private atomically replaced `source-catalog.json` projection. It is written as
 canonical JSON through a bounded buffer and linked from economic checkpoints by SHA-256; routine snapshot commits do

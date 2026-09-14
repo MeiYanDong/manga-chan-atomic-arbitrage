@@ -282,6 +282,10 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   )
   assert.match(
     service,
+    /^Environment=MANGA_BUSINESS_AGENT_DAILY_PROFIT_PATH=\/var\/lib\/manga-business-report\/agent-daily-profit\.json$/m,
+  )
+  assert.match(
+    service,
     /^Environment=MANGA_BUSINESS_BOARD_SNAPSHOT=\/run\/manga-opportunity-board-feed\/operations-snapshot\.json$/m,
   )
   assert.match(service, /^ProtectSystem=strict$/m)
@@ -356,6 +360,10 @@ test('public dashboard proxy exposes only the read-only presentation surface', (
   assert.match(
     nginx,
     /^\s*location = \/api\/v1\/profit\/daily \{$[\s\S]*?^\s*alias \/var\/lib\/manga-business-report\/daily-profit\.json;$/m,
+  )
+  assert.match(
+    nginx,
+    /^\s*location = \/api\/v1\/agent\/daily-profit \{$[\s\S]*?^\s*alias \/var\/lib\/manga-business-report\/agent-daily-profit\.json;$/m,
   )
   assert.match(
     nginx,
