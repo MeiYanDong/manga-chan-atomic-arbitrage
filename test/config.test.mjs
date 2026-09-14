@@ -41,6 +41,8 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'EARN_LIVE_REFINEMENT_POINTS=8',
       'EARN_WATCH_EVENT_POLL_MS=1500',
       'GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=12345',
+      'GLOBAL_WATCH_CHILD_TIMEOUT_MS=45000',
+      'EARN_WATCH_CHILD_TIMEOUT_MS=55000',
       'GLOBAL_LIVE_ARM=0',
     ].join('\n'),
     { mode: 0o600 },
@@ -77,6 +79,8 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.earnLiveRefinementPoints, 8)
   assert.equal(config.earnWatchEventPollMs, 1_500)
   assert.equal(config.globalManagedFallbackDailyLogicalCallCap, 12_345)
+  assert.equal(config.globalWatchChildTimeoutMs, 45_000)
+  assert.equal(config.earnWatchChildTimeoutMs, 55_000)
   assert.doesNotThrow(() => assertLiveTransport(config, { requireWss: true }))
 })
 
@@ -121,6 +125,8 @@ test('generic exact-preflight candidate count is bounded at configuration load',
   assert.throws(() => loadRuntimeConfig({ EARN_WATCH_EVENT_POLL_MS: '999' }), /1000\.\.60000/)
   assert.throws(() => loadRuntimeConfig({ GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP: '999' }), /1000\.\.1000000/)
   assert.throws(() => loadRuntimeConfig({ GLOBAL_MAX_ROUTES_PER_WAKE: '7' }), /8\.\.256/)
+  assert.throws(() => loadRuntimeConfig({ GLOBAL_WATCH_CHILD_TIMEOUT_MS: '14999' }), /15000\.\.180000/)
+  assert.throws(() => loadRuntimeConfig({ EARN_WATCH_CHILD_TIMEOUT_MS: '180001' }), /15000\.\.180000/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_AUTO_RENEW: 'yes' }), /0 或 1/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_UNTIL_REVOKED: 'yes' }), /0 或 1/)
   assert.throws(

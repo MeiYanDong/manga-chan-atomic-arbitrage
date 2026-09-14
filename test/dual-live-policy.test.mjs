@@ -7,6 +7,7 @@ import {
   dualAuthorizationId,
   dualAuthorizationUsage,
   dualSpendablePrincipal,
+  dualWatcherExitCode,
   evaluateDualAuthorizationBudget,
   isDualOpportunityMiss,
   normalizeWethToUsdg,
@@ -129,6 +130,16 @@ test('global quote and Gas drift are normal no-shot outcomes before a signature 
   assert.equal(isDualOpportunityMiss(new Error('selected opportunity decayed before signing')), true)
   assert.equal(isDualOpportunityMiss(new Error('gross quote does not fund worst-case Gas plus net floor')), true)
   assert.equal(isDualOpportunityMiss(new Error('protected gas limit is below the final exact estimate')), true)
+})
+
+test('dual watcher exit codes restart only temporary failures', () => {
+  assert.equal(dualWatcherExitCode('RUNNING'), 0)
+  assert.equal(dualWatcherExitCode('STOPPED_POLICY'), 0)
+  assert.equal(dualWatcherExitCode('HALTED_UNKNOWN'), 70)
+  assert.equal(dualWatcherExitCode('HALTED_INVARIANT'), 71)
+  assert.equal(dualWatcherExitCode('HALTED_STARTUP'), 71)
+  assert.equal(dualWatcherExitCode('HALTED_NONCE_CONFLICT'), 72)
+  assert.equal(dualWatcherExitCode('HALTED_RPC'), 75)
 })
 
 test('screen floor can trigger exact preflight without lowering the signed execution floor', () => {

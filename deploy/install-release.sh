@@ -27,6 +27,7 @@ runtime_dir=/var/lib/manga-chan-arbitrage
 config_dir=/etc/manga-chan-arbitrage
 board_runtime_dir=/var/lib/manga-opportunity-board
 report_runtime_dir=/var/lib/manga-business-report
+alert_runtime_dir=/var/lib/manga-critical-alert
 board_config_dir=/etc/manga-opportunity-board
 credential_dir=/etc/credstore.encrypted
 
@@ -40,6 +41,7 @@ install -d -o "${service_user}" -g "${service_group}" -m 0700 "${runtime_dir}"
 install -d -o root -g "${service_group}" -m 0750 "${config_dir}"
 install -d -o "${board_user}" -g "${board_group}" -m 0750 "${board_runtime_dir}"
 install -d -o "${service_user}" -g "${board_group}" -m 0755 "${report_runtime_dir}"
+install -d -o "${service_user}" -g "${service_group}" -m 0700 "${alert_runtime_dir}"
 install -d -o root -g "${board_group}" -m 0750 "${board_config_dir}"
 install -d -o root -g root -m 0700 "${credential_dir}"
 
@@ -71,6 +73,8 @@ install -o root -g root -m 0644 deploy/systemd/manga-dual-arm.service /etc/syste
 install -o root -g root -m 0644 deploy/systemd/manga-dual-watcher.service /etc/systemd/system/manga-dual-watcher.service
 install -o root -g root -m 0644 deploy/systemd/manga-legacy-collect.service /etc/systemd/system/manga-legacy-collect.service
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
+install -o root -g root -m 0644 deploy/systemd/manga-critical-health.service /etc/systemd/system/manga-critical-health.service
+install -o root -g root -m 0644 deploy/systemd/manga-critical-health.timer /etc/systemd/system/manga-critical-health.timer
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-census.service /etc/systemd/system/manga-opportunity-census.service
 install -o root -g root -m 0644 deploy/systemd/manga-business-report.service /etc/systemd/system/manga-business-report.service

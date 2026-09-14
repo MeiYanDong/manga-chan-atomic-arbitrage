@@ -457,6 +457,8 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const dualArm = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-arm.service'), 'utf8')
   const wethDeploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-dual-weth-deploy.service'), 'utf8')
   const globalDeploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-global-deploy.service'), 'utf8')
+  const criticalHealth = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-critical-health.service'), 'utf8')
+  const criticalTimer = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-critical-health.timer'), 'utf8')
 
   for (const unit of [watcher, arm, deploy, dualWatcher, dualArm, wethDeploy, globalDeploy]) {
     assert.match(unit, /^User=manga-chan-arb$/m)
@@ -491,6 +493,11 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   )
   assert.match(dualWatcher, /^SupplementaryGroups=manga-board$/m)
   assert.match(dualWatcher, /^Conflicts=.*manga-chan-watcher\.service.*manga-generic-watcher\.service/m)
+  assert.match(dualWatcher, /^OnFailure=manga-critical-health\.service$/m)
+  assert.match(dualWatcher, /^Restart=on-failure$/m)
+  assert.match(dualWatcher, /^RestartPreventExitStatus=70 71 72$/m)
+  assert.match(dualWatcher, /^Environment=GLOBAL_WATCH_CHILD_TIMEOUT_MS=60000$/m)
+  assert.match(dualWatcher, /^Environment=EARN_WATCH_CHILD_TIMEOUT_MS=60000$/m)
   for (const unit of [dualWatcher, dualArm]) {
     assert.match(unit, /^Environment=EARN_WATCH_ENABLED=1$/m)
     assert.match(unit, /^Environment=EARN_WATCH_EVENT_POLL_MS=1000$/m)
@@ -514,12 +521,35 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   )
   assert.match(wethDeploy, /^Type=oneshot$/m)
   assert.match(wethDeploy, /^ExecStart=\/usr\/bin\/env npm run dual:weth:deploy$/m)
+  assert.match(criticalHealth, /^User=manga-chan-arb$/m)
+  assert.match(criticalHealth, /^StateDirectory=manga-critical-alert$/m)
+  assert.match(
+    criticalHealth,
+    /^LoadCredentialEncrypted=manga-critical-alert-webhook:\/etc\/credstore\.encrypted\/manga-critical-alert-webhook$/m,
+  )
+  assert.match(criticalHealth, /^ExecStart=\/usr\/bin\/env node scripts\/critical-alert\.mjs check$/m)
+  assert.match(criticalHealth, /^ReadOnlyPaths=-\/var\/lib\/manga-chan-arbitrage$/m)
+  assert.match(criticalHealth, /^ReadWritePaths=\/var\/lib\/manga-critical-alert$/m)
+  assert.doesNotMatch(criticalHealth, /manga-private-key|MANGA_PRIVATE_KEY|MANGA_RPC_URL|MANGA_WS_URL/)
+  assert.match(criticalTimer, /^OnUnitActiveSec=1min$/m)
+  assert.match(criticalTimer, /^Persistent=true$/m)
+  assert.match(criticalTimer, /^Unit=manga-critical-health\.service$/m)
+  assert.match(installer, /manga-critical-health\.service/)
+  assert.match(installer, /manga-critical-health\.timer/)
 
   const dualSource = fs.readFileSync(path.join(root, 'scripts', 'dual-base-arb.mjs'), 'utf8')
   const dualWatchSource = dualSource.slice(
     dualSource.indexOf('async function watchDual()'),
     dualSource.indexOf('async function dualWatchStatus()'),
   )
+  const unresolvedGuard = dualWatchSource.indexOf('if (unresolvedNow)')
+  const childDeadlineRecovery = dualWatchSource.indexOf('if (isChildProcessDeadlineError(error)')
+  assert.ok(unresolvedGuard >= 0, 'dual watcher must inspect unresolved mutations after child failure')
+  assert.ok(
+    childDeadlineRecovery > unresolvedGuard,
+    'dual watcher must fail closed on unresolved mutations before treating its own child deadline as recoverable',
+  )
+  assert.match(dualWatchSource, /NO_UNRESOLVED_MUTATION_CONTINUE/)
   const startupRetry = dualWatchSource.indexOf('await retryReadOnly(')
   const signerLoad = dualWatchSource.indexOf('loadAccount()')
   assert.ok(startupRetry >= 0, 'dual watcher must retry transient startup readback')
@@ -537,6 +567,14 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const executeEnd = dualSource.indexOf('async function reconcile(', executeStart)
   const executeSource = dualSource.slice(executeStart, executeEnd)
   assert.doesNotMatch(executeSource, /currentBoard = await boardCandidates/)
+
+  const criticalAlertSource = fs.readFileSync(path.join(root, 'scripts', 'critical-alert.mjs'), 'utf8')
+  assert.doesNotMatch(
+    criticalAlertSource,
+    /MANGA_PRIVATE_KEY|privateKeyToAccount|createWalletClient|sendRawTransaction/,
+  )
+  assert.doesNotMatch(criticalAlertSource, /MANGA_RPC_URL|MANGA_WS_URL/)
+  assert.match(criticalAlertSource, /MANGA_CRITICAL_ALERT_WEBHOOK_FILE/)
 
   const globalSource = fs.readFileSync(path.join(root, 'scripts', 'global-arb.mjs'), 'utf8')
   assert.match(globalSource, /loadUniversalContractArtifact/)

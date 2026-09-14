@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +20,7 @@ import {
   recoverTransactionAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { isChildProcessDeadlineError, runBoundedProcess } from '../src/bounded-child-process.mjs'
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
 import { broadcastSameRawToSequencer } from '../src/direct-sequencer.mjs'
 import {
@@ -35,6 +36,7 @@ import {
   dualAuthorizationId,
   dualAuthorizationUsage,
   dualSpendablePrincipal,
+  dualWatcherExitCode,
   evaluateDualAuthorizationBudget,
   isDualOpportunityMiss,
   normalizeWethToUsdg,
@@ -2304,70 +2306,57 @@ function parseEarnChildOutput(stdout) {
   }
 }
 
-function runEarnOnHoodChild(command, extraEnvironment = {}) {
-  return new Promise((resolve, reject) => {
-    const childEnvironment = { ...process.env, ...extraEnvironment }
-    if (!extraEnvironment.EARN_SHARED_AUTHORIZATION_ID) delete childEnvironment.EARN_SHARED_AUTHORIZATION_ID
-    if (!extraEnvironment.EARN_SHARED_WATCH_PID) delete childEnvironment.EARN_SHARED_WATCH_PID
-    const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'earnonhood-live.mjs'), command], {
+async function runEarnOnHoodChild(command, extraEnvironment = {}, timeoutMs = 180_000) {
+  const childEnvironment = { ...process.env, ...extraEnvironment }
+  if (!extraEnvironment.EARN_SHARED_AUTHORIZATION_ID) delete childEnvironment.EARN_SHARED_AUTHORIZATION_ID
+  if (!extraEnvironment.EARN_SHARED_WATCH_PID) delete childEnvironment.EARN_SHARED_WATCH_PID
+  const result = await runBoundedProcess(
+    process.execPath,
+    [path.join(ROOT, 'scripts', 'earnonhood-live.mjs'), command],
+    {
       cwd: ROOT,
       env: childEnvironment,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    let stderr = ''
-    const appendBounded = (current, chunk) => `${current}${chunk}`.slice(-1_000_000)
-    child.stdout.on('data', (chunk) => {
-      stdout = appendBounded(stdout, chunk)
-    })
-    child.stderr.on('data', (chunk) => {
-      stderr = appendBounded(stderr, chunk)
-    })
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 180_000)
-    child.once('error', (error) => {
-      clearTimeout(timeout)
-      reject(error)
-    })
-    child.once('close', (code, signal) => {
-      clearTimeout(timeout)
-      if (code !== 0) {
-        reject(new Error(`EarnOnHood live child failed (${code ?? signal}): ${stderr.trim() || stdout.trim()}`))
-        return
-      }
-      try {
-        resolve(parseEarnChildOutput(stdout))
-      } catch (error) {
-        reject(error)
-      }
-    })
-  })
+      timeoutMs,
+      label: `EarnOnHood ${command} child`,
+    },
+  )
+  return parseEarnChildOutput(result.stdout)
 }
 
 function runEarnOnHoodShared(arm, signal) {
-  return runEarnOnHoodChild('execute', {
-    EARN_LIVE_ARM: '1',
-    EARN_SHARED_AUTHORIZATION_ID: arm.authorizationId,
-    EARN_SHARED_WATCH_PID: String(process.pid),
-    EARN_WAKE_RECEIVED_AT: signal?.sourceReceivedAt || '',
-    EARN_WAKE_BLOCK_NUMBER: signal?.eventBlockNumber === null ? '' : String(signal?.eventBlockNumber || ''),
-    EARN_WAKE_TRANSACTION_HASH: signal?.eventTransactionHash || '',
-    EARN_WAKE_POOL: signal?.eventPool || '',
-  })
+  return runEarnOnHoodChild(
+    'execute',
+    {
+      EARN_LIVE_ARM: '1',
+      EARN_SHARED_AUTHORIZATION_ID: arm.authorizationId,
+      EARN_SHARED_WATCH_PID: String(process.pid),
+      EARN_WAKE_RECEIVED_AT: signal?.sourceReceivedAt || '',
+      EARN_WAKE_BLOCK_NUMBER: signal?.eventBlockNumber === null ? '' : String(signal?.eventBlockNumber || ''),
+      EARN_WAKE_TRANSACTION_HASH: signal?.eventTransactionHash || '',
+      EARN_WAKE_POOL: signal?.eventPool || '',
+    },
+    RUNTIME_CONFIG.earnWatchChildTimeoutMs,
+  )
 }
 
 function runGlobalShared(arm, signal, wakeReason) {
-  return runChildScript('global-arb.mjs', 'execute', {
-    GLOBAL_SHARED_AUTHORIZATION_ID: arm.authorizationId,
-    GLOBAL_SHARED_WATCH_PID: String(process.pid),
-    GLOBAL_WAKE_RECEIVED_AT: signal?.receivedAt || signal?.sourceReceivedAt || '',
-    GLOBAL_WAKE_SEQUENCE_NUMBER:
-      signal?.firstSequenceNumber === null || signal?.firstSequenceNumber === undefined
-        ? ''
-        : String(signal.firstSequenceNumber),
-    GLOBAL_WAKE_ROUTE_ADDRESSES: (signal?.routeAddresses || []).join(','),
-    GLOBAL_WAKE_CLASSIFICATION: signal?.classificationReason || '',
-    GLOBAL_WAKE_REASON: wakeReason || '',
-  })
+  return runChildScript(
+    'global-arb.mjs',
+    'execute',
+    {
+      GLOBAL_SHARED_AUTHORIZATION_ID: arm.authorizationId,
+      GLOBAL_SHARED_WATCH_PID: String(process.pid),
+      GLOBAL_WAKE_RECEIVED_AT: signal?.receivedAt || signal?.sourceReceivedAt || '',
+      GLOBAL_WAKE_SEQUENCE_NUMBER:
+        signal?.firstSequenceNumber === null || signal?.firstSequenceNumber === undefined
+          ? ''
+          : String(signal.firstSequenceNumber),
+      GLOBAL_WAKE_ROUTE_ADDRESSES: (signal?.routeAddresses || []).join(','),
+      GLOBAL_WAKE_CLASSIFICATION: signal?.classificationReason || '',
+      GLOBAL_WAKE_REASON: wakeReason || '',
+    },
+    RUNTIME_CONFIG.globalWatchChildTimeoutMs,
+  )
 }
 
 function globalFeedWatchPolicy() {
@@ -2388,40 +2377,14 @@ function applyGlobalFeedWatchPolicy(feed) {
   return policy
 }
 
-function runChildScript(script, command, extraEnvironment = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(ROOT, 'scripts', script), command], {
-      cwd: ROOT,
-      env: { ...process.env, ...extraEnvironment },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    let stderr = ''
-    const appendBounded = (current, chunk) => `${current}${chunk}`.slice(-1_000_000)
-    child.stdout.on('data', (chunk) => {
-      stdout = appendBounded(stdout, chunk)
-    })
-    child.stderr.on('data', (chunk) => {
-      stderr = appendBounded(stderr, chunk)
-    })
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 240_000)
-    child.once('error', (error) => {
-      clearTimeout(timeout)
-      reject(error)
-    })
-    child.once('close', (code, signal) => {
-      clearTimeout(timeout)
-      if (code !== 0) {
-        reject(new Error(`global live child failed (${code ?? signal}): ${stderr.trim() || stdout.trim()}`))
-        return
-      }
-      try {
-        resolve(parseEarnChildOutput(stdout))
-      } catch (error) {
-        reject(error)
-      }
-    })
+async function runChildScript(script, command, extraEnvironment = {}, timeoutMs = 240_000) {
+  const result = await runBoundedProcess(process.execPath, [path.join(ROOT, 'scripts', script), command], {
+    cwd: ROOT,
+    env: { ...process.env, ...extraEnvironment },
+    timeoutMs,
+    label: `global ${command} child`,
   })
+  return parseEarnChildOutput(result.stdout)
 }
 
 async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReason, signal, nextPeriodicAt, feed }) {
@@ -3056,7 +3019,44 @@ async function watchDual() {
           })
           return watchState
         }
-        if (isDualOpportunityMiss(error)) {
+        if (isChildProcessDeadlineError(error) && ['EARN', 'GLOBAL'].includes(phase)) {
+          const globalPhase = phase === 'GLOBAL'
+          const counter = globalPhase ? 'consecutiveGlobalErrors' : 'consecutiveEarnErrors'
+          const consecutiveErrors = Number(watchState[counter] || 0) + 1
+          if (globalPhase) lastGlobalRunAt = Date.now()
+          watchState = {
+            ...watchState,
+            status: globalPhase ? 'DEGRADED_GLOBAL' : 'DEGRADED_EARN',
+            updatedAt: new Date().toISOString(),
+            usage: currentUsage ? watcherUsageView(currentUsage) : watchState?.usage,
+            [counter]: consecutiveErrors,
+            lastDecision: globalPhase ? 'GLOBAL_TIMEOUT_RETRY_SCHEDULED' : 'EARN_TIMEOUT_RETRY_SCHEDULED',
+            reason: errorText(error),
+            ...(globalPhase
+              ? {
+                  global: {
+                    ...watchState.global,
+                    status: 'DEGRADED_TIMEOUT',
+                    lastResult: 'CHILD_TIMEOUT_NO_UNRESOLVED_MUTATION',
+                    feed: sequencerFeed?.snapshot() || null,
+                  },
+                }
+              : {
+                  earnOnHood: {
+                    ...watchState.earnOnHood,
+                    status: 'DEGRADED_TIMEOUT',
+                    lastResult: 'CHILD_TIMEOUT_NO_UNRESOLVED_MUTATION',
+                  },
+                }),
+          }
+          writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+          appendAudit(globalPhase ? 'global_watch_child_timeout' : 'earn_watch_child_timeout', {
+            authorizationId: watchState.authorizationId,
+            consecutiveErrors,
+            timeoutMs: error.timeoutMs,
+            result: 'NO_UNRESOLVED_MUTATION_CONTINUE',
+          })
+        } else if (isDualOpportunityMiss(error)) {
           watchState = {
             ...watchState,
             status: 'RUNNING',
@@ -3176,7 +3176,13 @@ async function watchDual() {
         wallet: WALLET,
         authorizationId: readJson(DUAL_WATCH_ARM_PATH)?.authorizationId || null,
       }),
-      status: error.watchPolicyStop ? 'STOPPED_POLICY' : unresolved ? 'HALTED_UNKNOWN' : 'HALTED_STARTUP',
+      status: error.watchPolicyStop
+        ? 'STOPPED_POLICY'
+        : unresolved
+          ? 'HALTED_UNKNOWN'
+          : isTransientRpcError(error)
+            ? 'HALTED_RPC'
+            : 'HALTED_STARTUP',
       reason: errorText(error),
       transaction: unresolved?.hash || null,
       updatedAt: new Date().toISOString(),
@@ -3521,7 +3527,7 @@ async function main() {
   if (command === 'watch-arm') return armDualWatcher()
   if (command === 'watch') {
     const result = await watchDual()
-    if (result.status.startsWith('HALTED')) process.exitCode = 1
+    process.exitCode = dualWatcherExitCode(result.status)
     return result
   }
   if (command === 'watch-status') return dualWatchStatus()
