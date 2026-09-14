@@ -303,6 +303,9 @@ test('includes only receipt-gated universal executions in the operating totals',
     workset: { wakeKind: 'EVENT', totalRoutes: 12_091, touchedRoutes: 14, selectedRoutes: 8 },
     timing: { sourceToDecisionMs: 1_234 },
     rpc: { managedFallbackBudget: { consumedLogicalCalls: 432 } },
+    decisionClassification: 'VALID_NON_PROFITABLE',
+    evidenceCoverage: 'PARTIAL',
+    lifecycle: { eventId: 'ROBINHOOD_SEQUENCER:100:101', graphVersion: '0xgraph' },
   }
   input.runtime.usage.confirmedByBase.GLOBAL = 1
   input.auditRecords.push(
@@ -350,6 +353,9 @@ test('includes only receipt-gated universal executions in the operating totals',
   })
   assert.equal(snapshot.strategy.global.latestDecisionLatencyMs, 1_234)
   assert.equal(snapshot.strategy.global.attribution.confirmedLostRaces, null)
+  assert.equal(snapshot.strategy.global.attribution.latestClassification, 'VALID_NON_PROFITABLE')
+  assert.equal(snapshot.strategy.global.attribution.coverage, 'PARTIAL')
+  assert.equal(snapshot.strategy.global.attribution.lifecycle.eventId, 'ROBINHOOD_SEQUENCER:100:101')
   assert.equal(snapshot.recentExecutions[0].route, '跨平台 2 跳循环')
 })
 

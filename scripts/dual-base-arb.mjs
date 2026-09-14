@@ -2358,7 +2358,7 @@ function runEarnOnHoodShared(arm, signal, wakeReason) {
   )
 }
 
-function runGlobalShared(arm, signal, wakeReason) {
+function runGlobalShared(arm, signal, wakeReason, scheduling = {}) {
   return runChildScript(
     'global-arb.mjs',
     'execute',
@@ -2370,6 +2370,18 @@ function runGlobalShared(arm, signal, wakeReason) {
         signal?.firstSequenceNumber === null || signal?.firstSequenceNumber === undefined
           ? ''
           : String(signal.firstSequenceNumber),
+      GLOBAL_WAKE_LAST_SEQUENCE_NUMBER:
+        signal?.lastSequenceNumber === null || signal?.lastSequenceNumber === undefined
+          ? ''
+          : String(signal.lastSequenceNumber),
+      GLOBAL_WAKE_ENQUEUED_AT:
+        Number.isFinite(Number(scheduling.scheduledAt)) && Number(scheduling.scheduledAt) >= 0
+          ? new Date(Number(scheduling.scheduledAt)).toISOString()
+          : '',
+      GLOBAL_WAKE_CLAIMED_AT:
+        Number.isFinite(Number(scheduling.claimedAt)) && Number(scheduling.claimedAt) >= 0
+          ? new Date(Number(scheduling.claimedAt)).toISOString()
+          : '',
       GLOBAL_WAKE_ROUTE_ADDRESSES: (signal?.routeAddresses || []).join(','),
       GLOBAL_WAKE_CLASSIFICATION: signal?.classificationReason || '',
       GLOBAL_WAKE_REASON: wakeReason || '',
@@ -2436,7 +2448,17 @@ async function runChildScript(script, command, extraEnvironment = {}, timeoutMs 
   return parseEarnChildOutput(result.stdout)
 }
 
-async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReason, signal, nextPeriodicAt, feed }) {
+async function executeGlobalWatcherWake({
+  arm,
+  watchState,
+  deployments,
+  wakeReason,
+  signal,
+  nextPeriodicAt,
+  feed,
+  scheduledAt,
+  claimedAt,
+}) {
   appendAudit('global_watch_wake', {
     authorizationId: arm.authorizationId,
     wakeReason,
@@ -2469,13 +2491,16 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
     authorizationId: arm.authorizationId,
     wakeReason,
   })
-  const result = await runGlobalShared(arm, signal, wakeReason)
+  const result = await runGlobalShared(arm, signal, wakeReason, { scheduledAt, claimedAt })
   const feedPolicy = applyGlobalFeedWatchPolicy(feed)
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const usage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = result.status === 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED'
   const reverted = result.status === 'GLOBAL_EXECUTION_REVERTED_CONFIRMED'
   const budgetLimited = result.status === 'NO_SIGNATURE_RPC_BUDGET_EXHAUSTED'
+  const decisionClassification =
+    result.decisionClassification || result.latestOpportunity?.decisionClassification || null
+  const evidenceUnavailable = ['RPC_ERROR', 'STATE_UNAVAILABLE'].includes(decisionClassification)
   nextState = {
     ...nextState,
     status: 'RUNNING',
@@ -2488,13 +2513,20 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
         ? 'GLOBAL_EXECUTION_REVERTED_CONTINUE'
         : budgetLimited
           ? 'GLOBAL_RPC_BUDGET_LIMITED_NO_SIGNATURE'
-          : 'GLOBAL_NO_NET_OPPORTUNITY',
-    reason: budgetLimited ? result.reason : null,
+          : evidenceUnavailable
+            ? 'GLOBAL_EVIDENCE_UNAVAILABLE_NO_SIGNATURE'
+            : 'GLOBAL_NO_NET_OPPORTUNITY',
+    reason:
+      budgetLimited || evidenceUnavailable
+        ? result.reason ||
+          result.evaluation?.exact?.samples?.[0]?.reason ||
+          result.evaluation?.discovery?.samples?.[0]?.reason
+        : null,
     lastTransaction: confirmed || reverted ? result.transaction : nextState.lastTransaction,
     lastExecutionBaseAsset: confirmed ? 'GLOBAL' : nextState.lastExecutionBaseAsset,
     global: {
       ...nextState.global,
-      status: budgetLimited ? 'DEGRADED_RPC_BUDGET' : 'WATCHING',
+      status: budgetLimited ? 'DEGRADED_RPC_BUDGET' : evidenceUnavailable ? 'DEGRADED_EVIDENCE' : 'WATCHING',
       lastResult: result.status,
       lastTransaction: result.transaction || nextState.global.lastTransaction,
       lastNormalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
@@ -2503,6 +2535,10 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
       wake: result.wake || result.latestOpportunity?.wake || null,
       workset: result.workset || result.latestOpportunity?.workset || null,
       timing: result.timing || result.latestOpportunity?.timing || null,
+      lifecycle: result.lifecycle || result.latestOpportunity?.lifecycle || null,
+      evaluation: result.evaluation || result.latestOpportunity?.evaluation || null,
+      decisionClassification,
+      evidenceCoverage: result.evidenceCoverage || result.latestOpportunity?.evidenceCoverage || null,
       feed: feed.snapshot(),
     },
   }
@@ -2516,6 +2552,9 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
     evaluated: result.evaluated ?? null,
     grossPositive: result.grossPositive ?? null,
     exactNetPositive: result.exactNetPositive ?? null,
+    decisionClassification: result.decisionClassification || null,
+    evidenceCoverage: result.evidenceCoverage || null,
+    lifecycle: result.lifecycle || null,
     workset: result.workset || null,
     timing: result.timing || null,
   })
@@ -3130,6 +3169,8 @@ async function watchDual() {
               signal: scheduledWork.signal,
               nextPeriodicAt: scheduledWork.nextPeriodicAt,
               feed: sequencerFeed,
+              scheduledAt: scheduledWork.scheduledAt,
+              claimedAt: scheduledWork.claimedAt,
             })
             watchState = globalRun.watchState
             deployments = globalRun.deployments

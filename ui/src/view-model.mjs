@@ -62,8 +62,25 @@ export function globalExecutionOutcome(value) {
     NO_EXACT_NET_OPPORTUNITY: '精确报价后没有净利润过线',
     NO_SIGNATURE_RPC_BUDGET_EXHAUSTED: '读取额度不足，本轮未签名',
     RPC_ERROR_NO_SIGNATURE_OR_UNRESOLVED_MUTATION: '读取异常，本轮未签名',
+    PROFITABLE: '发现已通过净利润门槛的机会',
+    VALID_NON_PROFITABLE: '有效报价均未达到净利润门槛',
+    RPC_ERROR: '报价读取异常，不能据此判断没有机会',
+    STATE_UNAVAILABLE: '目标区块状态不可用，不能据此判断没有机会',
+    UNSUPPORTED: '候选路线尚不受当前执行器支持',
+    POLICY_FILTERED: '候选被 Gas、收益或风险门槛过滤',
   }
   return labels[value] || '结果待核验'
+}
+
+export function globalEvidenceCoverage(value) {
+  const labels = {
+    COMPLETE: '本轮证据完整',
+    PARTIAL: '本轮部分报价不可用',
+    UNAVAILABLE: '本轮市场证据不可用',
+    EMPTY: '本轮没有可评估路线',
+    PARTIAL_NO_SAME_BLOCK_COUNTERFACTUAL: '竞争归因证据仍不完整',
+  }
+  return labels[value] || '证据完整度待核验'
 }
 
 export function globalWakeKindLabel(value) {
@@ -286,6 +303,7 @@ export function humanStatus(status) {
     DEGRADED: '数据降级',
     DEGRADED_BOARD: '看板数据降级',
     DEGRADED_RPC: 'RPC 降级',
+    DEGRADED_EVIDENCE: '市场证据暂不可用',
     STOPPED: '已停止',
     HALTED: '已熔断',
     ARMED: '已授权',
