@@ -82,6 +82,41 @@ function appendRecord(record) {
   fs.chmodSync(EVENTS_PATH, 0o600)
 }
 
+function replaceRecords(records) {
+  writeAtomic(
+    EVENTS_PATH,
+    records.map((record) => JSON.stringify(record)).join('\n') + (records.length ? '\n' : ''),
+    0o600,
+  )
+}
+
+async function migrateRecords(client, records) {
+  let changed = false
+  const migrated = []
+  for (const record of records) {
+    if (
+      record?.recordSchemaVersion === 2 &&
+      typeof record?.actorAddress === 'string' &&
+      Array.isArray(record?.assetEconomics)
+    ) {
+      migrated.push(record)
+      continue
+    }
+    try {
+      const receipt = await client.getTransactionReceipt({ hash: record.transactionHash })
+      const replacement = reviewedReceiptRecord({ receipt, occurredAt: record.occurredAt })
+      migrated.push(replacement || record)
+      changed ||= Boolean(replacement)
+    } catch {
+      // Historical enrichment must never stop current receipt coverage. The
+      // untouched record remains explicit and can be retried on a later start.
+      migrated.push(record)
+    }
+  }
+  if (changed) replaceRecords(migrated)
+  return migrated
+}
+
 function knownOwnTransactions() {
   const snapshot = readJson(BUSINESS_SNAPSHOT, {})
   return new Set(
@@ -269,6 +304,7 @@ async function main() {
   if (fs.existsSync(STATE_PATH) && !state) throw new Error('competitor census state is invalid')
   if (!state || state.schemaVersion !== 2) state = await initialState(client)
   ;({ state, records } = await verifyCursor(client, state, records))
+  records = await migrateRecords(client, records)
   writeJson(STATE_PATH, state, 0o600)
   publish(state, records)
   let stopping = false

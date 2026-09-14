@@ -6,6 +6,7 @@ import {
   baseLiveSummary,
   businessHeadline,
   compactAddress,
+  competitionStrategyLabel,
   crossChainRouteResult,
   currentPage,
   decisionLabel,
@@ -59,18 +60,25 @@ test('funds map keeps live balances separate', () => {
 })
 
 test('dashboard navigation only accepts known workspaces', () => {
-  assert.equal(PAGES.length, 5)
+  assert.equal(PAGES.length, 6)
   assert.deepEqual(
     PAGES.map((page) => page.label),
-    ['概览', '机会', '交易', '资金', '策略'],
+    ['概览', '机会', '竞争', '交易', '资金', '策略'],
   )
   assert.equal(currentPage('#/portfolio'), 'portfolio')
   assert.equal(currentPage('#/opportunities'), 'opportunities')
   assert.equal(currentPage('#/radar'), 'opportunities')
   assert.equal(currentPage('#/episodes'), 'opportunities')
+  assert.equal(currentPage('#/competitors'), 'competition')
   assert.equal(currentPage('#/sources'), 'strategy')
   assert.equal(currentPage('#/execution/detail'), 'activity')
   assert.equal(currentPage('#/not-a-page'), 'overview')
+})
+
+test('competition labels state only the receipt-proven path shape', () => {
+  assert.equal(competitionStrategyLabel('EARN_VAULT_2_HOP_CLOSED_CYCLE'), 'Earn 内部 2 跳闭环')
+  assert.equal(competitionStrategyLabel('EARN_VAULT_4_HOP_CLOSED_CYCLE'), 'Earn 内部 4 跳闭环')
+  assert.equal(competitionStrategyLabel('UNKNOWN'), 'Earn 内部闭环')
 })
 
 test('opportunity presentation keeps live, near, filtered and unknown stages distinct', () => {

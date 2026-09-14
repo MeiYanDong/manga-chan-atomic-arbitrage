@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add a dedicated Chinese market-competition page for the seven-day Earn receipt census. Rank public competitor
+  addresses and route shapes by confirmed closed-cycle receipts, aggregate receipt-based WETH/ETH net estimates, and
+  preserve USDG/NVDA or unknown settlement profit in its native asset beside ETH Gas instead of calling the whole
+  amount uncertain. Rehydrate retained evidence into schema v3 without changing signing, execution or disclosure
+  policy, and treat a live `EXECUTING` watcher as running in the read-only business view.
+
 - Use a Nitro-v2-compatible WebSocket client for the Robinhood Sequencer Feed: send the required client-version and
   requested-sequence headers, negotiate per-message compression, begin at the already-read startup block, and resume
   from the next observed feed sequence. Replace fixed one-second rejection retries with bounded exponential backoff

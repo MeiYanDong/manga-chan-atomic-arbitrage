@@ -235,9 +235,11 @@ function spendablePrincipal(arm, state, baseAsset) {
   }
 }
 
-function processStatus(runtime, processAlive) {
+export function publicRuntimeStatus(runtime, processAlive) {
   if (!runtime) return 'NOT_CONFIGURED'
   if (!processAlive) return 'STOPPED'
+  if (runtime.status === 'EXECUTING') return 'RUNNING'
+  if (runtime.status === 'HALTED_UNKNOWN') return 'HALTED'
   return runtime.status || 'UNKNOWN'
 }
 
@@ -302,7 +304,7 @@ export function buildBusinessSnapshot({
     timeZone: BUSINESS_TIME_ZONE,
     accountingScope: 'NATIVE_ASSET_PROJECT_LEDGER_WITH_MARKED_STRATEGY_RESULT',
     strategy: {
-      status: processStatus(runtime, processAlive),
+      status: publicRuntimeStatus(runtime, processAlive),
       authorizationLifetime: arm?.authorizationLifetime || null,
       startedAt: runtime?.startedAt || null,
       lastDecision: runtime?.lastDecision || null,

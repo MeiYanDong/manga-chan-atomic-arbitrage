@@ -12,6 +12,7 @@ import {
   dailyReportSchedule,
   deriveDeliveryState,
   formatFeishuDailyReport,
+  publicRuntimeStatus,
   readPublicBusinessSnapshot,
   shanghaiDateKey,
 } from '../src/business-operations.mjs'
@@ -185,6 +186,12 @@ test('uses Beijing calendar boundaries and schedules the completed prior day', (
     periodKey: '2026-09-07',
     nextReportAt: '2026-09-09T01:05:00.000Z',
   })
+})
+
+test('an in-flight exact execution remains a healthy live process in read models', () => {
+  assert.equal(publicRuntimeStatus({ status: 'EXECUTING' }, true), 'RUNNING')
+  assert.equal(publicRuntimeStatus({ status: 'HALTED_UNKNOWN' }, true), 'HALTED')
+  assert.equal(publicRuntimeStatus({ status: 'RUNNING' }, false), 'STOPPED')
 })
 
 test('builds receipt-gated business results and compounds only authorized profit', () => {

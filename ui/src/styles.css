@@ -542,6 +542,28 @@ td small {
   font-variant-numeric: tabular-nums;
 }
 
+.competition-table .route-cell {
+  min-width: 220px;
+  max-width: 420px;
+  line-height: 1.55;
+}
+
+.address-details summary {
+  color: var(--blue);
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.address-details a {
+  display: block;
+  width: min(360px, 70vw);
+  margin-top: 7px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .text-button {
   padding: 0;
   border: 0;
@@ -845,12 +867,14 @@ td small {
   }
 
   .main-nav {
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 8px;
+    overflow-x: auto;
   }
 
   .main-nav a {
-    flex: 1;
+    flex: 0 0 auto;
+    min-width: 42px;
     justify-content: center;
   }
 

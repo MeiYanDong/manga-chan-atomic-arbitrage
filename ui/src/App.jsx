@@ -3,6 +3,8 @@ import {
   PAGES,
   assetClassLabel,
   baseLiveSummary,
+  competitionStrategyLabel,
+  compactAddress,
   currentPage,
   decisionLabel,
   evidenceClaimLabel,
@@ -149,7 +151,6 @@ function useOpportunityLedger(stage) {
     summary: null,
     items: [],
     episodes: [],
-    competitors: null,
     loading: true,
     error: null,
   })
@@ -164,7 +165,6 @@ function useOpportunityLedger(stage) {
           '/api/v1/opportunity-ledger/summary',
           `/api/v1/opportunity-ledger/items?stage=${encodeURIComponent(stage)}&limit=50`,
           stage === 'UNKNOWN' ? '/api/v1/opportunity-ledger/episodes?limit=50' : null,
-          '/api/v1/competitors/earn',
         ]
         const results = await Promise.allSettled(
           paths.map((path) => (path ? requestOptionalJson(path, controller.signal) : Promise.resolve(null))),
@@ -174,13 +174,11 @@ function useOpportunityLedger(stage) {
         const summary = value(0)
         const items = value(1)
         const episodes = value(2)
-        const competitors = value(3)
         if (!summary || !items) throw new Error('opportunity ledger is unavailable')
         setState({
           summary,
           items: items.items || [],
           episodes: episodes?.items || [],
-          competitors,
           loading: false,
           error: null,
         })
@@ -197,6 +195,37 @@ function useOpportunityLedger(stage) {
       controller?.abort()
     }
   }, [stage])
+  return state
+}
+
+function useCompetitionData(enabled) {
+  const [state, setState] = useState({ snapshot: null, loading: false, error: null })
+  useEffect(() => {
+    if (!enabled) return undefined
+    let mounted = true
+    let controller = null
+    const load = async () => {
+      controller?.abort()
+      controller = new AbortController()
+      setState((before) => ({ ...before, loading: true }))
+      try {
+        const snapshot = await requestOptionalJson('/api/v1/competitors/earn', controller.signal)
+        if (!mounted) return
+        if (!snapshot) throw new Error('competition snapshot is unavailable')
+        setState({ snapshot, loading: false, error: null })
+      } catch (error) {
+        if (!mounted || error.name === 'AbortError') return
+        setState((before) => ({ ...before, loading: false, error: error.message }))
+      }
+    }
+    load()
+    const interval = setInterval(load, 15_000)
+    return () => {
+      mounted = false
+      clearInterval(interval)
+      controller?.abort()
+    }
+  }, [enabled])
   return state
 }
 
@@ -1055,85 +1084,248 @@ function HistoricalOpportunityTable({ items }) {
   )
 }
 
-function CompetitorEvidence({ snapshot }) {
+function nativeGrossText(items, { excludeWeth = false } = {}) {
+  const rendered = (items || [])
+    .filter((item) => !excludeWeth || item.symbol !== 'WETH')
+    .filter((item) => item.grossProfit !== null && item.grossProfit !== undefined)
+    .map((item) => `${number(item.grossProfit, item.symbol === 'USDG' ? 4 : 8, true)} ${item.symbol}`)
+  return rendered.length > 0 ? rendered.join(' · ') : null
+}
+
+function competitorProfit(item) {
+  const normalizedReceipts = Math.max(
+    0,
+    Number(item?.confirmedCycleReceipts || 0) - Number(item?.unnormalizedReceipts || 0),
+  )
+  const native = nativeGrossText(item?.nativeGrossByAsset, { excludeWeth: true })
+  return {
+    net: normalizedReceipts > 0 ? `${number(item.estimatedNetEth, 8, true)} ETH` : '净利润待统一估值',
+    native: native ? `${native} 原币毛利` : null,
+  }
+}
+
+function evidenceProfit(item) {
+  if (item?.estimatedNetEth !== null && item?.estimatedNetEth !== undefined) {
+    return {
+      primary: `${number(item.estimatedNetEth, 8, true)} ETH`,
+      secondary: `已扣链上 Gas ${number(item.gasCostEth, 8)} ETH`,
+    }
+  }
+  const native = nativeGrossText(item?.assetEconomics)
+  return {
+    primary: native ? `${native} 原币毛利` : '原币毛利已确认',
+    secondary: `Gas ${number(item?.gasCostEth, 8)} ETH；净利润待同区块估值`,
+  }
+}
+
+function CompetitorAddress({ alias, address }) {
+  if (!address) return alias || '地址待回填'
+  return (
+    <details className="address-details">
+      <summary>{alias || compactAddress(address)}</summary>
+      <a href={`https://robinhoodchain.blockscout.com/address/${address}`} target="_blank" rel="noreferrer">
+        {address}
+      </a>
+    </details>
+  )
+}
+
+function CompetitionPage({ state }) {
+  const snapshot = state.snapshot
   const summary = snapshot?.summary
   const leaders = snapshot?.leaders || []
+  const routes = snapshot?.routes || []
   const evidence = snapshot?.recentEvidence || []
   const generatedAtMs = Date.parse(snapshot?.generatedAt || '')
   const stale = !Number.isFinite(generatedAtMs) || Date.now() - generatedAtMs > 2 * 60 * 1_000
   const status = snapshot && !stale ? snapshot.status : 'STALE'
   return (
-    <Section title="竞争者与被抢证据" side={<Status value={snapshot ? status : 'PARTIAL'} />}>
-      <p className="section-note">只计入审查路线的链上成交回执；普通 swap、未知报价和历史正价差不会被冒充为竞争。</p>
-      <dl className="fact-grid competitor-facts">
+    <div className="page-stack">
+      <PageTitle
+        title="市场竞争"
+        note="用链上回执回答谁在成交、赚了多少、走什么路径；无法证明的策略细节保持未知。"
+        side={<Status value={snapshot ? status : state.loading ? 'PENDING' : 'PARTIAL'} />}
+      />
+      {state.error && <Notice tone="danger">竞争数据暂时不可用，页面会保留最近一次成功结果并自动重试。</Notice>}
+      <section className="metric-strip" aria-label="竞争市场核心指标">
         <div>
-          <dt>已审查交易</dt>
-          <dd>{summary?.transactionsReviewed ?? '—'}</dd>
+          <span>已确认竞争者</span>
+          <strong>{summary?.distinctExternalActors ?? '—'}</strong>
+          <small>外部地址，按回执发送者去重</small>
         </div>
         <div>
-          <dt>外部闭环回执</dt>
-          <dd>{summary?.externalCycleReceipts ?? '—'}</dd>
+          <span>外部闭环成交</span>
+          <strong>{summary?.externalCycleReceipts ?? '—'}</strong>
+          <small>最近 {snapshot?.coverage?.retentionDays ?? '—'} 天 Earn Vault</small>
         </div>
         <div>
-          <dt>已确认竞争者</dt>
-          <dd>{summary?.distinctExternalActors ?? '—'}</dd>
+          <span>已估算路线净收益</span>
+          <strong>{number(summary?.estimatedExternalNetEth, 8, true)}</strong>
+          <small>ETH · WETH 闭环，已扣交易 Gas</small>
         </div>
         <div>
-          <dt>已证明被抢</dt>
-          <dd>{summary?.confirmedLostRaces ?? '—'}</dd>
+          <span>跨资产待估值</span>
+          <strong>{summary?.unnormalizedExternalReceipts ?? '—'}</strong>
+          <small>笔 · 原币毛利已确认，尚未扣统一 Gas</small>
         </div>
-      </dl>
-      {!snapshot && <p className="coverage-note">竞争者链上取证正在接入；当前不能声称没有竞争者。</p>}
-      {snapshot && stale && <p className="coverage-note">竞争者快照已过期，当前数字不能当作实时结论。</p>}
-      {snapshot?.coverage?.note && <p className="coverage-note">{snapshot.coverage.note}</p>}
-      {leaders.length > 0 && (
+      </section>
+      <Section title="竞争者排行" side={<span className="section-summary">按已确认闭环次数排序</span>}>
+        <p className="section-note">
+          “收益”是闭环回执中的资产增量减该笔链上 Gas，不等于对方钱包的全部经营利润，也不包含私有基础设施成本。
+        </p>
         <div className="table-wrap">
-          <table>
+          <table className="competition-table">
             <thead>
               <tr>
-                <th>参与者</th>
-                <th className="numeric">精确闭环回执</th>
-                <th className="numeric">路线净正估算</th>
+                <th>竞争者</th>
+                <th className="numeric">闭环成交</th>
+                <th>近 7 日可证收益</th>
+                <th>最常用路径</th>
                 <th>最后出现</th>
               </tr>
             </thead>
             <tbody>
-              {leaders.map((item) => (
-                <tr key={item.actorAlias}>
-                  <td>{item.actorAlias}</td>
-                  <td className="numeric">{item.confirmedCycleReceipts}</td>
-                  <td className="numeric">{item.positiveRouteEstimates}</td>
-                  <td>{formatBeijingTime(item.lastSeenAt)}</td>
+              {leaders.map((item) => {
+                const profit = competitorProfit(item)
+                return (
+                  <tr key={item.actorAddress || item.actorAlias}>
+                    <td>
+                      <CompetitorAddress alias={item.actorAlias} address={item.actorAddress} />
+                    </td>
+                    <td className="numeric">
+                      <strong>{item.confirmedCycleReceipts}</strong>
+                      <small>{item.distinctRoutes ?? '—'} 条不同路径</small>
+                    </td>
+                    <td>
+                      <strong className={valueTone(item.estimatedNetEth)}>{profit.net}</strong>
+                      <small>{profit.native || `${item.positiveRouteEstimates ?? '—'} 笔净正估算`}</small>
+                    </td>
+                    <td className="route-cell">{item.topRoute || '路径待回填'}</td>
+                    <td>{formatBeijingTime(item.lastSeenAt)}</td>
+                  </tr>
+                )
+              })}
+              {leaders.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="empty-cell">
+                    竞争者回执正在回溯；当前不能据此声称没有竞争者。
+                  </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
-      )}
-      {evidence.length > 0 && (
-        <details className="technical-details">
-          <summary>查看链上回执证据</summary>
-          <ol className="evidence-list">
-            {evidence.map((item) => (
-              <li key={item.evidenceId}>
-                <a
-                  href={`https://robinhoodchain.blockscout.com/tx/${item.transactionHash}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {item.actorAlias} · {item.route}
-                </a>{' '}
-                ·{' '}
-                {item.estimatedNetEth === null
-                  ? '非 ETH 结算，净额尚未统一折算'
-                  : `路线净额估算 ${number(item.estimatedNetEth, 6, true)} ETH`}{' '}
-                · {formatBeijingTime(item.occurredAt)}
-              </li>
-            ))}
-          </ol>
-        </details>
-      )}
-    </Section>
+      </Section>
+      <Section title="策略与路径" side={<span className="section-summary">只陈述回执可证明的交易形态</span>}>
+        <div className="table-wrap">
+          <table className="competition-table">
+            <thead>
+              <tr>
+                <th>路径</th>
+                <th>策略形态</th>
+                <th className="numeric">竞争者</th>
+                <th className="numeric">成交</th>
+                <th>可证收益</th>
+                <th>最后出现</th>
+              </tr>
+            </thead>
+            <tbody>
+              {routes.map((item) => {
+                const profit = competitorProfit(item)
+                return (
+                  <tr key={item.route}>
+                    <td className="route-cell">{item.route}</td>
+                    <td>{competitionStrategyLabel(item.strategyShape)}</td>
+                    <td className="numeric">{item.distinctActors}</td>
+                    <td className="numeric">{item.confirmedCycleReceipts}</td>
+                    <td>
+                      <strong className={valueTone(item.estimatedNetEth)}>{profit.net}</strong>
+                      {profit.native && <small>{profit.native}</small>}
+                    </td>
+                    <td>{formatBeijingTime(item.lastSeenAt)}</td>
+                  </tr>
+                )
+              })}
+              {routes.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="empty-cell">
+                    路径聚合正在生成
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+      <Section title="最近成交证据" side={<span className="section-summary">精确路径延迟 5 分钟公开</span>}>
+        <div className="table-wrap">
+          <table className="competition-table">
+            <thead>
+              <tr>
+                <th>竞争者</th>
+                <th>策略 / 路径</th>
+                <th>可证收益</th>
+                <th>时间 / 回执</th>
+              </tr>
+            </thead>
+            <tbody>
+              {evidence.map((item) => {
+                const profit = evidenceProfit(item)
+                return (
+                  <tr key={item.evidenceId}>
+                    <td>
+                      <CompetitorAddress alias={item.actorAlias} address={item.actorAddress} />
+                    </td>
+                    <td className="route-cell">
+                      <strong>{competitionStrategyLabel(item.strategyShape)}</strong>
+                      <small>{item.route}</small>
+                    </td>
+                    <td>
+                      <strong className={item.estimatedNetEth === null ? '' : valueTone(item.estimatedNetEth)}>
+                        {profit.primary}
+                      </strong>
+                      <small>{profit.secondary}</small>
+                    </td>
+                    <td>
+                      <strong>{formatBeijingTime(item.occurredAt)}</strong>
+                      <small>
+                        <a
+                          href={`https://robinhoodchain.blockscout.com/tx/${item.transactionHash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          核对链上回执
+                        </a>
+                      </small>
+                    </td>
+                  </tr>
+                )
+              })}
+              {evidence.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="empty-cell">
+                    最近成交证据正在生成
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+      <Section title="数据边界">
+        {!snapshot && <p className="coverage-note">竞争者链上取证正在接入；当前不能声称没有竞争者。</p>}
+        {snapshot && stale && <p className="coverage-note">竞争者快照已过期，当前数字不能当作实时结论。</p>}
+        {snapshot?.coverage?.note && <p className="coverage-note">{snapshot.coverage.note}</p>}
+        <p className="coverage-note">
+          当前覆盖 Earn Vault 内部闭环；Earn 与 Uniswap v2/v3/v4
+          的跨协议竞争归因尚未纳入本页，因此这里不是全链竞争者总表。
+        </p>
+        <p className="coverage-note">
+          已审查 {summary?.transactionsReviewed ?? '—'}{' '}
+          笔交易；“被谁抢走”仍需同区块反事实和提交时序，当前保持未知，不用成交数量代替。
+        </p>
+      </Section>
+    </div>
   )
 }
 
@@ -1159,7 +1351,9 @@ function OpportunitiesPage({ data }) {
       </Section>
       {stage === 'UNKNOWN' && <HistoricalOpportunityTable items={ledger.episodes} />}
       <CrossChainRouteLedger snapshot={data.chainOpportunities} />
-      <CompetitorEvidence snapshot={ledger.competitors} />
+      <Notice tone="plain">
+        竞争者、累计收益与常用路径已移至独立的<a href="#/competition">市场竞争</a>页面。
+      </Notice>
       <p className="page-footnote">当前只有链上成交回执与资产增量可记为收益；只读报价、模拟与历史价差均不计收益。</p>
     </div>
   )
@@ -1491,6 +1685,7 @@ export default function App() {
   }, [])
   const state = useOperationsData()
   const strategyOpportunities = useStrategyOpportunities(page === 'strategy')
+  const competition = useCompetitionData(page === 'competition')
 
   useEffect(() => {
     const update = () => {
@@ -1508,6 +1703,8 @@ export default function App() {
     content = <FundsPage portfolio={state.data.business?.portfolio} />
   } else if (page === 'opportunities') {
     content = <OpportunitiesPage data={state.data} />
+  } else if (page === 'competition') {
+    content = <CompetitionPage state={competition} />
   } else if (page === 'strategy') {
     content = (
       <StrategyPage data={state.data} opportunityData={strategyOpportunities} onOpenOpportunity={openOpportunity} />
