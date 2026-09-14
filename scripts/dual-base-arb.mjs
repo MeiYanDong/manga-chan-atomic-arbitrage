@@ -46,6 +46,15 @@ import {
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
 import { globalSettlementAssets } from '../src/global-settlement-assets.mjs'
 import { GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE } from '../src/global-liquidity-graph.mjs'
+import { GLOBAL_ROUTE_WORKSET_POLICY } from '../src/global-route-selection.mjs'
+import {
+  GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+  GLOBAL_FEED_MATCH_POLICY,
+  GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+  buildGlobalFeedWatchPolicy,
+  classifyGlobalFeedMatches,
+} from '../src/global-wake-policy.mjs'
 import { EARN_SIZING_ALGORITHM, earnOnHoodGasSolvency } from '../src/earnonhood-live-policy.mjs'
 import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
 import {
@@ -1016,13 +1025,17 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     !RUNTIME_CONFIG.globalWatchEnabled ||
     arm.global?.enabled !== true ||
     arm.global.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
-    arm.global.feedPolicy !== 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE' ||
+    arm.global.feedPolicy !== GLOBAL_FEED_MATCH_POLICY ||
+    arm.global.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||
     arm.global.submissionPolicy !== 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK' ||
     BigInt(arm.global.minimumNetProfitUsdgWei) !== configuredMinimumNet ||
     Number(arm.global.maximumRoutesPerWake) !== RUNTIME_CONFIG.globalMaxRoutesPerWake ||
+    Number(arm.global.maximumEventRoutesPerWake) !== GLOBAL_EVENT_MAX_ROUTES_PER_WAKE ||
     Number(arm.global.quoteConcurrency) !== RUNTIME_CONFIG.globalQuoteConcurrency ||
     Number(arm.global.managedMaximumCandidatesPerWake) !== GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE ||
     Number(arm.global.managedFallbackDailyLogicalCallCap) !== RUNTIME_CONFIG.globalManagedFallbackDailyLogicalCallCap ||
+    Number(arm.global.managedFallbackEventLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP ||
+    Number(arm.global.managedFallbackRecoveryLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP ||
     arm.global.settlementAssets.length !== configuredGlobalSettlementAssets.length ||
     arm.global.settlementAssets.some(
       (token, index) => token.toLowerCase() !== configuredGlobalSettlementAssets[index].toLowerCase(),
@@ -2077,11 +2090,15 @@ async function armDualWatcher() {
         ),
         graphPolicy: 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
         routePolicy: 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS',
+        routeWorksetPolicy: GLOBAL_ROUTE_WORKSET_POLICY,
         maximumRoutesPerWake: RUNTIME_CONFIG.globalMaxRoutesPerWake,
+        maximumEventRoutesPerWake: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
         quoteConcurrency: RUNTIME_CONFIG.globalQuoteConcurrency,
         managedMaximumCandidatesPerWake: GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
         managedFallbackDailyLogicalCallCap: RUNTIME_CONFIG.globalManagedFallbackDailyLogicalCallCap,
-        feedPolicy: 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE',
+        managedFallbackEventLogicalCallCap: GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+        managedFallbackRecoveryLogicalCallCap: GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+        feedPolicy: GLOBAL_FEED_MATCH_POLICY,
         submissionPolicy: 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK',
         minimumNetProfitUsdgWei: minimumNetProfitUsdg.toString(),
         minimumWakeIntervalMs: RUNTIME_CONFIG.globalWatchMinIntervalMs,
@@ -2186,8 +2203,12 @@ async function armDualWatcher() {
         fundingPolicy: arm.global.fundingPolicy,
         settlementAssets: arm.global.settlementAssets,
         feedPolicy: arm.global.feedPolicy,
+        routeWorksetPolicy: arm.global.routeWorksetPolicy,
         submissionPolicy: arm.global.submissionPolicy,
+        maximumEventRoutesPerWake: arm.global.maximumEventRoutesPerWake,
         managedFallbackDailyLogicalCallCap: arm.global.managedFallbackDailyLogicalCallCap,
+        managedFallbackEventLogicalCallCap: arm.global.managedFallbackEventLogicalCallCap,
+        managedFallbackRecoveryLogicalCallCap: arm.global.managedFallbackRecoveryLogicalCallCap,
         minimumWakeIntervalMs: arm.global.minimumWakeIntervalMs,
         periodicMs: arm.global.periodicMs,
       },
@@ -2314,7 +2335,7 @@ function runEarnOnHoodShared(arm, signal) {
   })
 }
 
-function runGlobalShared(arm, signal) {
+function runGlobalShared(arm, signal, wakeReason) {
   return runChildScript('global-arb.mjs', 'execute', {
     GLOBAL_SHARED_AUTHORIZATION_ID: arm.authorizationId,
     GLOBAL_SHARED_WATCH_PID: String(process.pid),
@@ -2324,33 +2345,22 @@ function runGlobalShared(arm, signal) {
         ? ''
         : String(signal.firstSequenceNumber),
     GLOBAL_WAKE_MATCHED_ADDRESSES: (signal?.matchedAddresses || []).join(','),
+    GLOBAL_WAKE_REASON: wakeReason || '',
   })
 }
 
-function globalFeedWatchAddresses() {
-  const addresses = new Map()
-  const add = (value) => {
-    try {
-      const address = getAddress(value)
-      addresses.set(address.toLowerCase(), address)
-    } catch {}
-  }
-  ;[MORPHO, EARN_VAULT, EARN_ROUTER, POOL_MANAGER, V3_FACTORY, GENERIC_USDG, GENERIC_WETH].forEach(add)
-  const catalog = readJson(GLOBAL_CATALOG_PATH)
-  for (const pool of catalog?.earn?.pools || []) {
-    add(pool.address)
-    for (const token of pool.tokens || []) add(token.address)
-  }
-  for (const venue of ['v2Pools', 'v3Pools', 'v4Pools']) {
-    for (const pool of catalog?.uniswap?.[venue] || []) {
-      add(pool.address || pool.pool)
-      add(pool.token0)
-      add(pool.token1)
-      add(pool.hooks)
-    }
-  }
-  if (addresses.size > 1_024) throw new Error('global feed address filter exceeds its safety bound')
-  return [...addresses.values()]
+function globalFeedWatchPolicy() {
+  return buildGlobalFeedWatchPolicy(readJson(GLOBAL_CATALOG_PATH), {
+    protocolAddresses: [EARN_VAULT, EARN_ROUTER, POOL_MANAGER],
+    ignoredAddresses: [MORPHO, V3_FACTORY],
+  })
+}
+
+function applyGlobalFeedWatchPolicy(feed) {
+  const policy = globalFeedWatchPolicy()
+  feed.setWatchedAddresses(policy.watchedAddresses)
+  feed.setMatchFilter((signal) => classifyGlobalFeedMatches(signal.matchedAddresses, policy).actionable)
+  return policy
 }
 
 function runChildScript(script, command, extraEnvironment = {}) {
@@ -2416,28 +2426,33 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
     authorizationId: arm.authorizationId,
     wakeReason,
   })
-  const result = await runGlobalShared(arm, signal)
-  feed.setWatchedAddresses(globalFeedWatchAddresses())
+  const result = await runGlobalShared(arm, signal, wakeReason)
+  applyGlobalFeedWatchPolicy(feed)
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const usage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = result.status === 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED'
+  const budgetLimited = result.status === 'NO_SIGNATURE_RPC_BUDGET_EXHAUSTED'
   nextState = {
     ...nextState,
     status: 'RUNNING',
     updatedAt: new Date().toISOString(),
     usage: watcherUsageView(usage),
     consecutiveGlobalErrors: 0,
-    lastDecision: confirmed ? 'GLOBAL_CONFIRMED_EXECUTION' : 'GLOBAL_NO_NET_OPPORTUNITY',
-    reason: null,
+    lastDecision: confirmed
+      ? 'GLOBAL_CONFIRMED_EXECUTION'
+      : budgetLimited
+        ? 'GLOBAL_RPC_BUDGET_LIMITED_NO_SIGNATURE'
+        : 'GLOBAL_NO_NET_OPPORTUNITY',
+    reason: budgetLimited ? result.reason : null,
     lastTransaction: confirmed ? result.transaction : nextState.lastTransaction,
     lastExecutionBaseAsset: confirmed ? 'GLOBAL' : nextState.lastExecutionBaseAsset,
     global: {
       ...nextState.global,
-      status: 'WATCHING',
+      status: budgetLimited ? 'DEGRADED_RPC_BUDGET' : 'WATCHING',
       lastResult: result.status,
       lastTransaction: result.transaction || nextState.global.lastTransaction,
       lastNormalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
-      graph: result.graph || result.latestOpportunity?.graph || null,
+      graph: result.graph || result.latestOpportunity?.graph || nextState.global.graph || null,
       rpc: result.rpc || result.latestOpportunity?.rpc || null,
       feed: feed.snapshot(),
     },
@@ -2716,9 +2731,11 @@ async function watchDual() {
     let lastGlobalRunAt = 0
     let pendingGlobalWake = 'STARTUP'
     let pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
+    const initialGlobalFeedPolicy = globalFeedWatchPolicy()
     sequencerFeed = new SequencerFeedWakeClient({
-      watchedAddresses: globalFeedWatchAddresses(),
+      watchedAddresses: initialGlobalFeedPolicy.watchedAddresses,
       minimumAddressMatches: 1,
+      matchFilter: (signal) => classifyGlobalFeedMatches(signal.matchedAddresses, initialGlobalFeedPolicy).actionable,
       onWake: (signal) => {
         pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
         pendingGlobalSignal = signal
@@ -3211,8 +3228,12 @@ async function dualWatchStatus() {
               fundingPolicy: arm.global.fundingPolicy,
               settlementAssets: arm.global.settlementAssets,
               feedPolicy: arm.global.feedPolicy,
+              routeWorksetPolicy: arm.global.routeWorksetPolicy,
               submissionPolicy: arm.global.submissionPolicy,
+              maximumEventRoutesPerWake: arm.global.maximumEventRoutesPerWake,
               managedFallbackDailyLogicalCallCap: arm.global.managedFallbackDailyLogicalCallCap,
+              managedFallbackEventLogicalCallCap: arm.global.managedFallbackEventLogicalCallCap,
+              managedFallbackRecoveryLogicalCallCap: arm.global.managedFallbackRecoveryLogicalCallCap,
               minimumWakeIntervalMs: arm.global.minimumWakeIntervalMs,
               periodicMs: arm.global.periodicMs,
             }

@@ -3,6 +3,8 @@ import test from 'node:test'
 import {
   DailyHotRpcBudget,
   HotRpcLaneDecision,
+  LogicalCallBudget,
+  consumeNestedLogicalCallBudgets,
   jsonRpcCallCount,
   jsonRpcOperationLabels,
   latencyPercentiles,
@@ -126,6 +128,38 @@ test('logical call accounting understands individual and batched JSON-RPC bodies
   )
   assert.equal(jsonRpcCallCount('not-json'), 1)
   assert.equal(jsonRpcCallCount(undefined), 1)
+})
+
+test('per-wake logical-call budget refuses overflow before any debit', () => {
+  const budget = new LogicalCallBudget({ logicalCallCap: 8, label: 'RECOVERY_WAKE' })
+  assert.equal(budget.consumeLogicalCalls(6).consumed, true)
+  assert.equal(budget.consumeLogicalCalls(3).consumed, false)
+  assert.equal(budget.snapshot().consumedLogicalCalls, 6)
+  assert.equal(budget.consumeLogicalCalls(2).consumed, true)
+  assert.deepEqual(budget.snapshot(), {
+    label: 'RECOVERY_WAKE',
+    logicalCallCap: 8,
+    consumedLogicalCalls: 8,
+    remainingLogicalCalls: 0,
+  })
+})
+
+test('a per-wake refusal does not debit the persisted daily budget', () => {
+  const perWakeBudget = new LogicalCallBudget({ logicalCallCap: 2 })
+  const dailyBudget = new DailyHotRpcBudget({
+    dailyEventCandidateCap: 1,
+    dailyLogicalCallCap: 10,
+    now: () => Date.parse('2026-09-14T00:00:00Z'),
+  })
+  assert.deepEqual(consumeNestedLogicalCallBudgets({ perWakeBudget, dailyBudget, count: 2 }), {
+    consumed: true,
+    exhausted: null,
+  })
+  assert.deepEqual(consumeNestedLogicalCallBudgets({ perWakeBudget, dailyBudget, count: 1 }), {
+    consumed: false,
+    exhausted: 'PER_WAKE',
+  })
+  assert.equal(dailyBudget.snapshot().consumedLogicalCalls, 2)
 })
 
 test('managed RPC telemetry classifies operations without retaining request payloads', () => {

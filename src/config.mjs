@@ -149,7 +149,7 @@ export function loadRuntimeConfig(environment = process.env) {
     globalWatchMinIntervalMs: boundedInteger(value('GLOBAL_WATCH_MIN_INTERVAL_MS'), 15_000, 1_000, 300_000),
     globalWatchPeriodicMs: boundedInteger(value('GLOBAL_WATCH_PERIODIC_MS'), 300_000, 30_000, 3_600_000),
     globalExtraSettlementAssets: value('GLOBAL_EXTRA_SETTLEMENT_ASSETS') || '',
-    globalMaxRoutesPerWake: boundedInteger(value('GLOBAL_MAX_ROUTES_PER_WAKE'), 32, 4, 256),
+    globalMaxRoutesPerWake: boundedInteger(value('GLOBAL_MAX_ROUTES_PER_WAKE'), 32, 8, 256),
     globalQuoteConcurrency: boundedInteger(value('GLOBAL_QUOTE_CONCURRENCY'), 8, 1, 16),
     globalManagedFallbackDailyLogicalCallCap: boundedInteger(
       value('GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP'),

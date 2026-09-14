@@ -141,7 +141,7 @@ sudo systemctl --no-pager --full status manga-global-deploy.service
 Require `UNIVERSAL_DEPLOYMENT_CONFIRMED`, a successful canonical receipt, exact runtime hash, operator and Morpho
 readback, and equal latest/pending nonce. Then run `npm run global:preflight` without a signer. A positive quote is still
 not profit and a negative result must not be turned into a Gas-spending probe. Start `manga-dual-arm.service` only after
-`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v8 watcher may
+`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v9 watcher may
 then execute a route only after current exact simulation; accepted effects require receipt, `Executed` event and balance
 delta.
 
@@ -152,6 +152,13 @@ restart-durable UTC-day budget has capacity. The default ceiling is
 `GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=20000`; changing it requires a fresh authorization. A deterministic EVM
 revert or malformed request never triggers provider fallback. Budget exhaustion is a signer-free coverage degradation,
 not permission to lower the profit floor or broadcast a probe.
+
+Feed filtering and route work are also authorization-bound. One reviewed protocol/pool address may wake the event lane;
+a token-only frame needs two distinct graph assets, so a lone WETH or USDG transfer is ignored. An accepted event wake
+quotes at most eight related routes and may consume at most 32 managed fallback calls. Startup and five-minute recovery
+retain broad rotating coverage but may consume at most eight managed fallback calls per process. These per-wake limits
+are non-persistent because each global child is exactly one wake; the daily counter remains persistent and is never
+debited when the per-wake check refuses a request.
 
 If deployment or execution becomes UNKNOWN, leave the watcher stopped and run `npm run global:reconcile` (or the parent
 `dual:reconcile`). Reconciliation may replay only the exact persisted raw transaction. Never deploy a second universal

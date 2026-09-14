@@ -33,6 +33,76 @@ test('refreshes and deduplicates the bounded feed address filter without reconne
   client.setWatchedAddresses([address, address.toLowerCase()])
   assert.equal(client.snapshot().watchedAddresses, 1)
   assert.throws(() => client.setWatchedAddresses(['invalid']), /invalid/)
+  assert.throws(() => client.setMatchFilter(null), /must be a function/)
+})
+
+test('counts policy-rejected matched frames as filtered and wakes only actionable matches', async () => {
+  const first = '0x0000000000000000000000000000000000000001'
+  const second = '0x0000000000000000000000000000000000000002'
+  class FakeWebSocket {
+    static latest = null
+
+    constructor() {
+      this.readyState = 0
+      this.listeners = new Map()
+      FakeWebSocket.latest = this
+    }
+
+    addEventListener(name, listener) {
+      this.listeners.set(name, listener)
+    }
+
+    emit(name, event = {}) {
+      this.listeners.get(name)?.(event)
+    }
+
+    close() {
+      this.readyState = 3
+    }
+  }
+  const wakes = []
+  const client = new SequencerFeedWakeClient({
+    WebSocketImpl: FakeWebSocket,
+    watchedAddresses: [first, second],
+    matchFilter: (signal) => signal.matchedAddresses.length >= 2,
+    onWake: (signal) => wakes.push(signal),
+  })
+  client.start()
+  FakeWebSocket.latest.readyState = 1
+  FakeWebSocket.latest.emit('open')
+  const frame = (sequenceNumber, addresses) =>
+    JSON.stringify({
+      version: 1,
+      messages: [
+        {
+          sequenceNumber,
+          message: {
+            message: {
+              l2Msg: Buffer.concat(addresses.map((address) => Buffer.from(address.slice(2), 'hex'))).toString('base64'),
+            },
+          },
+        },
+      ],
+    })
+  FakeWebSocket.latest.emit('message', { data: frame(1, [first]) })
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 0))
+  FakeWebSocket.latest.emit('message', { data: frame(2, [first, second]) })
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 0))
+  assert.equal(wakes.length, 1)
+  assert.deepEqual(client.snapshot(), {
+    connects: 1,
+    frames: 2,
+    wakes: 1,
+    filtered: 1,
+    malformed: 0,
+    errors: 0,
+    reconnects: 0,
+    connected: true,
+    lastSequenceNumber: 2,
+    feedUrl: 'wss://feed.mainnet.chain.robinhood.com',
+    watchedAddresses: 2,
+  })
+  client.stop()
 })
 
 test('direct sequencer acceptance does not duplicate the submission', async () => {

@@ -120,6 +120,7 @@ test('generic exact-preflight candidate count is bounded at configuration load',
   assert.throws(() => loadRuntimeConfig({ EARN_LIVE_REFINEMENT_POINTS: '1' }), /2\.\.16/)
   assert.throws(() => loadRuntimeConfig({ EARN_WATCH_EVENT_POLL_MS: '999' }), /1000\.\.60000/)
   assert.throws(() => loadRuntimeConfig({ GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP: '999' }), /1000\.\.1000000/)
+  assert.throws(() => loadRuntimeConfig({ GLOBAL_MAX_ROUTES_PER_WAKE: '7' }), /8\.\.256/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_AUTO_RENEW: 'yes' }), /0 或 1/)
   assert.throws(() => loadRuntimeConfig({ MANGA_GENERIC_WATCH_UNTIL_REVOKED: 'yes' }), /0 或 1/)
   assert.throws(

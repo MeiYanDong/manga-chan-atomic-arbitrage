@@ -2,12 +2,20 @@ import { keccak256, toHex } from 'viem'
 import { EARN_SIZING_ALGORITHM } from './earnonhood-live-policy.mjs'
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from './earnonhood-routes.mjs'
 import { GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE } from './global-liquidity-graph.mjs'
+import { GLOBAL_ROUTE_WORKSET_POLICY } from './global-route-selection.mjs'
+import {
+  GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+  GLOBAL_FEED_MATCH_POLICY,
+  GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+} from './global-wake-policy.mjs'
 import { stableStringify } from './journal.mjs'
 import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v8'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v9'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8 = 'dual-base-loopback-escalation-v8'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7 = 'dual-base-loopback-escalation-v7'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6 = 'dual-base-loopback-escalation-v6'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5 = 'dual-base-loopback-escalation-v5'
@@ -328,6 +336,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V5,
@@ -340,6 +349,9 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.principalPolicy !== DUAL_PRINCIPAL_POLICY ||
     arm.expiresAt !== undefined
   ) {
+    return { allowed: false, reason: 'invalid-authorization-policy' }
+  }
+  if (arm.policyVersion === LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8) {
     return { allowed: false, reason: 'invalid-authorization-policy' }
   }
   if (
@@ -358,9 +370,11 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       arm.global?.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
       arm.global?.graphPolicy !== 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY' ||
       arm.global?.routePolicy !== 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS' ||
+      arm.global?.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||
       !Number.isSafeInteger(arm.global?.maximumRoutesPerWake) ||
-      arm.global.maximumRoutesPerWake < 4 ||
+      arm.global.maximumRoutesPerWake < GLOBAL_EVENT_MAX_ROUTES_PER_WAKE ||
       arm.global.maximumRoutesPerWake > 256 ||
+      arm.global?.maximumEventRoutesPerWake !== GLOBAL_EVENT_MAX_ROUTES_PER_WAKE ||
       !Number.isSafeInteger(arm.global?.quoteConcurrency) ||
       arm.global.quoteConcurrency < 1 ||
       arm.global.quoteConcurrency > 16 ||
@@ -368,8 +382,10 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       !Number.isSafeInteger(arm.global?.managedFallbackDailyLogicalCallCap) ||
       arm.global.managedFallbackDailyLogicalCallCap < 1_000 ||
       arm.global.managedFallbackDailyLogicalCallCap > 1_000_000 ||
+      arm.global?.managedFallbackEventLogicalCallCap !== GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP ||
+      arm.global?.managedFallbackRecoveryLogicalCallCap !== GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP ||
       arm.global?.submissionPolicy !== 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK' ||
-      arm.global?.feedPolicy !== 'ORDERED_FEED_ADDRESS_FILTER_THEN_MANAGED_EXACT_STATE')
+      arm.global?.feedPolicy !== GLOBAL_FEED_MATCH_POLICY)
   ) {
     return { allowed: false, reason: 'invalid-global-policy' }
   }

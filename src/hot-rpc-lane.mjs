@@ -221,3 +221,50 @@ export class DailyHotRpcBudget {
     }
   }
 }
+
+export class LogicalCallBudget {
+  /** @param {{logicalCallCap: number, label?: string}} options */
+  constructor(options) {
+    if (!Number.isSafeInteger(options.logicalCallCap) || options.logicalCallCap < 1) {
+      throw new Error('logical-call cap must be a positive safe integer')
+    }
+    this.logicalCallCap = options.logicalCallCap
+    this.label = options.label || 'logical-call-budget'
+    this.consumedLogicalCalls = 0
+  }
+
+  /** @param {number} count */
+  consumeLogicalCalls(count) {
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new Error('logical-call debit must be a positive safe integer')
+    }
+    if (this.consumedLogicalCalls + count > this.logicalCallCap) {
+      return { consumed: false, reason: HotRpcLaneDecision.PUBLIC_LOGICAL_BUDGET_EXHAUSTED }
+    }
+    this.consumedLogicalCalls += count
+    return { consumed: true, reason: HotRpcLaneDecision.MANAGED }
+  }
+
+  snapshot() {
+    return {
+      label: this.label,
+      logicalCallCap: this.logicalCallCap,
+      consumedLogicalCalls: this.consumedLogicalCalls,
+      remainingLogicalCalls: Math.max(0, this.logicalCallCap - this.consumedLogicalCalls),
+    }
+  }
+}
+
+/**
+ * Debit the disposable wake allowance before the persisted daily allowance.
+ * A rejected wake can therefore never consume daily provider capacity.
+ *
+ * @param {{perWakeBudget: LogicalCallBudget, dailyBudget: DailyHotRpcBudget, count: number}} input
+ */
+export function consumeNestedLogicalCallBudgets(input) {
+  const wake = input.perWakeBudget.consumeLogicalCalls(input.count)
+  if (!wake.consumed) return { consumed: false, exhausted: 'PER_WAKE' }
+  const daily = input.dailyBudget.consumeLogicalCalls(input.count)
+  if (!daily.consumed) return { consumed: false, exhausted: 'DAILY' }
+  return { consumed: true, exhausted: null }
+}
