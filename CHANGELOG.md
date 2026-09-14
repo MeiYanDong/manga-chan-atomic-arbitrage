@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep the unified signer supervisor inside the 512 MiB production cgroup by capping each inherited Node/V8 heap at
+  320 MiB, starting both the signer watcher and read-only opportunity board directly instead of retaining an npm
+  wrapper, and throttling the watcher at a 448 MiB high watermark before the hard limit. This is an operational
+  containment fix for the production-observed Global-child OOM; it changes no route, capital, Gas, profit, nonce,
+  simulation, authorization, signing, submission or receipt policy.
 - Make every Global opportunity decision evidence-typed and traceable. Parsed positive/zero/negative quotes, RPC
   failures, unavailable block state, unsupported routes and policy filters no longer collapse into one no-profit label;
   exact-evaluation catches now remain aggregate evidence. Carry one event ID from source sequence and protected
