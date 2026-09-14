@@ -188,7 +188,26 @@ Never roll code backward while retaining an incompatible runtime ledger or activ
 
 ## Alerts
 
-The supplied service exits non-zero on a halted state and invokes an `OnFailure` unit, producing an explicit journal event. A real paging destination is not configured in the public repository; operators must connect that unit to their private notification system and verify delivery before calling alerting complete.
+The dual watcher separates temporary process failure from safety-terminal exits. `HALTED_RPC` uses a restartable exit;
+`HALTED_UNKNOWN`, `HALTED_INVARIANT`, `HALTED_STARTUP` and `HALTED_NONCE_CONFLICT` use exit statuses listed in
+`RestartPreventExitStatus` and remain fail closed.
+
+The minimum-necessary Feishu health check runs once per minute. It pages only when an armed signer process is down,
+the runtime is terminal or stale, or a trading lane has failed repeatedly; it sends one recovery transition after the
+incident. No-shot decisions, candidate filtering and isolated RPC or child-process timeouts do not page. Provision its
+dedicated webhook independently from the business-report webhook:
+
+```bash
+sudo systemd-creds encrypt --name=manga-critical-alert-webhook - /etc/credstore.encrypted/manga-critical-alert-webhook
+sudo chown root:root /etc/credstore.encrypted/manga-critical-alert-webhook
+sudo chmod 0600 /etc/credstore.encrypted/manga-critical-alert-webhook
+sudo systemctl start manga-critical-health.service
+sudo systemctl enable --now manga-critical-health.timer
+```
+
+Enter the webhook through encrypted standard input only. Never put it in argv, an environment file, the release or a
+remote-command payload. A response code `0` from `node scripts/critical-alert.mjs test` proves delivery transport only;
+the timer state and an actual health transition remain separate evidence.
 
 The release installer compiles and verifies the code before atomically moving the `current` symlink. The hardened runtime service only reads that release and writes under `/var/lib/manga-chan-arbitrage`; it does not attempt to compile inside the read-only `/opt` tree at service start.
 

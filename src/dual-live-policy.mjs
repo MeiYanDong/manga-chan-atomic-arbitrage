@@ -24,6 +24,12 @@ import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
 export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v11'
+export const DUAL_WATCH_EXIT_STATUS = Object.freeze({
+  UNKNOWN: 70,
+  INVARIANT: 71,
+  NONCE_CONFLICT: 72,
+  TEMPORARY_FAILURE: 75,
+})
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10 = 'dual-base-loopback-escalation-v10'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9 = 'dual-base-loopback-escalation-v9'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8 = 'dual-base-loopback-escalation-v8'
@@ -49,6 +55,16 @@ export function isDualOpportunityMiss(error) {
       errorText(error),
     )
   )
+}
+
+/** @param {string | undefined | null} status */
+export function dualWatcherExitCode(status) {
+  if (status === 'HALTED_UNKNOWN') return DUAL_WATCH_EXIT_STATUS.UNKNOWN
+  if (status === 'HALTED_NONCE_CONFLICT') return DUAL_WATCH_EXIT_STATUS.NONCE_CONFLICT
+  if (['HALTED_INVARIANT', 'HALTED_STARTUP'].includes(String(status))) return DUAL_WATCH_EXIT_STATUS.INVARIANT
+  if (status === 'HALTED_RPC') return DUAL_WATCH_EXIT_STATUS.TEMPORARY_FAILURE
+  if (String(status || '').startsWith('HALTED')) return 1
+  return 0
 }
 
 /**
