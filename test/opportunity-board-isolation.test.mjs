@@ -531,6 +531,7 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(criticalHealth, /^ReadOnlyPaths=-\/var\/lib\/manga-chan-arbitrage$/m)
   assert.match(criticalHealth, /^ReadWritePaths=\/var\/lib\/manga-critical-alert$/m)
   assert.match(criticalHealth, /^MemoryMax=128M$/m)
+  assert.match(criticalHealth, /^TasksMax=16$/m)
   assert.doesNotMatch(criticalHealth, /manga-private-key|MANGA_PRIVATE_KEY|MANGA_RPC_URL|MANGA_WS_URL/)
   assert.match(criticalTimer, /^OnUnitActiveSec=1min$/m)
   assert.match(criticalTimer, /^Persistent=true$/m)

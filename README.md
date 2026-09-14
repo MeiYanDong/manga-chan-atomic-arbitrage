@@ -25,7 +25,7 @@ net positive. It is not a second autonomous signer. See
 [ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md) and
 [ADR 0059](docs/decisions/0059-earn-onchain-factory-catalog.md).
 
-The v0.16.1 lane uses the existing typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4.
+The v0.16.2 lane uses the existing typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4.
 It atomically combines swaps and Earn BPT premium/discount actions, including simple two-to-four-hop cycles that stay
 inside one venue as well as cycles that cross venues. USDG and WETH are priority seeds, not an asset allowlist: any graph
 asset may become the settlement asset for a wake only after fixed-block decimals, Morpho flash liquidity or protected
