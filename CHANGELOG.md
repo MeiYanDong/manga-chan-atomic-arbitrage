@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Keep the live signer heap bounded as audit history grows. Authorization, nonce reconciliation, receipt economics and
+  route quarantine now stream append-only JSONL in 64 KiB chunks, cache only safety-relevant events and read only new
+  bytes; normal provider errors are redacted and capped before persistence. Earn discovery remains public-first but may
+  recover from production HTTP 403 through persisted 40,000-call daily and 128/192-call per-wake managed budgets, while
+  canonical Vault swaps arrive over managed WSS with bounded reconnect dedupe and a 60-second public recovery poll.
+  Authorization v12 binds every new source and cost boundary; exact quote, simulation, Gas, balance, nonce, profit,
+  signed-raw and receipt gates are unchanged.
 - Remove Solidity compilation from the live dual-signing process. CI/release builds now emit source- and
   bytecode-hashed Generic and WETH artifacts beside the existing Universal artifact; runtime deployment verification,
   simulation and receipt decoding reload those small artifacts only after recomputing their source, source-bundle,

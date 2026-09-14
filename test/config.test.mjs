@@ -40,6 +40,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'EARN_LIVE_COARSE_PROBE_POINTS=10',
       'EARN_LIVE_REFINEMENT_POINTS=8',
       'EARN_WATCH_EVENT_POLL_MS=1500',
+      'EARN_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=23456',
       'GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=12345',
       'GLOBAL_WATCH_CHILD_TIMEOUT_MS=45000',
       'EARN_WATCH_CHILD_TIMEOUT_MS=55000',
@@ -78,6 +79,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.earnLiveCoarseProbePoints, 10)
   assert.equal(config.earnLiveRefinementPoints, 8)
   assert.equal(config.earnWatchEventPollMs, 1_500)
+  assert.equal(config.earnManagedFallbackDailyLogicalCallCap, 23_456)
   assert.equal(config.globalManagedFallbackDailyLogicalCallCap, 12_345)
   assert.equal(config.globalWatchChildTimeoutMs, 45_000)
   assert.equal(config.earnWatchChildTimeoutMs, 55_000)
@@ -123,6 +125,7 @@ test('generic exact-preflight candidate count is bounded at configuration load',
   assert.throws(() => loadRuntimeConfig({ EARN_LIVE_COARSE_PROBE_POINTS: '17' }), /4\.\.16/)
   assert.throws(() => loadRuntimeConfig({ EARN_LIVE_REFINEMENT_POINTS: '1' }), /2\.\.16/)
   assert.throws(() => loadRuntimeConfig({ EARN_WATCH_EVENT_POLL_MS: '999' }), /1000\.\.60000/)
+  assert.throws(() => loadRuntimeConfig({ EARN_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP: '999' }), /1000\.\.1000000/)
   assert.throws(() => loadRuntimeConfig({ GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP: '999' }), /1000\.\.1000000/)
   assert.throws(() => loadRuntimeConfig({ GLOBAL_MAX_ROUTES_PER_WAKE: '7' }), /8\.\.256/)
   assert.throws(() => loadRuntimeConfig({ GLOBAL_WATCH_CHILD_TIMEOUT_MS: '14999' }), /15000\.\.180000/)

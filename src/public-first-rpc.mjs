@@ -3,7 +3,9 @@ import { fallback, http } from 'viem'
 const DEFAULT_BATCH_SIZE = 32
 const DEFAULT_BATCH_WAIT_MS = 10
 const DEFAULT_TIMEOUT_MS = 30_000
-const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429])
+// A public endpoint's 403 is an access-path failure, not an EVM result. It is
+// therefore eligible for the independently budgeted managed read fallback.
+const RETRYABLE_HTTP_STATUSES = new Set([403, 408, 425, 429])
 const RATE_LIMIT_RPC_CODES = new Set([429, -32_005])
 const RATE_LIMIT_MESSAGE = /rate[ -]?limit|too many requests|request limit|quota (?:exceeded|reached)/i
 const MISSING_BATCH_ITEM_MESSAGE = /Cannot read properties of undefined \(reading ['"]error['"]\)/

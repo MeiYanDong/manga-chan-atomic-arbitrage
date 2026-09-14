@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   EventRevisionQueue,
+  MAX_DIAGNOSTIC_ERROR_TEXT_CHARS,
+  MAX_ERROR_TEXT_CHARS,
   RpcErrorClass,
   classifyReconciliation,
   classifyRpcError,
@@ -92,6 +94,20 @@ test('redacts credentialized RPC URLs before errors enter logs', () => {
   error.stack = `${error.stack}\n    at https://node.example/v1/private-token?key=secret:1:1`
   assert.match(diagnosticErrorText(error), /at <RPC_URL_REDACTED>/)
   assert.doesNotMatch(diagnosticErrorText(error), /private-token|secret/)
+})
+
+test('bounds large provider error bodies while retaining both diagnostic ends', () => {
+  const secretUrl = 'https://node.example/v1/private-token?key=secret'
+  const error = new Error(`HTTP 403 ${secretUrl} ${'x'.repeat(12_000)} TAIL_CLASSIFIER`)
+  error.stack = `${error.message}\n${'s'.repeat(20_000)} STACK_TAIL`
+  const summary = errorText(error)
+  const diagnostic = diagnosticErrorText(error)
+  assert.equal(summary.length, MAX_ERROR_TEXT_CHARS)
+  assert.equal(diagnostic.length, MAX_DIAGNOSTIC_ERROR_TEXT_CHARS)
+  assert.match(summary, /DIAGNOSTIC_TRUNCATED/)
+  assert.match(summary, /TAIL_CLASSIFIER/)
+  assert.match(diagnostic, /STACK_TAIL/)
+  assert.doesNotMatch(`${summary}${diagnostic}`, /private-token|key=secret/)
 })
 
 test('finds unresolved mutations across execute, deploy and withdraw', () => {

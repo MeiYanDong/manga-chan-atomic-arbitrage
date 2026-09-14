@@ -20,6 +20,14 @@ import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
 import { broadcastSameRawToSequencer } from '../src/direct-sequencer.mjs'
 import { decodeEarnOnHoodReceiptRoute } from '../src/earnonhood-receipt.mjs'
 import {
+  EARN_DISCOVERY_RPC_POLICY,
+  EARN_EVENT_SOURCE_POLICY,
+  EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+  earnManagedFallbackLogicalCallCap,
+  earnWakeKind,
+} from '../src/earn-rpc-policy.mjs'
+import {
   EARN_SIZING_ALGORITHM,
   buildEarnOnHoodProbeAmounts,
   buildEarnOnHoodRefinementAmounts,
@@ -60,7 +68,15 @@ import {
   validateDualSignedAttempt,
 } from '../src/dual-live-policy.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
+import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
+import {
+  DailyHotRpcBudget,
+  LogicalCallBudget,
+  consumeNestedLogicalCallBudgets,
+  jsonRpcCallCount,
+} from '../src/hot-rpc-lane.mjs'
 import { errorText, latestUnresolvedMutation } from '../src/policy.mjs'
+import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 
 const CHAIN_ID = 4_663
 const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
@@ -190,10 +206,6 @@ const executionClient = createPublicClient({
   chain,
   transport: http(rpcUrl || 'https://rpc.mainnet.chain.robinhood.com', { timeout: 30_000, retryCount: 1 }),
 })
-const discoveryClient = createPublicClient({
-  chain,
-  transport: http(PUBLIC_READ_ONLY_RPC, { timeout: 30_000, retryCount: 2 }),
-})
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runDir = runtimeConfig.runDir ? path.resolve(runtimeConfig.runDir) : path.join(root, 'runs')
 const walletLockPath = path.join(runDir, 'wallet.lock')
@@ -205,7 +217,74 @@ const wethStatePath = path.join(runDir, 'weth-state.json')
 const dualWatchArmPath = path.join(runDir, 'dual-watch-arm.json')
 const dualWatchRevocationPath = path.join(runDir, 'dual-watch-revocation.json')
 const globalCatalogPath = path.join(runDir, 'global-catalog.json')
+const earnRpcBudgetPath = path.join(runDir, 'earn-rpc-fallback-budget.json')
 const signedTransactionDir = path.join(runDir, 'signed', 'earnonhood')
+
+let managedFallbackBudget = null
+let managedFallbackWakeBudget = null
+
+function currentManagedFallbackBudget() {
+  if (!managedFallbackBudget) {
+    managedFallbackBudget = new DailyHotRpcBudget({
+      dailyEventCandidateCap: 1,
+      dailyLogicalCallCap: runtimeConfig.earnManagedFallbackDailyLogicalCallCap,
+      persisted: readJson(earnRpcBudgetPath),
+      onChange: (state) => writeProtectedJson(earnRpcBudgetPath, state),
+    })
+  }
+  return managedFallbackBudget
+}
+
+function currentManagedFallbackWakeBudget() {
+  if (!managedFallbackWakeBudget) {
+    const reason = process.env.EARN_WAKE_REASON || null
+    managedFallbackWakeBudget = new LogicalCallBudget({
+      logicalCallCap: earnManagedFallbackLogicalCallCap(reason),
+      label: `${earnWakeKind(reason)}_WAKE`,
+    })
+  }
+  return managedFallbackWakeBudget
+}
+
+function consumeManagedFallbackBudget(body) {
+  const debit = consumeNestedLogicalCallBudgets({
+    perWakeBudget: currentManagedFallbackWakeBudget(),
+    dailyBudget: currentManagedFallbackBudget(),
+    count: jsonRpcCallCount(body),
+  })
+  if (!debit.consumed) {
+    throw new Error(
+      debit.exhausted === 'PER_WAKE'
+        ? 'managed RPC fallback per-wake logical-call budget exhausted'
+        : 'managed RPC fallback daily logical-call budget exhausted',
+    )
+  }
+}
+
+function managedFallbackEvidence() {
+  return {
+    discoveryPolicy: EARN_DISCOVERY_RPC_POLICY,
+    wakeKind: earnWakeKind(process.env.EARN_WAKE_REASON || null),
+    wakeReason: process.env.EARN_WAKE_REASON || null,
+    perWakeLogicalCallCaps: {
+      event: EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+      recovery: EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+    },
+    managedFallbackWakeBudget: currentManagedFallbackWakeBudget().snapshot(),
+    managedFallbackBudget: currentManagedFallbackBudget().snapshot(),
+  }
+}
+
+const discoveryClient = createPublicClient({
+  chain,
+  transport: publicFirstRpcTransport(PUBLIC_READ_ONLY_RPC, rpcUrl, {
+    batchSize: 8,
+    managedFetchFn: async (input, init) => {
+      consumeManagedFallbackBudget(init?.body)
+      return globalThis.fetch(input, init)
+    },
+  }),
+})
 
 function stringify(value) {
   return JSON.stringify(value, (_, item) => (typeof item === 'bigint' ? item.toString() : item), 2)
@@ -233,13 +312,16 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
 }
 
+function writeProtectedJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${stringify(value)}\n`, { mode: 0o600 })
+  fs.renameSync(temporary, file)
+  fs.chmodSync(file, 0o600)
+}
+
 function readJsonLines(file) {
-  if (!fs.existsSync(file)) return []
-  return fs
-    .readFileSync(file, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
+  return readSafetyAuditRecords(file)
 }
 
 function processIsAlive(pid) {
@@ -322,7 +404,15 @@ function assertSharedAuthorization(context, { maximumGasCostWei = null, currentS
     Number(arm.earnOnHood.refinementPoints) !== runtimeConfig.earnLiveRefinementPoints ||
     Number(arm.earnOnHood.publicMaximumExactQuotesPerWake) !==
       maximumEarnPublicExactQuotes(runtimeConfig.earnLiveRefinementPoints) ||
-    Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== runtimeConfig.earnLiveRefinementPoints + 3
+    Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== runtimeConfig.earnLiveRefinementPoints + 3 ||
+    arm.earnOnHood.discoveryRpc !== EARN_DISCOVERY_RPC_POLICY ||
+    arm.earnOnHood.eventSource !== EARN_EVENT_SOURCE_POLICY ||
+    Number(arm.earnOnHood.eventPollMs) !== runtimeConfig.earnWatchEventPollMs ||
+    Number(arm.earnOnHood.periodicMs) !== runtimeConfig.earnWatchPeriodicMs ||
+    Number(arm.earnOnHood.managedFallbackDailyLogicalCallCap) !==
+      runtimeConfig.earnManagedFallbackDailyLogicalCallCap ||
+    Number(arm.earnOnHood.managedFallbackEventLogicalCallCap) !== EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP ||
+    Number(arm.earnOnHood.managedFallbackRecoveryLogicalCallCap) !== EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP
   ) {
     throw new Error('shared EarnOnHood route or principal authorization mismatch')
   }
@@ -1030,10 +1120,26 @@ async function preflight({ print = true } = {}) {
   const auditRecords = readJsonLines(sharedContext ? sharedAuditPath : auditPath)
   const routeQuarantine = earnOnHoodRouteQuarantine(auditRecords)
   const excludedRouteIds = new Set(routeQuarantine.map((entry) => entry.routeId))
-  const screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN', {
-    focusPools,
-    excludedRouteIds,
-  })
+  let screened
+  try {
+    screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN', {
+      focusPools,
+      excludedRouteIds,
+    })
+  } catch (error) {
+    if (!/managed RPC fallback (?:per-wake|daily) logical-call budget exhausted/i.test(errorText(error))) throw error
+    const report = {
+      status: 'NO_SHOT_RPC_BUDGET_EXHAUSTED',
+      evidence: 'BOUNDED_READ_FAILURE_BEFORE_SIGNER_LOAD_OR_MUTATION',
+      reasons: ['MANAGED_RPC_FALLBACK_BUDGET_EXHAUSTED'],
+      error: errorText(error),
+      rpc: managedFallbackEvidence(),
+    }
+    appendAudit('preflight', report)
+    if (print) console.log(stringify(report))
+    return { report }
+  }
+  screened.report.rpc = managedFallbackEvidence()
   if (screened.report.status !== 'SHOT_READY') {
     appendAudit('preflight', screened.report)
     if (print) console.log(stringify(screened.report))
@@ -1062,6 +1168,7 @@ async function preflight({ print = true } = {}) {
     candidateHint: screened.candidateHint,
     excludedRouteIds,
   })
+  prepared.report.rpc = managedFallbackEvidence()
   if (!sharedContext && watcherPid) {
     prepared.report.status = 'NO_SHOT'
     prepared.report.reasons = [...prepared.report.reasons, `DUAL_WATCHER_ACTIVE_PID_${watcherPid}`]
@@ -1286,6 +1393,7 @@ async function execute() {
         gasSpentEth: formatEther(gasSpentWei),
         dynamicMaximumPrincipalEth: prepared.report.dynamicMaximumPrincipalEth,
         principalPolicy: prepared.report.principalPolicy,
+        rpc: prepared.report.rpc,
       }
       console.log(stringify(result))
       return result
@@ -1321,6 +1429,7 @@ async function execute() {
       dynamicMaximumPrincipalEth: prepared.report.dynamicMaximumPrincipalEth,
       principalPolicy: prepared.report.principalPolicy,
       lifetimeEarnGasSurplusBeforeEth: prepared.report.lifetimeEarnGasSurplusEth,
+      rpc: prepared.report.rpc,
     }
     appendAudit(
       'mutation_effect',

@@ -106,6 +106,28 @@ test('does not contact the managed fallback when the public batch succeeds', asy
   assert.equal(fallbackCalls, 0)
 })
 
+test('uses the managed fallback when a public endpoint denies server access with HTTP 403', async (context) => {
+  let fallbackCalls = 0
+  const primary = await listen(async (request, response) => {
+    await requestBody(request)
+    response.writeHead(403, { 'content-type': 'text/html' })
+    response.end(`<html>${'access denied '.repeat(2_000)}</html>`)
+  })
+  const secondary = await listen(async (request, response) => {
+    fallbackCalls += 1
+    const body = await requestBody(request)
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(rpcResponse(body)))
+  })
+  context.after(async () => {
+    await Promise.all([primary.close(), secondary.close()])
+  })
+
+  const client = createPublicClient({ chain, transport: publicFirstRpcTransport(primary.url, secondary.url) })
+  assert.equal(await client.getBlockNumber(), 42n)
+  assert.equal(fallbackCalls, 1)
+})
+
 test('splits public calls at an eight-item provider ceiling without using the managed fallback', async (context) => {
   const primaryBodies = []
   let fallbackCalls = 0
@@ -241,6 +263,7 @@ test('fallback classifier admits only transport and rate-limit failures', () => 
   missingBatchItem.stack = `${missingBatchItem.name}: ${missingBatchItem.message}\n    at request (file:///app/node_modules/viem/_esm/clients/transports/http.js:69:26)`
   const wrappedMissingBatchItem = new Error('unknown RPC error', { cause: missingBatchItem })
   assert.equal(shouldFallbackToManagedRpc({ name: 'TimeoutError' }), true)
+  assert.equal(shouldFallbackToManagedRpc({ name: 'HttpRequestError', status: 403 }), true)
   assert.equal(shouldFallbackToManagedRpc({ name: 'HttpRequestError', status: 503 }), true)
   assert.equal(shouldFallbackToManagedRpc({ name: 'RpcRequestError', code: -32_005 }), true)
   assert.equal(shouldFallbackToManagedRpc(missingBatchItem), true)

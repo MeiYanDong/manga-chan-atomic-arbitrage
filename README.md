@@ -16,8 +16,9 @@ It also contains an EarnOnHood standing keeper inside the same dual signer. Live
 the canonical Omnipool Factory and pool state onchain, builds a current graph from every eligible official Omnipool,
 enumerates WETH-settled simple cycles of two to four swaps,
 and locally ranks the full graph before requesting a bounded set of exact quotes. AI and MOO are historical examples,
-not an allowlist. Any canonical Vault Swap plus a five-minute recovery tick can wake balance-scaled probes with no fixed
-principal cap. The managed endpoint is used only after a public screen is net-positive; the exact dynamic route is then
+not an allowlist. Any canonical Vault Swap observed through the managed WSS subscription, plus a five-minute recovery
+tick, can wake balance-scaled probes with no fixed principal cap. Discovery remains public-first; an HTTP 403 or other
+transport/rate failure may use a persisted daily and per-wake managed fallback budget. The exact dynamic route is then
 frozen into the mutation plan, revalidated on chain, and worst-case failed Gas must leave lifetime receipt-proven Earn
 net positive. It is not a second autonomous signer. See
 [the mechanism and live validation](docs/research/2026-09-12-earnonhood-mechanism-arbitrage-live-validation.md) and
@@ -25,7 +26,7 @@ net positive. It is not a second autonomous signer. See
 [ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md) and
 [ADR 0059](docs/decisions/0059-earn-onchain-factory-catalog.md).
 
-The v0.16.2 lane uses the existing typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4.
+The universal lane uses the existing typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4.
 It atomically combines swaps and Earn BPT premium/discount actions, including simple two-to-four-hop cycles that stay
 inside one venue as well as cycles that cross venues. USDG and WETH are priority seeds, not an asset allowlist: any graph
 asset may become the settlement asset for a wake only after fixed-block decimals, Morpho flash liquidity or protected
@@ -36,12 +37,13 @@ Sequencer submission, and any managed-RPC fallback must broadcast the identical 
 the official public endpoint first; a transport/rate-limit fallback has a persisted 20,000-logical-call daily ceiling.
 Feed wakes require one protocol/pool address or two distinct graph assets, evaluate at most eight related routes without
 filling unrelated work, and have separate 32-call event and 8-call recovery fallback ceilings committed by
-authorization v11. See
+authorization v12. See
 [ADR 0060](docs/decisions/0060-universal-cross-protocol-atomic-execution.md),
 [ADR 0063](docs/decisions/0063-bounded-public-first-global-rpc-fallback.md),
 [ADR 0064](docs/decisions/0064-sequencer-wake-relevance-and-per-wake-rpc-budget.md) and
 [ADR 0070](docs/decisions/0070-same-venue-cycles-and-dynamic-settlement-admission.md) plus
-[the global live stories](docs/stories/global-cross-protocol-live.md).
+[the global live stories](docs/stories/global-cross-protocol-live.md). The bounded audit reader and managed Earn event
+recovery are defined by [ADR 0080](docs/decisions/0080-bounded-audit-runtime-and-managed-earn-events.md).
 
 All protocol adapters share one wallet/nonce safety domain. A canonical reverted receipt now closes the attempt, pays
 only its recorded Gas and lets unrelated candidates continue while the existing economic breakers remain open. A

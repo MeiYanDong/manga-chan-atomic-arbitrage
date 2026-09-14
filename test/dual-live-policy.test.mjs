@@ -19,6 +19,13 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { EARN_SIZING_ALGORITHM } from '../src/earnonhood-live-policy.mjs'
+import {
+  EARN_DISCOVERY_RPC_POLICY,
+  EARN_EVENT_SOURCE_POLICY,
+  EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+  EARN_PUBLIC_RECOVERY_POLL_MS,
+} from '../src/earn-rpc-policy.mjs'
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from '../src/earnonhood-routes.mjs'
 import { GLOBAL_ATOMIC_ROUTE_POLICY, GLOBAL_GRAPH_POLICY } from '../src/global-liquidity-graph.mjs'
 import { GLOBAL_ROUTE_WORKSET_POLICY } from '../src/global-route-selection.mjs'
@@ -82,6 +89,14 @@ function arm(overrides = {}) {
       refinementPoints: 6,
       publicMaximumExactQuotesPerWake: maximumEarnPublicExactQuotes(6),
       managedMaximumExactQuotesPerWake: 9,
+      eventPollMs: EARN_PUBLIC_RECOVERY_POLL_MS,
+      periodicMs: 300_000,
+      discoveryRpc: EARN_DISCOVERY_RPC_POLICY,
+      eventSource: EARN_EVENT_SOURCE_POLICY,
+      escalationRpc: 'MANGA_RPC_URL_ONLY_AFTER_PUBLIC_NET_POSITIVE',
+      managedFallbackDailyLogicalCallCap: 40_000,
+      managedFallbackEventLogicalCallCap: EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+      managedFallbackRecoveryLogicalCallCap: EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
     },
     global: {
       enabled: true,
@@ -169,7 +184,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v11 authorization binds dynamic settlement admission, route relevance, RPC cost, and executor identity', () => {
+test('v12 authorization binds dynamic settlement admission, route relevance, RPC cost, and executor identity', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -220,19 +235,40 @@ test('v11 authorization binds dynamic settlement admission, route relevance, RPC
     { ...valid.earnOnHood, maximumHops: 5 },
     { ...valid.earnOnHood, publicMaximumExactQuotesPerWake: 57 },
     { ...valid.earnOnHood, managedMaximumExactQuotesPerWake: 10 },
+    { ...valid.earnOnHood, discoveryRpc: 'PUBLIC_ONLY' },
+    { ...valid.earnOnHood, eventSource: 'PUBLIC_POLL_ONLY' },
+    { ...valid.earnOnHood, eventPollMs: 1_000 },
+    { ...valid.earnOnHood, managedFallbackDailyLogicalCallCap: 999 },
+    { ...valid.earnOnHood, managedFallbackEventLogicalCallCap: 129 },
+    { ...valid.earnOnHood, managedFallbackRecoveryLogicalCallCap: 193 },
   ]) {
     assert.deepEqual(
       evaluateDualAuthorizationBudget(arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION, earnOnHood }), {
         failedGasWei: 0n,
         earnGasSurplusWei: 5_000n,
       }),
-      { allowed: false, reason: 'invalid-earnonhood-sizing-policy' },
+      {
+        allowed: false,
+        reason:
+          earnOnHood.sizingAlgorithm !== valid.earnOnHood.sizingAlgorithm ||
+          earnOnHood.coarseProbePoints !== valid.earnOnHood.coarseProbePoints ||
+          earnOnHood.refinementPoints !== valid.earnOnHood.refinementPoints ||
+          earnOnHood.poolScope !== valid.earnOnHood.poolScope ||
+          earnOnHood.catalogSource !== valid.earnOnHood.catalogSource ||
+          earnOnHood.factory !== valid.earnOnHood.factory ||
+          earnOnHood.maximumHops !== valid.earnOnHood.maximumHops ||
+          earnOnHood.publicMaximumExactQuotesPerWake !== valid.earnOnHood.publicMaximumExactQuotesPerWake ||
+          earnOnHood.managedMaximumExactQuotesPerWake !== valid.earnOnHood.managedMaximumExactQuotesPerWake
+            ? 'invalid-earnonhood-sizing-policy'
+            : 'invalid-earnonhood-rpc-policy',
+      },
     )
   }
 })
 
-test('superseded v10, v9 and v8 authorizations cannot bypass the v11 dynamic route policy', () => {
+test('superseded v11 through v8 authorizations cannot bypass the v12 dynamic route policy', () => {
   for (const policyVersion of [
+    'dual-base-loopback-escalation-v11',
     'dual-base-loopback-escalation-v10',
     'dual-base-loopback-escalation-v9',
     'dual-base-loopback-escalation-v8',
