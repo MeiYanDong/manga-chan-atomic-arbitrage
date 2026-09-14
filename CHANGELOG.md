@@ -8,7 +8,9 @@
   invariant failure; it consumes one nonce, debits the existing failed-Gas and lifetime-profit breakers, and allows
   unrelated routes to continue when those breakers remain open. Replace the critical-alert process's heavy imports,
   raise its cgroup ceiling from 64 to 128 MiB, and rewrite critical and daily Feishu messages as concise Chinese
-  operator outcomes without raw internal fields.
+  operator outcomes without raw internal fields. Production isolation proved the remaining `SIGABRT` was the health
+  unit's eight-task ceiling when Node opened DNS/TLS workers, not an OOM: raise `TasksMax` to 16, matching the existing
+  bounded business reporter.
 - Publish `/api/v1/agent/daily-profit` as a server-generated, anonymous read-only projection. It preserves receipt-gated
   USDG/ETH results, deducts failed Gas exactly once, excludes the overlapping project-result layer and offchain costs,
   and adds guarded CoinGecko/Kraken USD plus Frankfurter CNY reference estimates without assuming fixed USDG parity.
