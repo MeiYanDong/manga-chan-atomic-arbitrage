@@ -3,6 +3,7 @@ export const DEFAULT_RUNTIME_STALE_MS = 180_000
 export const DEFAULT_PLANNED_STOP_GRACE_MS = 15 * 60_000
 export const DEFAULT_ARM_START_GRACE_MS = 5 * 60_000
 export const DEFAULT_SUSTAINED_LANE_ERRORS = 3
+export const DEFAULT_SUSTAINED_BOARD_ERRORS = 30
 
 const TERMINAL_STATUS_REASON = new Map([
   ['HALTED_UNKNOWN', '交易状态未知，需要先核对链上回执和 nonce'],
@@ -26,7 +27,7 @@ function result(state, reasonCode, reasonLabel, details = {}) {
  * ability to trade, entered a terminal safety state, gone stale, or sustained
  * repeated lane failures.
  *
- * @param {{arm?: Record<string, any> | null, revocation?: Record<string, any> | null, runtime?: Record<string, any> | null, processAlive?: boolean, nowMs?: number, staleMs?: number, plannedStopGraceMs?: number, armStartGraceMs?: number, sustainedLaneErrors?: number}} input
+ * @param {{arm?: Record<string, any> | null, revocation?: Record<string, any> | null, runtime?: Record<string, any> | null, processAlive?: boolean, nowMs?: number, staleMs?: number, plannedStopGraceMs?: number, armStartGraceMs?: number, sustainedLaneErrors?: number, sustainedBoardErrors?: number}} input
  */
 export function evaluateCriticalTradingHealth(input = {}) {
   const {
@@ -39,6 +40,7 @@ export function evaluateCriticalTradingHealth(input = {}) {
     plannedStopGraceMs = DEFAULT_PLANNED_STOP_GRACE_MS,
     armStartGraceMs = DEFAULT_ARM_START_GRACE_MS,
     sustainedLaneErrors = DEFAULT_SUSTAINED_LANE_ERRORS,
+    sustainedBoardErrors = DEFAULT_SUSTAINED_BOARD_ERRORS,
   } = input
   const authorizationActive =
     arm?.status === 'ARMED' && (!revocation || revocation.authorizationId !== arm.authorizationId)
@@ -63,19 +65,26 @@ export function evaluateCriticalTradingHealth(input = {}) {
     return result('CRITICAL', 'RUNTIME_HEARTBEAT_STALE', '实盘进程仍在，但运行心跳已经失联', { ageMs })
   }
 
-  const laneErrors = {
-    global: Number(runtime.consecutiveGlobalErrors || 0),
-    earn: Number(runtime.consecutiveEarnErrors || 0),
-    execution: Number(runtime.consecutiveExecutionRpcErrors || 0),
-  }
-  const impaired = Object.entries(laneErrors).find(
-    ([, count]) => Number.isFinite(count) && count >= sustainedLaneErrors,
-  )
+  const laneErrors = [
+    { key: 'global', count: Number(runtime.consecutiveGlobalErrors || 0), threshold: sustainedLaneErrors },
+    { key: 'earn', count: Number(runtime.consecutiveEarnErrors || 0), threshold: sustainedLaneErrors },
+    { key: 'execution', count: Number(runtime.consecutiveExecutionRpcErrors || 0), threshold: sustainedLaneErrors },
+    { key: 'board', count: Number(runtime.consecutiveBoardErrors || 0), threshold: sustainedBoardErrors },
+  ]
+  const impaired = laneErrors.find(({ count, threshold }) => Number.isFinite(count) && count >= threshold)
   if (impaired) {
-    const laneLabel = impaired[0] === 'global' ? '全局跨池' : impaired[0] === 'earn' ? 'Earn' : '基础执行'
-    return result('CRITICAL', `SUSTAINED_${impaired[0].toUpperCase()}_FAILURE`, `${laneLabel}通道连续故障`, {
+    const laneLabel =
+      impaired.key === 'global'
+        ? '全局跨池'
+        : impaired.key === 'earn'
+          ? 'Earn'
+          : impaired.key === 'board'
+            ? '候选数据'
+            : '基础执行'
+    return result('CRITICAL', `SUSTAINED_${impaired.key.toUpperCase()}_FAILURE`, `${laneLabel}通道连续故障`, {
       ageMs,
-      consecutiveErrors: impaired[1],
+      consecutiveErrors: impaired.count,
+      threshold: impaired.threshold,
     })
   }
   return result('HEALTHY', 'TRADING_HEALTHY', '实盘交易进程运行正常', { ageMs })

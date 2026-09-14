@@ -193,9 +193,10 @@ The dual watcher separates temporary process failure from safety-terminal exits.
 `RestartPreventExitStatus` and remain fail closed.
 
 The minimum-necessary Feishu health check runs once per minute. It pages only when an armed signer process is down,
-the runtime is terminal or stale, or a trading lane has failed repeatedly; it sends one recovery transition after the
-incident. No-shot decisions, candidate filtering and isolated RPC or child-process timeouts do not page. Provision its
-dedicated webhook independently from the business-report webhook:
+the runtime is terminal or stale, an execution lane has failed three times, or the noisier board lane has failed for 30
+consecutive watcher loops; it sends one recovery transition after the incident. No-shot decisions, candidate filtering
+and isolated RPC or child-process timeouts do not page. Provision its dedicated webhook independently from the
+business-report webhook:
 
 ```bash
 sudo systemd-creds encrypt --name=manga-critical-alert-webhook - /etc/credstore.encrypted/manga-critical-alert-webhook

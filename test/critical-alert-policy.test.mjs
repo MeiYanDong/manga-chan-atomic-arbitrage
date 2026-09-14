@@ -85,6 +85,24 @@ test('critical alert policy pages only after a sustained lane failure', () => {
   })
   assert.equal(critical.state, 'CRITICAL')
   assert.equal(critical.reasonCode, 'SUSTAINED_GLOBAL_FAILURE')
+
+  assert.equal(
+    evaluateCriticalTradingHealth({
+      arm,
+      runtime: runtime({ status: 'DEGRADED_BOARD', consecutiveBoardErrors: 29 }),
+      processAlive: true,
+      nowMs: NOW,
+    }).state,
+    'HEALTHY',
+  )
+  const boardCritical = evaluateCriticalTradingHealth({
+    arm,
+    runtime: runtime({ status: 'DEGRADED_BOARD', consecutiveBoardErrors: 30 }),
+    processAlive: true,
+    nowMs: NOW,
+  })
+  assert.equal(boardCritical.state, 'CRITICAL')
+  assert.equal(boardCritical.reasonCode, 'SUSTAINED_BOARD_FAILURE')
 })
 
 test('critical notifications are transition-only and recovery is emitted once', () => {
