@@ -381,9 +381,11 @@ export function buildBusinessSnapshot({
                 ? Number(globalTiming.sourceToDecisionMs)
                 : null,
             attribution: {
-              coverage: 'PARTIAL_NO_SAME_BLOCK_COUNTERFACTUAL',
+              coverage: runtime?.global?.evidenceCoverage || 'PARTIAL_NO_SAME_BLOCK_COUNTERFACTUAL',
               confirmedLostRaces: null,
               latestOutcome: runtime?.global?.lastResult || null,
+              latestClassification: runtime?.global?.decisionClassification || null,
+              lifecycle: runtime?.global?.lifecycle || null,
             },
           }
         : null,

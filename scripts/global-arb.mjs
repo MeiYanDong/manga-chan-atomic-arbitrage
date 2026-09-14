@@ -24,11 +24,18 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 import { assertLiveTransport, loadRuntimeConfig } from '../src/config.mjs'
 import { broadcastSameRawToSequencer } from '../src/direct-sequencer.mjs'
+import { EventLifecycle } from '../src/event-lifecycle.mjs'
 import {
   buildBptExecutionPlan,
   buildCycleExecutionPlan,
   equalPremiumAllocations,
 } from '../src/global-execution-plan.mjs'
+import {
+  EvaluationOutcome,
+  classifyEvaluationFailure,
+  classifyQuoteOutcome,
+  summarizeEvaluationOutcomes,
+} from '../src/evaluation-outcome.mjs'
 import {
   buildEarnBptArbitrageTemplates,
   buildUnifiedLiquidityGraph,
@@ -68,8 +75,15 @@ import {
   GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
   GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
 } from '../src/global-wake-policy.mjs'
-import { classifyReconciliation, errorText, latestUnresolvedMutation } from '../src/policy.mjs'
+import {
+  RpcErrorClass,
+  classifyReconciliation,
+  classifyRpcError,
+  errorText,
+  latestUnresolvedMutation,
+} from '../src/policy.mjs'
 import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
+import { RpcEvidence, instrumentRpcTransport, withRpcEvidence } from '../src/rpc-evidence.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import {
   loadUniversalContractArtifact,
@@ -160,17 +174,20 @@ function consumeManagedFallbackBudget(body) {
 
 const executionClient = createPublicClient({
   chain,
-  transport: http(RPC_URL, { timeout: 30_000, retryCount: 1 }),
+  transport: instrumentRpcTransport(http(RPC_URL, { timeout: 30_000, retryCount: 1 }), 'EXECUTION_CLIENT'),
 })
 const discoveryClient = createPublicClient({
   chain,
-  transport: publicFirstRpcTransport(PUBLIC_RPC, RPC_URL, {
-    batchSize: PUBLIC_DISCOVERY_BATCH_SIZE,
-    managedFetchFn: async (input, init) => {
-      consumeManagedFallbackBudget(init?.body)
-      return globalThis.fetch(input, init)
-    },
-  }),
+  transport: instrumentRpcTransport(
+    publicFirstRpcTransport(PUBLIC_RPC, RPC_URL, {
+      batchSize: PUBLIC_DISCOVERY_BATCH_SIZE,
+      managedFetchFn: async (input, init) => {
+        consumeManagedFallbackBudget(init?.body)
+        return globalThis.fetch(input, init)
+      },
+    }),
+    'DISCOVERY_CLIENT',
+  ),
 })
 const erc20Abi = parseAbi([
   'function balanceOf(address) view returns (uint256)',
@@ -504,9 +521,9 @@ async function quotePlan(client, executor, abi, plan, principal, blockNumber, fu
         args: [plan, principal],
         blockNumber,
       })
-      return { result: BigInt(simulation.result), error: null }
+      return classifyQuoteOutcome({ result: BigInt(simulation.result) })
     } catch (error) {
-      return { result: null, error: errorText(error).slice(0, 240) }
+      return classifyQuoteOutcome({ error })
     }
   }
   try {
@@ -520,10 +537,10 @@ async function quotePlan(client, executor, abi, plan, principal, blockNumber, fu
     })
   } catch (error) {
     const result = parseQuoteError(error, abi)
-    if (result !== null) return { result, error: null }
-    return { result: null, error: errorText(error).slice(0, 240) }
+    if (result !== null) return classifyQuoteOutcome({ result })
+    return classifyQuoteOutcome({ error })
   }
-  return { result: null, error: 'quote did not return the mandatory QuoteResult revert' }
+  return classifyQuoteOutcome({ error: new Error('quote did not return the mandatory QuoteResult revert') })
 }
 
 async function bestV3Quote(tokenIn, tokenOut, amountIn, blockNumber, client = executionClient, graph = null) {
@@ -579,14 +596,26 @@ async function bestV3Quote(tokenIn, tokenOut, amountIn, blockNumber, client = ex
           args: [pathValue, amountIn],
           blockNumber,
         })
-        return BigInt(result[0])
-      } catch {
-        return null
+        return classifyQuoteOutcome({ result: BigInt(result[0]) })
+      } catch (error) {
+        return classifyQuoteOutcome({ error })
       }
     }),
   )
-  const usable = quotes.filter((amount) => amount !== null && amount > 0n)
-  if (usable.length === 0) throw new Error('no canonical V3 valuation path for settlement asset')
+  const usable = quotes.map((quote) => quote.result).filter((amount) => amount !== null && amount > 0n)
+  if (usable.length === 0) {
+    const evidence = summarizeEvaluationOutcomes(quotes)
+    const rpcClass =
+      evidence.decisionClassification === EvaluationOutcome.STATE_UNAVAILABLE
+        ? RpcErrorClass.STATE_NOT_READY
+        : evidence.decisionClassification === EvaluationOutcome.RPC_ERROR
+          ? RpcErrorClass.NETWORK
+          : RpcErrorClass.INVARIANT
+    throw Object.assign(new Error(`no usable canonical V3 valuation quote: ${evidence.decisionClassification}`), {
+      evaluationOutcome: evidence.decisionClassification,
+      rpcClass,
+    })
+  }
   return usable.reduce((best, amount) => (amount > best ? amount : best), 0n)
 }
 
@@ -625,7 +654,13 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
       (candidate) =>
         !hasValuationPath(ROBINHOOD_WETH, candidate.token) || !hasValuationPath(candidate.token, ROBINHOOD_USDG),
     )
-    .map((candidate) => ({ ...candidate, rejected: true, reason: 'no graph-verified WETH and USDG valuation path' }))
+    .map((candidate) => ({
+      ...candidate,
+      rejected: true,
+      outcome: EvaluationOutcome.UNSUPPORTED,
+      stage: 'SETTLEMENT_GRAPH',
+      reason: 'no graph-verified WETH and USDG valuation path',
+    }))
   const valuationCandidates = fundingCandidates.filter(
     (candidate) =>
       hasValuationPath(ROBINHOOD_WETH, candidate.token) && hasValuationPath(candidate.token, ROBINHOOD_USDG),
@@ -656,7 +691,14 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
       ])
       return assessSettlementFunding(candidate, { decimals, morphoLiquidity, inventory })
     } catch (error) {
-      return { ...candidate, rejected: true, reason: errorText(error).slice(0, 200) }
+      return {
+        ...candidate,
+        rejected: true,
+        outcome: classifyEvaluationFailure(error),
+        stage: 'SETTLEMENT_FUNDING',
+        rpcClass: classifyRpcError(error),
+        reason: errorText(error).slice(0, 200),
+      }
     }
   })
 
@@ -691,7 +733,14 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
         valuationUsdgOutWei: normalizedProbe,
       })
     } catch (error) {
-      rejected.push({ ...candidate, rejected: true, reason: errorText(error).slice(0, 200) })
+      rejected.push({
+        ...candidate,
+        rejected: true,
+        outcome: classifyEvaluationFailure(error),
+        stage: 'SETTLEMENT_VALUATION',
+        rpcClass: classifyRpcError(error),
+        reason: errorText(error).slice(0, 200),
+      })
     }
   }
   return {
@@ -758,11 +807,29 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
   }
 }
 
-async function discoverExactCandidates({ client = discoveryClient, deployment, block }) {
-  const { earn, uniswap, graph } = await loadGlobalGraph(block.number)
+async function discoverExactCandidates({ client = discoveryClient, deployment, block, lifecycle, rpcEvidence }) {
+  const { earn, uniswap, graph } = await withRpcEvidence(rpcEvidence, 'CATALOG_GRAPH', () =>
+    loadGlobalGraph(block.number),
+  )
+  lifecycle.setVersions({
+    catalogVersion: `EARN:${earn.blockNumber || 'UNKNOWN'}|UNISWAP:${uniswap.blockNumber || 'UNKNOWN'}`,
+    graphVersion: graph.commitment,
+  })
+  lifecycle.mark('CATALOG_GRAPH_READY', {
+    assetCount: graph.assets.size,
+    edgeCount: graph.edges.length,
+    hyperedgeCount: graph.hyperedges.length,
+  })
   const evaluations = []
   const routeCoverage = []
-  const settlementAdmission = await discoverDynamicSettlementAssets({ client, graph, deployment, block })
+  const settlementAdmission = await withRpcEvidence(rpcEvidence, 'SETTLEMENT_ADMISSION', () =>
+    discoverDynamicSettlementAssets({ client, graph, deployment, block }),
+  )
+  lifecycle.mark('SETTLEMENT_ASSETS_ADMITTED', {
+    candidateCount: settlementAdmission.candidates.length,
+    admittedCount: settlementAdmission.admittedCount,
+    rejectedCount: settlementAdmission.rejected.length,
+  })
   const unboundedWorksets = settlementAdmission.admitted.map(({ token }) =>
     selectRouteDefinitions(graph, token, block.number),
   )
@@ -770,6 +837,10 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
     wakeAddressSet().size > 0
       ? applyGlobalEventRouteBudget(unboundedWorksets, GLOBAL_EVENT_MAX_ROUTES_PER_WAKE)
       : applyGlobalRecoveryRouteBudget(unboundedWorksets, runtime.globalMaxRoutesPerWake)
+  lifecycle.mark('ROUTES_SELECTED', {
+    routeCount: routeWorksets.reduce((total, workset) => total + workset.routes.length, 0),
+    dependencyCount: wakeAddressSet().size,
+  })
   for (const [settlementIndex, profile] of settlementAdmission.admitted.entries()) {
     const settlementToken = profile.token
     const { decimals, morphoLiquidity, inventory } = profile
@@ -819,6 +890,8 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
               fundingMode: source.fundingMode,
               principal,
               status: 'PLAN_REJECTED',
+              outcome: classifyEvaluationFailure(error),
+              stage: 'PLAN',
               reason: errorText(error),
             })
             continue
@@ -828,14 +901,16 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
       }
     }
     const quoted = await mapWithConcurrency(jobs, runtime.globalQuoteConcurrency, async (job) => {
-      const quote = await quotePlan(
-        client,
-        deployment.executor,
-        deployment.compiled.abi,
-        job.plan,
-        job.principal,
-        block.number,
-        job.source.fundingMode,
+      const quote = await withRpcEvidence(rpcEvidence, 'COARSE_QUOTE', () =>
+        quotePlan(
+          client,
+          deployment.executor,
+          deployment.compiled.abi,
+          job.plan,
+          job.principal,
+          block.number,
+          job.source.fundingMode,
+        ),
       )
       return {
         route: job.route,
@@ -849,8 +924,11 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
         fundingAvailable: job.source.available,
         plan: job.plan,
         quoteDelta: quote.result,
-        status: quote.result !== null && quote.result > 0n ? 'GROSS_POSITIVE' : 'NO_GROSS_PROFIT',
-        reason: quote.error,
+        status: quote.outcome === EvaluationOutcome.PROFITABLE ? 'GROSS_POSITIVE' : quote.outcome,
+        outcome: quote.outcome,
+        stage: 'COARSE_QUOTE',
+        rpcClass: quote.rpcClass,
+        reason: quote.reason,
       }
     })
     evaluations.push(...quoted)
@@ -885,32 +963,51 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
                   minimumProfit: 1n,
                   deadline: block.timestamp + DEADLINE_SECONDS,
                 })
-        } catch {
+        } catch (error) {
+          evaluations.push({
+            templateId: best.templateId,
+            opportunityKind: best.opportunityKind,
+            fundingMode: best.fundingMode,
+            principal,
+            status: 'PLAN_REJECTED',
+            outcome: classifyEvaluationFailure(error),
+            stage: 'REFINEMENT_PLAN',
+            reason: errorText(error),
+          })
           continue
         }
         refinementJobs.push({ ...best, principal, plan })
       }
     }
     const refined = await mapWithConcurrency(refinementJobs, runtime.globalQuoteConcurrency, async (job) => {
-      const quote = await quotePlan(
-        client,
-        deployment.executor,
-        deployment.compiled.abi,
-        job.plan,
-        job.principal,
-        block.number,
-        job.fundingMode,
+      const quote = await withRpcEvidence(rpcEvidence, 'REFINED_QUOTE', () =>
+        quotePlan(
+          client,
+          deployment.executor,
+          deployment.compiled.abi,
+          job.plan,
+          job.principal,
+          block.number,
+          job.fundingMode,
+        ),
       )
       return {
         ...job,
         quoteDelta: quote.result,
-        status: quote.result !== null && quote.result > 0n ? 'GROSS_POSITIVE' : 'NO_GROSS_PROFIT',
-        reason: quote.error,
+        status: quote.outcome === EvaluationOutcome.PROFITABLE ? 'GROSS_POSITIVE' : quote.outcome,
+        outcome: quote.outcome,
+        stage: 'REFINED_QUOTE',
+        rpcClass: quote.rpcClass,
+        reason: quote.reason,
         sizingStage: 'REFINED',
       }
     })
     evaluations.push(...refined)
   }
+  lifecycle.mark('DISCOVERY_QUOTES_COMPLETE', {
+    evaluatedCount: evaluations.length,
+    grossPositiveCount: evaluations.filter((item) => item.status === 'GROSS_POSITIVE').length,
+  })
   return { earn, uniswap, graph, evaluations, routeCoverage, settlementAdmission }
 }
 
@@ -977,139 +1074,294 @@ async function exactNetEvaluation(candidate, deployment, block, gasPrice, graph)
 async function globalPreflight({ print = true } = {}) {
   const preflightStartedAtMs = Date.now()
   const preflightStartedAt = new Date(preflightStartedAtMs).toISOString()
-  const deployment = await assertDeployment()
-  const block = await discoveryClient.getBlock()
-  const discovery = await discoverExactCandidates({ deployment, block })
-  const grossPositive = discovery.evaluations.filter((item) => item.status === 'GROSS_POSITIVE')
-  const managedCandidates = selectBoundedManagedCandidates(grossPositive)
-  const exact = []
-  for (const candidate of managedCandidates) {
-    try {
-      const latestBlock = await executionClient.getBlock()
-      const latestPlan = { ...candidate.plan, deadline: latestBlock.timestamp + DEADLINE_SECONDS }
-      const latestQuote = await quotePlan(
-        executionClient,
-        deployment.executor,
-        deployment.compiled.abi,
-        latestPlan,
-        candidate.principal,
-        latestBlock.number,
-        candidate.fundingMode,
-      )
-      if (latestQuote.result === null || latestQuote.result <= 0n) continue
-      exact.push(
-        await exactNetEvaluation(
-          { ...candidate, plan: latestPlan, quoteDelta: latestQuote.result },
-          deployment,
-          latestBlock,
-          await executionClient.getGasPrice(),
-          discovery.graph,
-        ),
-      )
-    } catch {}
-  }
-  exact.sort((left, right) => (left.normalizedNetUsdg > right.normalizedNetUsdg ? -1 : 1))
-  const selected = exact[0] || null
-  const preflightCompletedAtMs = Date.now()
-  const sourceReceivedAt = process.env.GLOBAL_WAKE_RECEIVED_AT || null
-  const sourceReceivedAtMs = Number.isFinite(Date.parse(sourceReceivedAt || '')) ? Date.parse(sourceReceivedAt) : null
-  const routeAddresses = wakeAddressSet()
-  const workset = {
-    policy: GLOBAL_ROUTE_WORKSET_POLICY,
-    wakeKind: routeAddresses.size > 0 ? 'EVENT' : 'RECOVERY',
-    totalRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.totalRoutes || 0), 0),
-    touchedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.touchedRoutes || 0), 0),
-    selectedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.selectedRoutes || 0), 0),
-    settlementAssets: discovery.routeCoverage.length,
-  }
-  const timing = {
-    preflightStartedAt,
-    preflightCompletedAt: new Date(preflightCompletedAtMs).toISOString(),
-    sourceToPreflightStartMs:
-      sourceReceivedAtMs === null ? null : Math.max(0, preflightStartedAtMs - sourceReceivedAtMs),
-    preflightDurationMs: preflightCompletedAtMs - preflightStartedAtMs,
-    sourceToDecisionMs: sourceReceivedAtMs === null ? null : Math.max(0, preflightCompletedAtMs - sourceReceivedAtMs),
-  }
-  const snapshot = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    status: selected ? 'EXACT_NET_POSITIVE' : 'NO_EXACT_NET_OPPORTUNITY',
-    evidence: 'PUBLIC_FIRST_BATCHED_STATE_QUOTES_WITH_MANAGED_TRANSPORT_FALLBACK_THEN_MANAGED_EXACT_SIMULATION',
-    graph: {
-      blockNumber: block.number,
-      assets: discovery.graph.assets.size,
-      swapEdges: discovery.graph.edges.length,
-      hyperedges: discovery.graph.hyperedges.length,
-      rejected: discovery.graph.rejected.length,
-      commitment: discovery.graph.commitment,
-      earnPools: discovery.earn.pools.length,
-      v2Pools: discovery.uniswap.v2Pools.length,
-      v3Pools: discovery.uniswap.v3Pools.length,
-      v4Pools: discovery.uniswap.v4Pools.length,
-      coverage: discovery.uniswap.coverage,
-      settlementAssets: discovery.settlementAdmission.admitted.map((item) => item.token),
-      settlementAdmission: {
-        policy: discovery.settlementAdmission.policy,
-        evidence: discovery.settlementAdmission.evidence,
-        scope: discovery.settlementAdmission.admissionScope,
-        graphAssets: discovery.settlementAdmission.graphAssets,
-        structurallyEligible: discovery.settlementAdmission.structurallyEligible,
-        selectedForFunding: discovery.settlementAdmission.selectedForFunding,
-        valuationEligibleForFunding: discovery.settlementAdmission.valuationEligibleForFunding,
-        fundingChecked: discovery.settlementAdmission.candidates.length,
-        funded: discovery.settlementAdmission.fundedCount,
-        admitted: discovery.settlementAdmission.admittedCount,
-        rejected: discovery.settlementAdmission.rejected.length,
-        deferred: discovery.settlementAdmission.deferred,
-        maximumAdmitted: discovery.settlementAdmission.maximumAdmitted,
-      },
-      routeCoverage: discovery.routeCoverage,
-    },
-    evaluated: discovery.evaluations.length,
-    grossPositive: grossPositive.length,
-    managedEvaluated: managedCandidates.length,
-    managedMaximumCandidates: GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
-    exactNetPositive: exact.length,
-    wake: {
-      reason: process.env.GLOBAL_WAKE_REASON || null,
-      classification: process.env.GLOBAL_WAKE_CLASSIFICATION || null,
-      sourceReceivedAt,
-      feedSequenceNumber: /^\d+$/.test(String(process.env.GLOBAL_WAKE_SEQUENCE_NUMBER || ''))
-        ? process.env.GLOBAL_WAKE_SEQUENCE_NUMBER
-        : null,
-      routeAddressCount: routeAddresses.size,
-    },
-    workset,
-    timing,
-    rpc: {
-      discoveryPolicy: 'PUBLIC_FIRST_BATCHED_WITH_BOUNDED_MANAGED_TRANSPORT_FALLBACK',
-      wakeKind: workset.wakeKind,
-      wakeReason: process.env.GLOBAL_WAKE_REASON || null,
-      managedFallbackWakeBudget: managedFallbackWakeBudgetSnapshot(),
-      managedFallbackBudget: managedFallbackBudgetSnapshot(),
-    },
-    selected: selected
-      ? {
-          templateId: selected.templateId,
-          kind: selected.opportunityKind,
-          pool: selected.pool,
-          settlementToken: selected.settlementToken,
-          fundingMode: selected.fundingMode,
-          principal: formatUnits(selected.principal, selected.decimals),
-          quotedGross: formatUnits(selected.quoteDelta, selected.decimals),
-          quotedNet: formatUnits(selected.netSettlement, selected.decimals),
-          normalizedNetUsdg: formatUnits(selected.normalizedNetUsdg, 6),
-          estimatedGas: selected.estimatedGas,
+  const feedSequenceNumber = /^\d+$/.test(String(process.env.GLOBAL_WAKE_SEQUENCE_NUMBER || ''))
+    ? process.env.GLOBAL_WAKE_SEQUENCE_NUMBER
+    : null
+  const feedLastSequenceNumber = /^\d+$/.test(String(process.env.GLOBAL_WAKE_LAST_SEQUENCE_NUMBER || ''))
+    ? process.env.GLOBAL_WAKE_LAST_SEQUENCE_NUMBER
+    : feedSequenceNumber
+  const eventId = feedSequenceNumber
+    ? `ROBINHOOD_SEQUENCER:${feedSequenceNumber}:${feedLastSequenceNumber}`
+    : `ROBINHOOD_RECOVERY:${process.env.GLOBAL_WAKE_CLAIMED_AT || preflightStartedAt}`
+  const lifecycle = new EventLifecycle({
+    eventId,
+    source: feedSequenceNumber ? 'SEQUENCER_FEED' : 'PERIODIC_RECOVERY',
+    observedAt: process.env.GLOBAL_WAKE_RECEIVED_AT || null,
+    enqueuedAt: process.env.GLOBAL_WAKE_ENQUEUED_AT || null,
+    dequeuedAt: process.env.GLOBAL_WAKE_CLAIMED_AT || null,
+    firstSequenceNumber: feedSequenceNumber,
+    lastSequenceNumber: feedLastSequenceNumber,
+  })
+  const rpcEvidence = new RpcEvidence()
+  try {
+    lifecycle.mark('PREFLIGHT_STARTED', {}, preflightStartedAtMs)
+    const deployment = await withRpcEvidence(rpcEvidence, 'DEPLOYMENT_VERIFY', () => assertDeployment())
+    const block = await withRpcEvidence(rpcEvidence, 'STATE_HEAD', () => discoveryClient.getBlock())
+    lifecycle.pinState(block).mark('STATE_PINNED', { blockNumber: block.number, hasBlockHash: Boolean(block.hash) })
+    const discovery = await discoverExactCandidates({ deployment, block, lifecycle, rpcEvidence })
+    const grossPositive = discovery.evaluations.filter((item) => item.status === 'GROSS_POSITIVE')
+    const managedCandidates = selectBoundedManagedCandidates(grossPositive)
+    const exact = []
+    const exactEvaluations = []
+    for (const candidate of managedCandidates) {
+      try {
+        const latestBlock = await withRpcEvidence(rpcEvidence, 'EXACT_STATE_HEAD', () => executionClient.getBlock())
+        const latestPlan = { ...candidate.plan, deadline: latestBlock.timestamp + DEADLINE_SECONDS }
+        const latestQuote = await withRpcEvidence(rpcEvidence, 'EXACT_QUOTE', () =>
+          quotePlan(
+            executionClient,
+            deployment.executor,
+            deployment.compiled.abi,
+            latestPlan,
+            candidate.principal,
+            latestBlock.number,
+            candidate.fundingMode,
+          ),
+        )
+        if (latestQuote.outcome !== EvaluationOutcome.PROFITABLE) {
+          exactEvaluations.push({
+            templateId: candidate.templateId,
+            fundingMode: candidate.fundingMode,
+            outcome: latestQuote.outcome,
+            stage: 'LATEST_QUOTE',
+            rpcClass: latestQuote.rpcClass,
+            reason: latestQuote.reason,
+          })
+          continue
         }
-      : null,
+        const evaluated = await withRpcEvidence(rpcEvidence, 'EXACT_SIMULATION', async () =>
+          exactNetEvaluation(
+            { ...candidate, plan: latestPlan, quoteDelta: latestQuote.result },
+            deployment,
+            latestBlock,
+            await executionClient.getGasPrice(),
+            discovery.graph,
+          ),
+        )
+        exact.push(evaluated)
+        exactEvaluations.push({
+          templateId: candidate.templateId,
+          fundingMode: candidate.fundingMode,
+          outcome: EvaluationOutcome.PROFITABLE,
+          stage: 'EXACT_NET',
+        })
+      } catch (error) {
+        exactEvaluations.push({
+          templateId: candidate.templateId,
+          fundingMode: candidate.fundingMode,
+          outcome: classifyEvaluationFailure(error),
+          stage: 'EXACT_NET',
+          rpcClass: classifyRpcError(error),
+          reason: errorText(error),
+        })
+      }
+    }
+    lifecycle.mark('EXACT_EVALUATION_COMPLETE', {
+      candidateCount: managedCandidates.length,
+      exactPositiveCount: exact.length,
+    })
+    exact.sort((left, right) => (left.normalizedNetUsdg > right.normalizedNetUsdg ? -1 : 1))
+    const selected = exact[0] || null
+    const preflightCompletedAtMs = Date.now()
+    const sourceReceivedAt = process.env.GLOBAL_WAKE_RECEIVED_AT || null
+    const sourceReceivedAtMs = Number.isFinite(Date.parse(sourceReceivedAt || '')) ? Date.parse(sourceReceivedAt) : null
+    const routeAddresses = wakeAddressSet()
+    const discoveryOutcomes = summarizeEvaluationOutcomes(
+      [...discovery.evaluations, ...discovery.settlementAdmission.rejected],
+      { fallbackOutcome: EvaluationOutcome.UNSUPPORTED },
+    )
+    const exactOutcomes = summarizeEvaluationOutcomes(exactEvaluations, {
+      fallbackOutcome: EvaluationOutcome.STATE_UNAVAILABLE,
+    })
+    const evaluation = managedCandidates.length > 0 ? exactOutcomes : discoveryOutcomes
+    const workset = {
+      policy: GLOBAL_ROUTE_WORKSET_POLICY,
+      wakeKind: routeAddresses.size > 0 ? 'EVENT' : 'RECOVERY',
+      totalRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.totalRoutes || 0), 0),
+      touchedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.touchedRoutes || 0), 0),
+      selectedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.selectedRoutes || 0), 0),
+      settlementAssets: discovery.routeCoverage.length,
+    }
+    const timing = {
+      preflightStartedAt,
+      preflightCompletedAt: new Date(preflightCompletedAtMs).toISOString(),
+      sourceToPreflightStartMs:
+        sourceReceivedAtMs === null ? null : Math.max(0, preflightStartedAtMs - sourceReceivedAtMs),
+      preflightDurationMs: preflightCompletedAtMs - preflightStartedAtMs,
+      sourceToDecisionMs: sourceReceivedAtMs === null ? null : Math.max(0, preflightCompletedAtMs - sourceReceivedAtMs),
+    }
+    lifecycle.mark('DECIDED', {
+      decisionClassification: selected ? EvaluationOutcome.PROFITABLE : evaluation.decisionClassification,
+      evidenceCoverage: evaluation.coverage,
+    })
+    const snapshot = {
+      schemaVersion: 2,
+      generatedAt: new Date().toISOString(),
+      status: selected ? 'EXACT_NET_POSITIVE' : 'NO_EXACT_NET_OPPORTUNITY',
+      decisionClassification: selected ? EvaluationOutcome.PROFITABLE : evaluation.decisionClassification,
+      evidenceCoverage: evaluation.coverage,
+      evidence: 'PUBLIC_FIRST_BATCHED_STATE_QUOTES_WITH_MANAGED_TRANSPORT_FALLBACK_THEN_MANAGED_EXACT_SIMULATION',
+      lifecycle: lifecycle.snapshot(),
+      graph: {
+        blockNumber: block.number,
+        assets: discovery.graph.assets.size,
+        swapEdges: discovery.graph.edges.length,
+        hyperedges: discovery.graph.hyperedges.length,
+        rejected: discovery.graph.rejected.length,
+        commitment: discovery.graph.commitment,
+        earnPools: discovery.earn.pools.length,
+        v2Pools: discovery.uniswap.v2Pools.length,
+        v3Pools: discovery.uniswap.v3Pools.length,
+        v4Pools: discovery.uniswap.v4Pools.length,
+        coverage: discovery.uniswap.coverage,
+        settlementAssets: discovery.settlementAdmission.admitted.map((item) => item.token),
+        settlementAdmission: {
+          policy: discovery.settlementAdmission.policy,
+          evidence: discovery.settlementAdmission.evidence,
+          scope: discovery.settlementAdmission.admissionScope,
+          graphAssets: discovery.settlementAdmission.graphAssets,
+          structurallyEligible: discovery.settlementAdmission.structurallyEligible,
+          selectedForFunding: discovery.settlementAdmission.selectedForFunding,
+          valuationEligibleForFunding: discovery.settlementAdmission.valuationEligibleForFunding,
+          fundingChecked: discovery.settlementAdmission.candidates.length,
+          funded: discovery.settlementAdmission.fundedCount,
+          admitted: discovery.settlementAdmission.admittedCount,
+          rejected: discovery.settlementAdmission.rejected.length,
+          deferred: discovery.settlementAdmission.deferred,
+          maximumAdmitted: discovery.settlementAdmission.maximumAdmitted,
+        },
+        routeCoverage: discovery.routeCoverage,
+      },
+      evaluated: discovery.evaluations.length,
+      grossPositive: grossPositive.length,
+      managedEvaluated: managedCandidates.length,
+      managedMaximumCandidates: GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
+      exactNetPositive: exact.length,
+      evaluation: {
+        taxonomy: Object.values(EvaluationOutcome),
+        decisionClassification: selected ? EvaluationOutcome.PROFITABLE : evaluation.decisionClassification,
+        coverage: evaluation.coverage,
+        discovery: discoveryOutcomes,
+        exact: exactOutcomes,
+      },
+      wake: {
+        reason: process.env.GLOBAL_WAKE_REASON || null,
+        classification: process.env.GLOBAL_WAKE_CLASSIFICATION || null,
+        sourceReceivedAt,
+        feedSequenceNumber,
+        feedLastSequenceNumber,
+        routeAddressCount: routeAddresses.size,
+      },
+      workset,
+      timing,
+      rpc: {
+        discoveryPolicy: 'PUBLIC_FIRST_BATCHED_WITH_BOUNDED_MANAGED_TRANSPORT_FALLBACK',
+        wakeKind: workset.wakeKind,
+        wakeReason: process.env.GLOBAL_WAKE_REASON || null,
+        managedFallbackWakeBudget: managedFallbackWakeBudgetSnapshot(),
+        managedFallbackBudget: managedFallbackBudgetSnapshot(),
+        calls: rpcEvidence.snapshot(),
+      },
+      selected: selected
+        ? {
+            templateId: selected.templateId,
+            kind: selected.opportunityKind,
+            pool: selected.pool,
+            settlementToken: selected.settlementToken,
+            fundingMode: selected.fundingMode,
+            principal: formatUnits(selected.principal, selected.decimals),
+            quotedGross: formatUnits(selected.quoteDelta, selected.decimals),
+            quotedNet: formatUnits(selected.netSettlement, selected.decimals),
+            normalizedNetUsdg: formatUnits(selected.normalizedNetUsdg, 6),
+            estimatedGas: selected.estimatedGas,
+          }
+        : null,
+    }
+    writeProtectedJson(GLOBAL_SNAPSHOT_PATH, snapshot)
+    appendAudit('global_preflight', {
+      authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
+      ...snapshot,
+    })
+    if (print) console.log(stringify(snapshot))
+    return { snapshot, selected, deployment, graph: discovery.graph, lifecycle, rpcEvidence }
+  } catch (error) {
+    const decisionClassification = classifyEvaluationFailure(error)
+    const evidenceCoverage = ['RPC_ERROR', 'STATE_UNAVAILABLE'].includes(decisionClassification)
+      ? 'UNAVAILABLE'
+      : 'COMPLETE'
+    lifecycle.mark('PREFLIGHT_FAILED', {
+      decisionClassification,
+      reason: errorText(error),
+    })
+    const failureSnapshot = {
+      schemaVersion: 2,
+      generatedAt: new Date().toISOString(),
+      status: 'PREFLIGHT_FAILED_NO_SIGNATURE',
+      decisionClassification,
+      evidenceCoverage,
+      evidence: 'TYPED_PREFLIGHT_FAILURE_BEFORE_SIGNATURE',
+      lifecycle: lifecycle.snapshot(),
+      evaluation: summarizeEvaluationOutcomes([
+        {
+          outcome: decisionClassification,
+          stage: 'PREFLIGHT',
+          rpcClass: classifyRpcError(error),
+          reason: errorText(error),
+        },
+      ]),
+      wake: {
+        reason: process.env.GLOBAL_WAKE_REASON || null,
+        classification: process.env.GLOBAL_WAKE_CLASSIFICATION || null,
+        sourceReceivedAt: process.env.GLOBAL_WAKE_RECEIVED_AT || null,
+        feedSequenceNumber,
+        feedLastSequenceNumber,
+        routeAddressCount: wakeAddressSet().size,
+      },
+      timing: {
+        preflightStartedAt,
+        preflightCompletedAt: new Date().toISOString(),
+        preflightDurationMs: Date.now() - preflightStartedAtMs,
+      },
+      rpc: {
+        discoveryPolicy: 'PUBLIC_FIRST_BATCHED_WITH_BOUNDED_MANAGED_TRANSPORT_FALLBACK',
+        managedFallbackWakeBudget: managedFallbackWakeBudgetSnapshot(),
+        managedFallbackBudget: managedFallbackBudgetSnapshot(),
+        calls: rpcEvidence.snapshot(),
+      },
+    }
+    writeProtectedJson(GLOBAL_SNAPSHOT_PATH, failureSnapshot)
+    appendAudit('global_preflight_failed', {
+      authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
+      ...failureSnapshot,
+    })
+    if (error && typeof error === 'object') error.globalPreflightEvidence = failureSnapshot
+    throw error
+  }
+}
+
+function persistGlobalLifecycle(prepared, status, decisionClassification, evidenceCoverage) {
+  const lifecycle = prepared.lifecycle.snapshot()
+  const rpc = { ...prepared.snapshot.rpc, calls: prepared.rpcEvidence.snapshot() }
+  const snapshot = {
+    ...prepared.snapshot,
+    generatedAt: new Date().toISOString(),
+    status,
+    decisionClassification,
+    evidenceCoverage,
+    lifecycle,
+    rpc,
   }
   writeProtectedJson(GLOBAL_SNAPSHOT_PATH, snapshot)
-  appendAudit('global_preflight', {
+  appendAudit('global_event_lifecycle', {
     authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
-    ...snapshot,
+    eventId: lifecycle.eventId,
+    status,
+    decisionClassification,
+    evidenceCoverage,
+    lifecycle,
+    rpcCalls: rpc.calls,
   })
-  if (print) console.log(stringify(snapshot))
-  return { snapshot, selected, deployment, graph: discovery.graph }
+  return snapshot
 }
 
 async function deployPreflight({ print = true } = {}) {
@@ -1147,11 +1399,13 @@ async function deployPreflight({ print = true } = {}) {
   return { compiled, snapshot, data, gasLimit, maxFeePerGas, runtimeCodeHash, report }
 }
 
-async function broadcastPersisted(plan, transaction) {
+async function broadcastPersisted(plan, transaction, lifecycle = null, rpcEvidence = null) {
   const account = loadAccount()
+  lifecycle?.mark('SIGNING_STARTED')
   const serializedTransaction = await account.signTransaction(transaction)
   const hash = keccak256(serializedTransaction)
   const rawPrivateRef = persistSignedRaw(SIGNED_DIR, hash, serializedTransaction)
+  lifecycle?.mark('SIGNED', { transactionHash: hash })
   appendAudit('mutation_signed', {
     kind: plan.kind,
     authorizationId: plan.authorizationId || null,
@@ -1160,26 +1414,53 @@ async function broadcastPersisted(plan, transaction) {
     hash,
     nonce: plan.nonce,
     rawPrivateRef,
+    eventId: lifecycle?.eventId || null,
   })
+  lifecycle?.mark('SUBMISSION_STARTED')
   const broadcast = await broadcastSameRawToSequencer({
     serializedTransaction,
     managedRpcUrl: RPC_URL,
+  })
+  if (rpcEvidence instanceof RpcEvidence) {
+    rpcEvidence.record('DIRECT_SEQUENCER', 'SUBMISSION', 'eth_sendRawTransaction')
+    if (broadcast.fallback) rpcEvidence.record('MANAGED_FALLBACK', 'SUBMISSION', 'eth_sendRawTransaction')
+  }
+  lifecycle?.mark('SUBMITTED', {
+    transactionHash: hash,
+    directStatus: broadcast.direct.status,
+    fallbackStatus: broadcast.fallback?.status || null,
   })
   appendAudit('global_broadcast', {
     kind: plan.kind,
     hash,
     directStatus: broadcast.direct.status,
     fallbackStatus: broadcast.fallback?.status || null,
+    eventId: lifecycle?.eventId || null,
   })
   try {
-    const receipt = await executionClient.waitForTransactionReceipt({
-      hash,
-      confirmations: runtime.finalityConfirmations,
-      timeout: 120_000,
+    const receipt =
+      rpcEvidence instanceof RpcEvidence
+        ? await withRpcEvidence(rpcEvidence, 'RECEIPT_CONFIRMATION', () =>
+            executionClient.waitForTransactionReceipt({
+              hash,
+              confirmations: runtime.finalityConfirmations,
+              timeout: 120_000,
+            }),
+          )
+        : await executionClient.waitForTransactionReceipt({
+            hash,
+            confirmations: runtime.finalityConfirmations,
+            timeout: 120_000,
+          })
+    lifecycle?.mark('RECEIPT_CONFIRMED', {
+      transactionHash: hash,
+      receiptStatus: receipt.status,
+      blockNumber: receipt.blockNumber,
     })
     return { hash, receipt, broadcast }
   } catch {
-    appendAudit('global_receipt_unknown', { kind: plan.kind, hash })
+    lifecycle?.mark('RECEIPT_UNKNOWN', { transactionHash: hash })
+    appendAudit('global_receipt_unknown', { kind: plan.kind, hash, eventId: lifecycle?.eventId || null })
     throw new Error(`transaction receipt is UNKNOWN; reconcile before reusing nonce: ${hash}`)
   }
 }
@@ -1483,11 +1764,20 @@ async function execute() {
       prepared = await globalPreflight({ print: false })
     } catch (error) {
       if (/managed RPC fallback (?:per-wake|daily) logical-call budget exhausted/i.test(errorText(error))) {
+        const failureEvidence =
+          error && typeof error === 'object' ? /** @type {Record<string, any>} */ (error).globalPreflightEvidence : null
         const output = {
           status: 'NO_SIGNATURE_RPC_BUDGET_EXHAUSTED',
           evidence: 'BOUNDED_READ_FAILURE_BEFORE_SIGNER_LOAD_OR_MUTATION',
           reason: errorText(error),
+          decisionClassification: failureEvidence?.decisionClassification || EvaluationOutcome.POLICY_FILTERED,
+          evidenceCoverage: failureEvidence?.evidenceCoverage || 'COMPLETE',
+          lifecycle: failureEvidence?.lifecycle || null,
+          evaluation: failureEvidence?.evaluation || null,
+          wake: failureEvidence?.wake || null,
+          timing: failureEvidence?.timing || null,
           rpc: {
+            ...(failureEvidence?.rpc || {}),
             wakeKind: wakeAddressSet().size > 0 ? 'EVENT' : 'RECOVERY',
             wakeReason: process.env.GLOBAL_WAKE_REASON || null,
             managedFallbackWakeBudget: managedFallbackWakeBudgetSnapshot(),
@@ -1504,49 +1794,121 @@ async function execute() {
       console.log(stringify(output))
       return output
     }
-    const wallet = await walletSnapshot()
-    if (wallet.latestNonce !== wallet.pendingNonce) throw new Error('wallet has a pending nonce')
-    const latestQuote = await quotePlan(
-      executionClient,
-      deployment.executor,
-      deployment.compiled.abi,
-      { ...prepared.selected.plan, deadline: wallet.block.timestamp + DEADLINE_SECONDS },
-      prepared.selected.principal,
-      wallet.block.number,
-      prepared.selected.fundingMode,
+    const wallet = await withRpcEvidence(prepared.rpcEvidence, 'SIGNER_PREFLIGHT', () => walletSnapshot())
+    prepared.lifecycle.mark('SIGNER_PREFLIGHT_COMPLETE', {
+      blockNumber: wallet.block.number,
+      nonceReady: wallet.latestNonce === wallet.pendingNonce,
+    })
+    if (wallet.latestNonce !== wallet.pendingNonce) {
+      prepared.lifecycle.mark('SIGNER_PREFLIGHT_REJECTED', {
+        decisionClassification: EvaluationOutcome.POLICY_FILTERED,
+        reason: 'pending nonce',
+      })
+      persistGlobalLifecycle(
+        prepared,
+        'FINAL_VALIDATION_REJECTED_NO_SIGNATURE',
+        EvaluationOutcome.POLICY_FILTERED,
+        'COMPLETE',
+      )
+      throw new Error('wallet has a pending nonce')
+    }
+    const latestQuote = await withRpcEvidence(prepared.rpcEvidence, 'FINAL_QUOTE', () =>
+      quotePlan(
+        executionClient,
+        deployment.executor,
+        deployment.compiled.abi,
+        { ...prepared.selected.plan, deadline: wallet.block.timestamp + DEADLINE_SECONDS },
+        prepared.selected.principal,
+        wallet.block.number,
+        prepared.selected.fundingMode,
+      ),
     )
-    if (latestQuote.result === null || latestQuote.result <= 0n)
-      throw new Error('selected opportunity decayed before signing')
-    const refreshed = await exactNetEvaluation(
-      {
-        ...prepared.selected,
-        plan: { ...prepared.selected.plan, deadline: wallet.block.timestamp + DEADLINE_SECONDS },
-        quoteDelta: latestQuote.result,
-      },
-      deployment,
-      wallet.block,
-      wallet.gasPrice,
-      prepared.graph,
-    )
+    if (latestQuote.outcome !== EvaluationOutcome.PROFITABLE) {
+      prepared.lifecycle.mark('FINAL_QUOTE_REJECTED', {
+        decisionClassification: latestQuote.outcome,
+        reason: latestQuote.reason || 'quote decayed',
+      })
+      persistGlobalLifecycle(
+        prepared,
+        'FINAL_VALIDATION_REJECTED_NO_SIGNATURE',
+        latestQuote.outcome,
+        ['RPC_ERROR', 'STATE_UNAVAILABLE'].includes(latestQuote.outcome) ? 'UNAVAILABLE' : 'COMPLETE',
+      )
+      throw new Error(
+        `selected opportunity unavailable before signing: ${latestQuote.outcome}${latestQuote.reason ? ` (${latestQuote.reason})` : ''}`,
+      )
+    }
+    let refreshed
+    try {
+      refreshed = await withRpcEvidence(prepared.rpcEvidence, 'FINAL_SIMULATION', () =>
+        exactNetEvaluation(
+          {
+            ...prepared.selected,
+            plan: { ...prepared.selected.plan, deadline: wallet.block.timestamp + DEADLINE_SECONDS },
+            quoteDelta: latestQuote.result,
+          },
+          deployment,
+          wallet.block,
+          wallet.gasPrice,
+          prepared.graph,
+        ),
+      )
+      prepared.lifecycle.mark('FINAL_SIMULATION_PASSED', { blockNumber: wallet.block.number })
+    } catch (error) {
+      const outcome = classifyEvaluationFailure(error)
+      prepared.lifecycle.mark('FINAL_SIMULATION_REJECTED', {
+        decisionClassification: outcome,
+        reason: errorText(error),
+      })
+      persistGlobalLifecycle(
+        prepared,
+        'FINAL_VALIDATION_REJECTED_NO_SIGNATURE',
+        outcome,
+        ['RPC_ERROR', 'STATE_UNAVAILABLE'].includes(outcome) ? 'UNAVAILABLE' : 'COMPLETE',
+      )
+      throw error
+    }
     const data = encodeFunctionData({
       abi: deployment.compiled.abi,
       functionName: refreshed.functionName,
       args: [refreshed.plan, refreshed.principal],
     })
-    const settlementBefore = await executionClient.readContract({
-      address: refreshed.settlementToken,
-      abi: erc20Abi,
-      functionName: 'balanceOf',
-      args: [deployment.executor],
-      blockNumber: wallet.block.number,
-    })
-    const contractPlanHash = await executionClient.readContract({
-      address: deployment.executor,
-      abi: deployment.compiled.abi,
-      functionName: 'planHash',
-      args: [refreshed.plan],
-      blockNumber: wallet.block.number,
-    })
+    let settlementBefore
+    let contractPlanHash
+    try {
+      ;[settlementBefore, contractPlanHash] = await withRpcEvidence(prepared.rpcEvidence, 'BALANCE_BASELINE', () =>
+        Promise.all([
+          executionClient.readContract({
+            address: refreshed.settlementToken,
+            abi: erc20Abi,
+            functionName: 'balanceOf',
+            args: [deployment.executor],
+            blockNumber: wallet.block.number,
+          }),
+          executionClient.readContract({
+            address: deployment.executor,
+            abi: deployment.compiled.abi,
+            functionName: 'planHash',
+            args: [refreshed.plan],
+            blockNumber: wallet.block.number,
+          }),
+        ]),
+      )
+      prepared.lifecycle.mark('BALANCE_BASELINE_PINNED', { blockNumber: wallet.block.number })
+    } catch (error) {
+      const outcome = classifyEvaluationFailure(error)
+      prepared.lifecycle.mark('BALANCE_BASELINE_REJECTED', {
+        decisionClassification: outcome,
+        reason: errorText(error),
+      })
+      persistGlobalLifecycle(
+        prepared,
+        'FINAL_VALIDATION_REJECTED_NO_SIGNATURE',
+        outcome,
+        ['RPC_ERROR', 'STATE_UNAVAILABLE'].includes(outcome) ? 'UNAVAILABLE' : 'COMPLETE',
+      )
+      throw error
+    }
     const plan = buildMutationPlan('global-execute', {
       lane: 'global-v1',
       chainId: CHAIN_ID,
@@ -1573,20 +1935,30 @@ async function execute() {
       quotedNetProfit: refreshed.netSettlement,
       normalizedQuotedNetUsdg: refreshed.normalizedNetUsdg,
       settlementBefore,
+      eventId: prepared.lifecycle.eventId,
+      stateBlockNumber: wallet.block.number,
+      stateBlockHash: wallet.block.hash || null,
+      catalogVersion: prepared.snapshot.lifecycle.catalogVersion,
+      graphVersion: prepared.snapshot.lifecycle.graphVersion,
     })
     appendAudit('mutation_plan', plan)
     if (shared) assertSharedAuthorization(deployment)
-    const sent = await broadcastPersisted(plan, {
-      chainId: CHAIN_ID,
-      type: 'eip1559',
-      to: deployment.executor,
-      data,
-      value: 0n,
-      gas: refreshed.gasLimit,
-      maxFeePerGas: refreshed.maxFeePerGas,
-      maxPriorityFeePerGas: 0n,
-      nonce: wallet.latestNonce,
-    })
+    const sent = await broadcastPersisted(
+      plan,
+      {
+        chainId: CHAIN_ID,
+        type: 'eip1559',
+        to: deployment.executor,
+        data,
+        value: 0n,
+        gas: refreshed.gasLimit,
+        maxFeePerGas: refreshed.maxFeePerGas,
+        maxPriorityFeePerGas: 0n,
+        nonce: wallet.latestNonce,
+      },
+      prepared.lifecycle,
+      prepared.rpcEvidence,
+    )
     if (sent.receipt.status !== 'success') {
       const gasSpentWei = sent.receipt.gasUsed * sent.receipt.effectiveGasPrice
       appendAudit('mutation_reverted', {
@@ -1595,7 +1967,18 @@ async function execute() {
         hash: sent.hash,
         planHash: plan.planHash,
         gasSpentWei,
+        eventId: prepared.lifecycle.eventId,
       })
+      prepared.lifecycle.mark('EXECUTION_REVERTED', {
+        transactionHash: sent.hash,
+        blockNumber: sent.receipt.blockNumber,
+      })
+      const terminalSnapshot = persistGlobalLifecycle(
+        prepared,
+        'GLOBAL_EXECUTION_REVERTED_CONFIRMED',
+        EvaluationOutcome.PROFITABLE,
+        'COMPLETE',
+      )
       const output = {
         status: 'GLOBAL_EXECUTION_REVERTED_CONFIRMED',
         evidence: 'CANONICAL_REVERT_RECEIPT',
@@ -1605,20 +1988,30 @@ async function execute() {
         gasSpentWei,
         gasSpentEth: formatEther(gasSpentWei),
         graph: prepared.snapshot.graph,
+        lifecycle: terminalSnapshot.lifecycle,
+        evaluation: terminalSnapshot.evaluation,
+        decisionClassification: terminalSnapshot.decisionClassification,
+        evidenceCoverage: terminalSnapshot.evidenceCoverage,
         wake: prepared.snapshot.wake,
         workset: prepared.snapshot.workset,
         timing: prepared.snapshot.timing,
-        rpc: prepared.snapshot.rpc,
+        rpc: terminalSnapshot.rpc,
       }
       console.log(stringify(output))
       return output
     }
-    const record = await executionStateFromReceipt(
-      plan,
-      sent.hash,
-      sent.receipt,
-      deployment.compiled,
-      sent.broadcast.direct.status,
+    const record = await withRpcEvidence(prepared.rpcEvidence, 'RECEIPT_ACCOUNTING', () =>
+      executionStateFromReceipt(plan, sent.hash, sent.receipt, deployment.compiled, sent.broadcast.direct.status),
+    )
+    prepared.lifecycle.mark('EXECUTION_CONFIRMED', {
+      transactionHash: sent.hash,
+      blockNumber: sent.receipt.blockNumber,
+    })
+    const terminalSnapshot = persistGlobalLifecycle(
+      prepared,
+      'GLOBAL_LIVE_NET_PROFIT_CONFIRMED',
+      EvaluationOutcome.PROFITABLE,
+      'COMPLETE',
     )
     const output = {
       status: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED',
@@ -1634,13 +2027,17 @@ async function execute() {
       directSequencer: record.directSequencerStatus,
       evidence: record.evidence,
       graph: prepared.snapshot.graph,
+      lifecycle: terminalSnapshot.lifecycle,
+      evaluation: terminalSnapshot.evaluation,
+      decisionClassification: terminalSnapshot.decisionClassification,
+      evidenceCoverage: terminalSnapshot.evidenceCoverage,
       evaluated: prepared.snapshot.evaluated,
       grossPositive: prepared.snapshot.grossPositive,
       exactNetPositive: prepared.snapshot.exactNetPositive,
       wake: prepared.snapshot.wake,
       workset: prepared.snapshot.workset,
       timing: prepared.snapshot.timing,
-      rpc: prepared.snapshot.rpc,
+      rpc: terminalSnapshot.rpc,
     }
     console.log(stringify(output))
     return output

@@ -661,6 +661,31 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualSource, /GLOBAL_WAKE_ROUTE_ADDRESSES: \(signal\?\.routeAddresses \|\| \[\]\)\.join/)
   assert.doesNotMatch(dualSource, /GLOBAL_WAKE_MATCHED_ADDRESSES/)
   assert.match(globalSource, /process\.env\.GLOBAL_WAKE_ROUTE_ADDRESSES/)
+  assert.match(dualSource, /GLOBAL_WAKE_LAST_SEQUENCE_NUMBER/)
+  assert.match(dualSource, /GLOBAL_WAKE_ENQUEUED_AT/)
+  assert.match(dualSource, /GLOBAL_WAKE_CLAIMED_AT/)
+  assert.match(globalSource, /summarizeEvaluationOutcomes/)
+  assert.match(globalSource, /decisionClassification/)
+  assert.match(globalSource, /new EventLifecycle/)
+  assert.match(globalSource, /new RpcEvidence/)
+  assert.match(globalSource, /instrumentRpcTransport/)
+  assert.match(globalSource, /withRpcEvidence/)
+  assert.match(globalSource, /'STATE_PINNED'/)
+  assert.match(globalSource, /'CATALOG_GRAPH_READY'/)
+  assert.match(globalSource, /'ROUTES_SELECTED'/)
+  assert.match(globalSource, /'DISCOVERY_QUOTES_COMPLETE'/)
+  assert.match(globalSource, /'FINAL_SIMULATION_PASSED'/)
+  assert.match(globalSource, /'SIGNING_STARTED'/)
+  assert.match(globalSource, /'SUBMITTED'/)
+  assert.match(globalSource, /'global_preflight_failed'/)
+  assert.match(globalSource, /calls: rpcEvidence\.snapshot\(\)/)
+  const globalPreflightStart = globalSource.indexOf('async function globalPreflight')
+  const globalPreflightEnd = globalSource.indexOf('async function deployPreflight', globalPreflightStart)
+  assert.doesNotMatch(
+    globalSource.slice(globalPreflightStart, globalPreflightEnd),
+    /catch \{\}/,
+    'exact global evaluation must retain typed evidence for every caught failure',
+  )
   assert.match(dualSource, /routeWorksetPolicy/)
 
   const forkSource = fs.readFileSync(path.join(root, 'scripts', 'universal-mainnet-fork-test.mjs'), 'utf8')

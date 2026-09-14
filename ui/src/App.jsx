@@ -10,6 +10,7 @@ import {
   evidenceClaimLabel,
   formatBeijingTime,
   formatMetric,
+  globalEvidenceCoverage,
   globalExecutionOutcome,
   globalWakeKindLabel,
   humanStatus,
@@ -1217,8 +1218,11 @@ function CompetitionPage({ state, business }) {
           </div>
         </dl>
         <p className="coverage-note">
-          最近结论：{globalExecutionOutcome(global?.attribution?.latestOutcome)}。已过滤{' '}
-          {funnel?.filteredSignals ?? '—'} 条无关消息，合并 {funnel?.coalescedSignals ?? '—'} 条等待中的重复唤醒。
+          最近结论：
+          {globalExecutionOutcome(global?.attribution?.latestClassification || global?.attribution?.latestOutcome)}
+          。已过滤 {funnel?.filteredSignals ?? '—'} 条无关消息，合并 {funnel?.coalescedSignals ?? '—'}{' '}
+          条等待中的重复唤醒。
+          {global?.attribution?.coverage ? `证据：${globalEvidenceCoverage(global.attribution.coverage)}。` : ''}
         </p>
         <p className="coverage-note">
           “被竞争者抢走”仍需同区块机会、我方报价与提交时序同时成立；当前没有这组反事实证据，因此保持未知。

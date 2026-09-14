@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Make every Global opportunity decision evidence-typed and traceable. Parsed positive/zero/negative quotes, RPC
+  failures, unavailable block state, unsupported routes and policy filters no longer collapse into one no-profit label;
+  exact-evaluation catches now remain aggregate evidence. Carry one event ID from source sequence and protected
+  scheduling through fixed block/catalog/graph versions, search, quote, simulation, optional signing, same-raw
+  submission and receipt, with purpose-only RPC counts that retain no endpoint, params, calldata or raw transaction.
+  Existing wallet, contract, capital, Gas, profit, nonce, simulation, authorization and receipt gates are unchanged.
 - Protect Earn and Global recovery coverage with one explicit fair scheduler. Overdue periodic work now runs before
   ordinary event or board work, event wakes never move the periodic deadline, coalesced dependencies retain the
   highest-priority reason, and Global throttling cannot block an eligible Earn lane. The signer remains serial; the
