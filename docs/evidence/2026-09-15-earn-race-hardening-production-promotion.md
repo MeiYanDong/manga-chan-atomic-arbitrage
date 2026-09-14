@@ -4,8 +4,8 @@
 - 生产版本：`v0.16.4`
 - 不可变提交：`2de1d45f50621695a79731ff57696462842544b2`
 - 结论：共享 supervisor、Earn 局部竞态收敛和关键告警 V3 已部署。生产事件证明 Global 单路线超时不会阻塞
-  Earn，也不会误发停机提醒；但公共 Sequencer Feed 当前对该服务器返回 HTTP 403，因此 Feed 低延迟唤醒仍是
-  `DEGRADED`，公共链上事件补位保持运行。
+  Earn，也不会误发停机提醒；v0.16.4 已取得第一笔 canonical 正收益 receipt。但公共 Sequencer Feed 当前对该
+  服务器返回 HTTP 403，因此 Feed 低延迟唤醒仍是 `DEGRADED`，公共链上事件补位保持运行。
 
 ## 目标与发布边界
 
@@ -54,14 +54,16 @@ unit/release 验证。
    critical timer；
 3. `t-usw6x2mn49h6igw` 完成链 ID、wallet latest/pending nonce、executor 余额、授权、无未决交易和 signer-free
    board 读回；
-4. `t-usw6x2n8451joxs` 与 `t-usw6x2neuyu73ls` 在持续运行后重新读取服务、API、审计账本和关键告警状态。
+4. `t-usw6x2n8451joxs` 与 `t-usw6x2neuyu73ls` 在持续运行后重新读取服务、API、审计账本和关键告警状态；
+5. `t-usw6x2o22j6g3y8` 对 v0.16.4 第一笔成功交易完成 plan、签名、Sequencer 接受、receipt、Gas、余额变化和
+   服务连续性读回。
 
 一次后置只读探针 `t-usw6x2n2ux2y6m8` 因操作者将 `CommandContent` 重复 Base64 编码而以 exit 127 结束；它只
 尝试执行不存在的文本命令，没有读取 credential、改变服务或链上状态。后续读回使用 CLI 的原生编码流程成功。
 
 ## 生产运行读回
 
-2026-09-15 04:06 CST 的读回如下：
+2026-09-15 04:06 CST 的服务读回如下；04:15 的再次读回保持相同 PID 与零重启：
 
 | 对象                     | 版本或 PID                             | 状态           | 重启   |
 | ------------------------ | -------------------------------------- | -------------- | ------ |
@@ -74,7 +76,8 @@ unit/release 验证。
 
 公网 `/healthz` 返回 `HEALTHY`：runtime 与 persisted snapshot 均为 `RUNNING`，SQLite integrity 为
 `HEALTHY`、parity 为 `true`。`/api/v1/system` 返回精确 release SHA，board 明确为 signer-free。
-`dual-watch-state.json` 为 `RUNNING`，授权 ID 未变，7 个已消费 nonce 与 5 笔成功、2 笔回滚一致，无未决交易。
+`dual-watch-state.json` 为 `RUNNING`，授权 ID 未变。04:15 的账本已有 8 个已消费 nonce，与 6 笔成功、2 笔
+回滚一致，无未决交易。
 
 ### 路线隔离在真实运行中的证据
 
@@ -117,28 +120,39 @@ Feed 若长期对该出口拒绝，需要生产级 Feed provider、官方 Nitro 
 
 ## 收益与交易证据
 
-截至 `20:08:25Z`，当前 authorization 的 canonical ledger 为：
+截至 `20:15:38Z`，当前 authorization 的 canonical ledger 为：
 
-- 5 笔成功 Earn 交易，成功交易各自已经扣除自身 Gas 后合计 `+0.000119614481936632 ETH`；
+- 6 笔成功 Earn 交易，成功交易各自已经扣除自身 Gas 后合计 `+0.000179577300329581 ETH`；
 - 2 笔 canonical revert，失败 Gas 合计 `-0.00003354592337 ETH`；
-- 因此该 authorization 扣除成功与失败交易 Gas 后为 `+0.000086068558566632 ETH`。
+- 因此该 authorization 扣除成功与失败交易 Gas 后为 `+0.000146031376959581 ETH`。
 
-北京时间 9 月 15 日截至日报生成时有 4 笔成功、2 笔回滚：成功净额 `0.00009020775538407 ETH`，再扣失败
-Gas 后为 `+0.00005666183201407 ETH`；Agent API 的当时市场参考估值为约 `$0.14408197 / ¥0.96655948`。
+北京时间 9 月 15 日截至日报生成时有 5 笔成功、2 笔回滚：成功净额 `0.000150170573777019 ETH`，再扣失败
+Gas 后为 `+0.000116624650407019 ETH`；Agent API 的当时市场参考估值为约 `$0.29901219 / ¥2.00589337`。
 离链服务器、订阅等经营成本仍未并入，所以 `businessNet=UNKNOWN`。
 
-最新一笔成功交易是
-`0xfeaf063f07c86d8b8de41760c7e96c1a62dce29fa9363bf33f4d4f6fe03a4015`，路线
-WETH → EARN → SPY → WETH，链上已实现净利润 `0.000026104379509053 ETH`。它在
-`19:54:37.884Z` 完成，早于 v0.16.4 watcher 在约 `19:58Z` 启动，所以它证明现有执行器能够实盘盈利，但不是
-新版本竞态修复后的盈利样本。v0.16.4 上线后截至本次读回没有新增签名或成交；原因是已观察候选均未通过既有正
-净利润门槛，而不是程序停机。
+### v0.16.4 第一笔实盘
+
+公共事件在 `20:12:09.727Z` 命中两个 Earn 池；`20:12:19.412Z` 进入托管精确预检，`20:12:22.117Z`
+完成最终 plan。最终 quote、`eth_call` 和 Gas estimate 在区块 `63081479` 并发完成，耗时 `141ms`。交易在
+`20:12:22.597Z` 签名，并在 `20:12:25.044Z` 由 Sequencer 直接接受，没有使用托管 RPC 广播 fallback。
+
+- 交易：[`0xdc392dae1ef106d998995d95466e68b41e15e7ae107aea573e813cb66f66ef20`](https://robinhoodchain.blockscout.com/tx/0xdc392dae1ef106d998995d95466e68b41e15e7ae107aea573e813cb66f66ef20)
+- 路线：WETH → MOO → WETH，两个不同 Earn 池；
+- 输入：`0.001816158260631111 ETH`；
+- 最终报价：`0.001901153085456060 WETH`；保护输出：`0.001857098452130872 WETH`；
+- receipt 区块：`63081508`；毛利：`0.000084994824824949 ETH`；
+- canonical Gas：`0.000025032006432 ETH`；链上实际净利润：`+0.000059962818392949 ETH`；
+- 证据：receipt Swap 序列、canonical Gas 与精确区块原生余额变化三者一致。
+
+该交易证明 v0.16.4 的静态目录缓存、局部路线选择、并发最终门禁和直接 Sequencer 提交已走过真实正收益链路。
+它仍由公共日志而不是入站 Feed 唤醒：事件接收到签名约 `12.87s`，接收到 canonical effect 约 `21.90s`。因此
+执行正确性已闭环，入站发现速度仍有明确优化空间。
 
 ## 尚未闭环
 
 - 公共 Sequencer Feed 对当前生产出口仍返回 403；低延迟 Feed 路径尚无生产 frame/wake 证据；
-- v0.16.4 尚未自然遇到一笔通过最终门禁的机会，因此并发 final gate、route-local quarantine 与直接提交链路
-  仍只有测试和旧版本真实交易证据，没有本版本新 receipt；
+- v0.16.4 已用新 receipt 验证并发 final gate 与直接提交；route-local quarantine 在本版本尚未遇到新的
+  canonical revert，因此其激活/解除仍只有自动化测试与历史 fixture 证据；
 - 历史竞态因为公共 RPC 不提供对应历史块 `eth_call` 或 trace，仍保持
   `STRONG_STATE_RACE_INFERENCE_NOT_HISTORICAL_TRACE`，不能写成已证明的历史 EVM 路径；
 - Global 周期恢复仍有 60 秒 child timeout，现已被正确隔离，但它仍降低 Global 覆盖，需要后续单独优化；
