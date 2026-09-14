@@ -17,7 +17,13 @@ import {
 } from '../src/dual-live-policy.mjs'
 import { EARN_SIZING_ALGORITHM } from '../src/earnonhood-live-policy.mjs'
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from '../src/earnonhood-routes.mjs'
+import { GLOBAL_ATOMIC_ROUTE_POLICY, GLOBAL_GRAPH_POLICY } from '../src/global-liquidity-graph.mjs'
 import { GLOBAL_ROUTE_WORKSET_POLICY } from '../src/global-route-selection.mjs'
+import {
+  GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
+  GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
+  GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+} from '../src/global-settlement-assets.mjs'
 import {
   GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
   GLOBAL_FEED_MATCH_POLICY,
@@ -81,9 +87,12 @@ function arm(overrides = {}) {
       sourceHash: `0x${'11'.repeat(32)}`,
       runtimeCodeHash: `0x${'22'.repeat(32)}`,
       fundingPolicy: 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY',
-      settlementAssets: ['0x0000000000000000000000000000000000000002', '0x0000000000000000000000000000000000000003'],
-      graphPolicy: 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
-      routePolicy: 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS',
+      settlementSeeds: ['0x0000000000000000000000000000000000000002', '0x0000000000000000000000000000000000000003'],
+      settlementPolicy: GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+      maximumSettlementFundingChecksPerWake: GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
+      maximumSettlementAssetsPerWake: GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
+      graphPolicy: GLOBAL_GRAPH_POLICY.version,
+      routePolicy: GLOBAL_ATOMIC_ROUTE_POLICY,
       routeWorksetPolicy: GLOBAL_ROUTE_WORKSET_POLICY,
       maximumRoutesPerWake: 32,
       maximumEventRoutesPerWake: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
@@ -147,7 +156,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v10 authorization binds route-specific event relevance, RPC cost, executor identity, and Earn sizing ceilings', () => {
+test('v11 authorization binds dynamic settlement admission, route relevance, RPC cost, and executor identity', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -173,6 +182,11 @@ test('v10 authorization binds route-specific event relevance, RPC cost, executor
     { ...valid.global, managedFallbackRecoveryLogicalCallCap: GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP + 1 },
     { ...valid.global, feedPolicy: 'SINGLE_COMMON_ASSET_WAKE' },
     { ...valid.global, routeWorksetPolicy: 'FILL_UNRELATED_ROUTES' },
+    { ...valid.global, settlementPolicy: 'ALLOW_ANY_TOKEN' },
+    { ...valid.global, maximumSettlementFundingChecksPerWake: 65 },
+    { ...valid.global, maximumSettlementAssetsPerWake: 17 },
+    { ...valid.global, graphPolicy: 'ROUTE_SPECIFIC' },
+    { ...valid.global, routePolicy: 'CROSS_VENUE_ONLY' },
   ]) {
     assert.deepEqual(
       evaluateDualAuthorizationBudget(arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION, global }), {
@@ -204,8 +218,12 @@ test('v10 authorization binds route-specific event relevance, RPC cost, executor
   }
 })
 
-test('superseded v9 and v8 authorizations cannot bypass the v10 route projection policy', () => {
-  for (const policyVersion of ['dual-base-loopback-escalation-v9', 'dual-base-loopback-escalation-v8']) {
+test('superseded v10, v9 and v8 authorizations cannot bypass the v11 dynamic route policy', () => {
+  for (const policyVersion of [
+    'dual-base-loopback-escalation-v10',
+    'dual-base-loopback-escalation-v9',
+    'dual-base-loopback-escalation-v8',
+  ]) {
     const legacy = arm({ policyVersion })
     assert.deepEqual(evaluateDualAuthorizationBudget(legacy, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
       allowed: false,

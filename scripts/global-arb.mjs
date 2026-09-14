@@ -32,16 +32,28 @@ import {
 import {
   buildEarnBptArbitrageTemplates,
   buildUnifiedLiquidityGraph,
-  enumerateCrossVenueCycles,
+  enumerateAtomicSwapCycles,
+  GLOBAL_ATOMIC_ROUTE_POLICY,
+  GLOBAL_GRAPH_POLICY,
   GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
 import {
   applyGlobalEventRouteBudget,
+  applyGlobalRecoveryRouteBudget,
   GLOBAL_ROUTE_WORKSET_POLICY,
   selectGlobalRouteWorkset,
 } from '../src/global-route-selection.mjs'
-import { globalSettlementAssets } from '../src/global-settlement-assets.mjs'
+import {
+  assessSettlementFunding,
+  enumerateV3ValuationRoutes,
+  GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
+  GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
+  GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+  globalSettlementSeeds,
+  rankDynamicSettlementCandidates,
+  selectSettlementFundingCandidates,
+} from '../src/global-settlement-assets.mjs'
 import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import {
@@ -80,7 +92,7 @@ const PUBLIC_DISCOVERY_BATCH_SIZE = 8
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtime = loadRuntimeConfig()
-const SETTLEMENT_TOKENS = globalSettlementAssets([ROBINHOOD_USDG, ROBINHOOD_WETH], runtime.globalExtraSettlementAssets)
+const SETTLEMENT_SEEDS = globalSettlementSeeds([ROBINHOOD_USDG, ROBINHOOD_WETH], runtime.globalExtraSettlementAssets)
 const MINIMUM_NET_USDG = parseUnits(runtime.genericMinNetUsdg, 6)
 const RPC_URL = runtime.rpcUrl || PUBLIC_RPC
 const RUN_DIR = runtime.runDir ? path.resolve(runtime.runDir) : path.join(ROOT, 'runs')
@@ -429,7 +441,7 @@ async function refreshGlobalCatalog(blockNumber) {
   const earnAssets = earn.pools.flatMap((pool) => [pool.address, ...pool.tokens.map((token) => token.address)])
   const sourceCatalog = readJson(SOURCE_CATALOG_PATH)
   const uniswap = await loadRobinhoodHubUniswapCatalog(discoveryClient, earnAssets, blockNumber, {
-    hubs: SETTLEMENT_TOKENS,
+    hubs: SETTLEMENT_SEEDS,
     additionalV4Pools: Array.isArray(sourceCatalog?.pools) ? sourceCatalog.pools : [],
   })
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
@@ -514,30 +526,52 @@ async function quotePlan(client, executor, abi, plan, principal, blockNumber, fu
   return { result: null, error: 'quote did not return the mandatory QuoteResult revert' }
 }
 
-async function bestV3Quote(tokenIn, tokenOut, amountIn, blockNumber) {
+async function bestV3Quote(tokenIn, tokenOut, amountIn, blockNumber, client = executionClient, graph = null) {
   if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) return amountIn
-  const paths = V3_FEES.map((fee) => encodePacked(['address', 'uint24', 'address'], [tokenIn, fee, tokenOut]))
-  if (
-    tokenIn.toLowerCase() !== ROBINHOOD_WETH.toLowerCase() &&
-    tokenOut.toLowerCase() !== ROBINHOOD_WETH.toLowerCase()
-  ) {
-    const firstFees = tokenIn.toLowerCase() === ROBINHOOD_USDG.toLowerCase() ? [100] : V3_FEES
-    const secondFees = tokenOut.toLowerCase() === ROBINHOOD_USDG.toLowerCase() ? [100] : V3_FEES
-    for (const firstFee of firstFees) {
-      for (const secondFee of secondFees) {
-        paths.push(
-          encodePacked(
-            ['address', 'uint24', 'address', 'uint24', 'address'],
-            [tokenIn, firstFee, ROBINHOOD_WETH, secondFee, tokenOut],
-          ),
-        )
+  const routes = graph ? enumerateV3ValuationRoutes(graph, tokenIn, tokenOut, ROBINHOOD_WETH) : []
+  const paths = routes.map((route) => {
+    const types = []
+    const values = []
+    for (let index = 0; index < route.tokens.length; index += 1) {
+      types.push('address')
+      values.push(route.tokens[index])
+      if (index < route.fees.length) {
+        types.push('uint24')
+        values.push(route.fees[index])
+      }
+    }
+    return encodePacked(types, values)
+  })
+  // Historical receipt reconciliation may not retain the discovery graph.
+  // That non-latency-critical readback keeps the canonical bounded fallback;
+  // admission and pre-sign exact evaluation always supply the fixed-block graph.
+  if (!graph) {
+    for (const fee of V3_FEES) {
+      paths.push(encodePacked(['address', 'uint24', 'address'], [tokenIn, fee, tokenOut]))
+    }
+    if (
+      tokenIn.toLowerCase() !== ROBINHOOD_WETH.toLowerCase() &&
+      tokenOut.toLowerCase() !== ROBINHOOD_WETH.toLowerCase()
+    ) {
+      const firstFees = tokenIn.toLowerCase() === ROBINHOOD_USDG.toLowerCase() ? [100] : V3_FEES
+      const secondFees = tokenOut.toLowerCase() === ROBINHOOD_USDG.toLowerCase() ? [100] : V3_FEES
+      for (const firstFee of firstFees) {
+        for (const secondFee of secondFees) {
+          paths.push(
+            encodePacked(
+              ['address', 'uint24', 'address', 'uint24', 'address'],
+              [tokenIn, firstFee, ROBINHOOD_WETH, secondFee, tokenOut],
+            ),
+          )
+        }
       }
     }
   }
+  if (paths.length === 0) throw new Error('no graph-verified V3 valuation path for settlement asset')
   const quotes = await Promise.all(
     paths.map(async (pathValue) => {
       try {
-        const { result } = await executionClient.simulateContract({
+        const { result } = await client.simulateContract({
           account: WALLET,
           address: V3_QUOTER,
           abi: v3QuoterAbi,
@@ -556,12 +590,12 @@ async function bestV3Quote(tokenIn, tokenOut, amountIn, blockNumber) {
   return usable.reduce((best, amount) => (amount > best ? amount : best), 0n)
 }
 
-async function gasInSettlement(settlementToken, gasWei, blockNumber) {
-  return bestV3Quote(ROBINHOOD_WETH, settlementToken, gasWei, blockNumber)
+async function gasInSettlement(settlementToken, gasWei, blockNumber, graph) {
+  return bestV3Quote(ROBINHOOD_WETH, settlementToken, gasWei, blockNumber, executionClient, graph)
 }
 
-async function normalizedUsdg(settlementToken, amount, blockNumber) {
-  return bestV3Quote(settlementToken, ROBINHOOD_USDG, amount, blockNumber)
+async function normalizedUsdg(settlementToken, amount, blockNumber, graph) {
+  return bestV3Quote(settlementToken, ROBINHOOD_USDG, amount, blockNumber, executionClient, graph)
 }
 
 function wakeAddressSet() {
@@ -571,6 +605,110 @@ function wakeAddressSet() {
       .map((value) => value.trim().toLowerCase())
       .filter((value) => /^0x[0-9a-f]{40}$/i.test(value)),
   )
+}
+
+async function discoverDynamicSettlementAssets({ client, graph, deployment, block }) {
+  const eventWake = wakeAddressSet().size > 0
+  const universe = rankDynamicSettlementCandidates(graph, {
+    seeds: SETTLEMENT_SEEDS,
+    wakeAddresses: [...wakeAddressSet()],
+    maximum: GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
+    rotationOffset: block.number,
+  })
+  const fundingWorkset = selectSettlementFundingCandidates(universe, { eventWake })
+  const fundingCandidates = fundingWorkset.candidates
+  const hasValuationPath = (tokenIn, tokenOut) =>
+    tokenIn.toLowerCase() === tokenOut.toLowerCase() ||
+    enumerateV3ValuationRoutes(graph, tokenIn, tokenOut, ROBINHOOD_WETH).length > 0
+  const graphRejected = fundingCandidates
+    .filter(
+      (candidate) =>
+        !hasValuationPath(ROBINHOOD_WETH, candidate.token) || !hasValuationPath(candidate.token, ROBINHOOD_USDG),
+    )
+    .map((candidate) => ({ ...candidate, rejected: true, reason: 'no graph-verified WETH and USDG valuation path' }))
+  const valuationCandidates = fundingCandidates.filter(
+    (candidate) =>
+      hasValuationPath(ROBINHOOD_WETH, candidate.token) && hasValuationPath(candidate.token, ROBINHOOD_USDG),
+  )
+  const checked = await mapWithConcurrency(valuationCandidates, PUBLIC_DISCOVERY_BATCH_SIZE, async (candidate) => {
+    try {
+      const [decimals, morphoLiquidity, inventory] = await Promise.all([
+        client.readContract({
+          address: candidate.token,
+          abi: erc20Abi,
+          functionName: 'decimals',
+          blockNumber: block.number,
+        }),
+        client.readContract({
+          address: candidate.token,
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [MORPHO],
+          blockNumber: block.number,
+        }),
+        client.readContract({
+          address: candidate.token,
+          abi: erc20Abi,
+          functionName: 'balanceOf',
+          args: [deployment.executor],
+          blockNumber: block.number,
+        }),
+      ])
+      return assessSettlementFunding(candidate, { decimals, morphoLiquidity, inventory })
+    } catch (error) {
+      return { ...candidate, rejected: true, reason: errorText(error).slice(0, 200) }
+    }
+  })
+
+  const admitted = []
+  const rejected = [...graphRejected, ...checked.filter((candidate) => candidate.rejected)]
+  const valuationProbeWethWei = 100_000_000_000_000n
+  for (const candidate of checked.filter((item) => !item.rejected)) {
+    if (admitted.length >= GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE) break
+    try {
+      const settlementProbe = await bestV3Quote(
+        ROBINHOOD_WETH,
+        candidate.token,
+        valuationProbeWethWei,
+        block.number,
+        client,
+        graph,
+      )
+      const normalizedProbe = await bestV3Quote(
+        candidate.token,
+        ROBINHOOD_USDG,
+        settlementProbe,
+        block.number,
+        client,
+        graph,
+      )
+      if (settlementProbe <= 0n || normalizedProbe <= 0n) throw new Error('valuation quote is non-positive')
+      admitted.push({
+        ...candidate,
+        valuationEvidence: 'FIXED_BLOCK_EXECUTABLE_V3_WETH_TO_SETTLEMENT_TO_USDG',
+        valuationProbeWethWei,
+        valuationSettlementOutRaw: settlementProbe,
+        valuationUsdgOutWei: normalizedProbe,
+      })
+    } catch (error) {
+      rejected.push({ ...candidate, rejected: true, reason: errorText(error).slice(0, 200) })
+    }
+  }
+  return {
+    ...universe,
+    policy: GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+    candidates: valuationCandidates,
+    admitted,
+    rejected,
+    admittedCount: admitted.length,
+    fundedCount: checked.filter((candidate) => !candidate.rejected).length,
+    selectedForFunding: fundingCandidates.length,
+    valuationEligibleForFunding: valuationCandidates.length,
+    admissionScope: fundingWorkset.admissionScope,
+    deferred: fundingWorkset.deferred,
+    maximumAdmitted: GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
+    evidence: 'GRAPH_STRUCTURE_PLUS_FIXED_BLOCK_FUNDING_AND_EXECUTABLE_VALUATION',
+  }
 }
 
 function selectRouteDefinitions(graph, settlementToken, blockNumber) {
@@ -589,16 +727,16 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
   let maximumCycleHops = 4
   let cycles
   try {
-    cycles = enumerateCrossVenueCycles(graph, settlementToken, { maximumHops: maximumCycleHops, maximumCycles: 20_000 })
+    cycles = enumerateAtomicSwapCycles(graph, settlementToken, { maximumHops: maximumCycleHops, maximumCycles: 20_000 })
   } catch (error) {
     if (!/cycle enumeration bound exceeded/i.test(errorText(error))) throw error
     maximumCycleHops = 3
-    cycles = enumerateCrossVenueCycles(graph, settlementToken, { maximumHops: maximumCycleHops, maximumCycles: 20_000 })
+    cycles = enumerateAtomicSwapCycles(graph, settlementToken, { maximumHops: maximumCycleHops, maximumCycles: 20_000 })
   }
   const swaps = cycles.map((cycle) => ({
     type: 'CYCLE',
     id: cycle.id,
-    opportunityKind: `CROSS_VENUE_${cycle.edges.length}_HOP_CYCLE`,
+    opportunityKind: `${new Set(cycle.edges.map((edge) => edge.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${cycle.edges.length}_HOP_ATOMIC_SWAP_CYCLE`,
     settlementToken,
     pool: null,
     cycle,
@@ -624,33 +762,17 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
   const { earn, uniswap, graph } = await loadGlobalGraph(block.number)
   const evaluations = []
   const routeCoverage = []
-  const routeWorksets = applyGlobalEventRouteBudget(
-    SETTLEMENT_TOKENS.map((settlementToken) => selectRouteDefinitions(graph, settlementToken, block.number)),
-    GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+  const settlementAdmission = await discoverDynamicSettlementAssets({ client, graph, deployment, block })
+  const unboundedWorksets = settlementAdmission.admitted.map(({ token }) =>
+    selectRouteDefinitions(graph, token, block.number),
   )
-  for (const [settlementIndex, settlementToken] of SETTLEMENT_TOKENS.entries()) {
-    const [decimals, morphoLiquidity, inventory] = await Promise.all([
-      client.readContract({
-        address: settlementToken,
-        abi: erc20Abi,
-        functionName: 'decimals',
-        blockNumber: block.number,
-      }),
-      client.readContract({
-        address: settlementToken,
-        abi: erc20Abi,
-        functionName: 'balanceOf',
-        args: [MORPHO],
-        blockNumber: block.number,
-      }),
-      client.readContract({
-        address: settlementToken,
-        abi: erc20Abi,
-        functionName: 'balanceOf',
-        args: [deployment.executor],
-        blockNumber: block.number,
-      }),
-    ])
+  const routeWorksets =
+    wakeAddressSet().size > 0
+      ? applyGlobalEventRouteBudget(unboundedWorksets, GLOBAL_EVENT_MAX_ROUTES_PER_WAKE)
+      : applyGlobalRecoveryRouteBudget(unboundedWorksets, runtime.globalMaxRoutesPerWake)
+  for (const [settlementIndex, profile] of settlementAdmission.admitted.entries()) {
+    const settlementToken = profile.token
+    const { decimals, morphoLiquidity, inventory } = profile
     const selectedRoutes = routeWorksets[settlementIndex]
     routeCoverage.push({
       settlementToken,
@@ -670,7 +792,7 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
         ? earn.pools.find((item) => item.address.toLowerCase() === route.pool.toLowerCase())
         : null
       for (const source of fundingSources) {
-        const amounts = coarseProbeAmounts(Number(decimals), source.available)
+        const amounts = coarseProbeAmounts(decimals, source.available)
         for (const principal of amounts) {
           let plan
           try {
@@ -721,7 +843,7 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
         opportunityKind: job.route.opportunityKind,
         pool: job.route.pool,
         settlementToken,
-        decimals: Number(decimals),
+        decimals,
         principal: job.principal,
         fundingMode: job.source.fundingMode,
         fundingAvailable: job.source.available,
@@ -789,10 +911,10 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
     })
     evaluations.push(...refined)
   }
-  return { earn, uniswap, graph, evaluations, routeCoverage }
+  return { earn, uniswap, graph, evaluations, routeCoverage, settlementAdmission }
 }
 
-async function exactNetEvaluation(candidate, deployment, block, gasPrice) {
+async function exactNetEvaluation(candidate, deployment, block, gasPrice, graph) {
   const functionName = executionFunctionName(candidate.fundingMode)
   const initialGas = await executionClient.estimateContractGas({
     account: WALLET,
@@ -805,8 +927,15 @@ async function exactNetEvaluation(candidate, deployment, block, gasPrice) {
   const gasLimit = ceilDiv(initialGas * 12n, 10n) + 20_000n
   const maxFeePerGas = ceilDiv(gasPrice * 105n, 100n)
   const maximumGasWei = gasLimit * maxFeePerGas
-  const gasSettlement = await gasInSettlement(candidate.settlementToken, maximumGasWei, block.number)
-  const minimumNet = await bestV3Quote(ROBINHOOD_USDG, candidate.settlementToken, MINIMUM_NET_USDG, block.number)
+  const gasSettlement = await gasInSettlement(candidate.settlementToken, maximumGasWei, block.number, graph)
+  const minimumNet = await bestV3Quote(
+    ROBINHOOD_USDG,
+    candidate.settlementToken,
+    MINIMUM_NET_USDG,
+    block.number,
+    executionClient,
+    graph,
+  )
   const requiredGross = gasSettlement + minimumNet
   if (candidate.quoteDelta < requiredGross) throw new Error('gross quote does not fund worst-case Gas plus net floor')
   const plan = { ...candidate.plan, minimumProfit: requiredGross }
@@ -840,7 +969,7 @@ async function exactNetEvaluation(candidate, deployment, block, gasPrice) {
     minimumNet,
     requiredGross,
     netSettlement,
-    normalizedNetUsdg: await normalizedUsdg(candidate.settlementToken, netSettlement, block.number),
+    normalizedNetUsdg: await normalizedUsdg(candidate.settlementToken, netSettlement, block.number, graph),
     functionName,
   }
 }
@@ -874,6 +1003,7 @@ async function globalPreflight({ print = true } = {}) {
           deployment,
           latestBlock,
           await executionClient.getGasPrice(),
+          discovery.graph,
         ),
       )
     } catch {}
@@ -917,7 +1047,22 @@ async function globalPreflight({ print = true } = {}) {
       v3Pools: discovery.uniswap.v3Pools.length,
       v4Pools: discovery.uniswap.v4Pools.length,
       coverage: discovery.uniswap.coverage,
-      settlementAssets: SETTLEMENT_TOKENS,
+      settlementAssets: discovery.settlementAdmission.admitted.map((item) => item.token),
+      settlementAdmission: {
+        policy: discovery.settlementAdmission.policy,
+        evidence: discovery.settlementAdmission.evidence,
+        scope: discovery.settlementAdmission.admissionScope,
+        graphAssets: discovery.settlementAdmission.graphAssets,
+        structurallyEligible: discovery.settlementAdmission.structurallyEligible,
+        selectedForFunding: discovery.settlementAdmission.selectedForFunding,
+        valuationEligibleForFunding: discovery.settlementAdmission.valuationEligibleForFunding,
+        fundingChecked: discovery.settlementAdmission.candidates.length,
+        funded: discovery.settlementAdmission.fundedCount,
+        admitted: discovery.settlementAdmission.admittedCount,
+        rejected: discovery.settlementAdmission.rejected.length,
+        deferred: discovery.settlementAdmission.deferred,
+        maximumAdmitted: discovery.settlementAdmission.maximumAdmitted,
+      },
       routeCoverage: discovery.routeCoverage,
     },
     evaluated: discovery.evaluations.length,
@@ -964,7 +1109,7 @@ async function globalPreflight({ print = true } = {}) {
     ...snapshot,
   })
   if (print) console.log(stringify(snapshot))
-  return { snapshot, selected, deployment }
+  return { snapshot, selected, deployment, graph: discovery.graph }
 }
 
 async function deployPreflight({ print = true } = {}) {
@@ -1310,8 +1455,14 @@ function assertSharedAuthorization(deployment) {
     Number(arm.global.managedFallbackRecoveryLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP ||
     arm.global.feedPolicy !== GLOBAL_FEED_MATCH_POLICY ||
     arm.global.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||
-    arm.global.settlementAssets.length !== SETTLEMENT_TOKENS.length ||
-    arm.global.settlementAssets.some((token, index) => token.toLowerCase() !== SETTLEMENT_TOKENS[index].toLowerCase())
+    arm.global.graphPolicy !== GLOBAL_GRAPH_POLICY.version ||
+    arm.global.routePolicy !== GLOBAL_ATOMIC_ROUTE_POLICY ||
+    arm.global.settlementPolicy !== GLOBAL_SETTLEMENT_ADMISSION_POLICY ||
+    Number(arm.global.maximumSettlementFundingChecksPerWake) !== GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE ||
+    Number(arm.global.maximumSettlementAssetsPerWake) !== GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE ||
+    !Array.isArray(arm.global.settlementSeeds) ||
+    arm.global.settlementSeeds.length !== SETTLEMENT_SEEDS.length ||
+    arm.global.settlementSeeds.some((token, index) => token.toLowerCase() !== SETTLEMENT_SEEDS[index].toLowerCase())
   ) {
     throw new Error('shared global authorization is invalid or revoked')
   }
@@ -1374,6 +1525,7 @@ async function execute() {
       deployment,
       wallet.block,
       wallet.gasPrice,
+      prepared.graph,
     )
     const data = encodeFunctionData({
       abi: deployment.compiled.abi,

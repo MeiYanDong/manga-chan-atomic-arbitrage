@@ -9,6 +9,7 @@ import {
 import {
   buildEarnBptArbitrageTemplates,
   buildUnifiedLiquidityGraph,
+  enumerateAtomicSwapCycles,
   enumerateCrossVenueCycles,
 } from '../src/global-liquidity-graph.mjs'
 
@@ -94,4 +95,33 @@ test('cross-venue cycle becomes one contiguous typed atomic plan', () => {
   assert.ok(plan.actions.slice(1).every((action) => action.amountIn === 0n))
   assert.equal(plan.actions.at(-1).tokenOut, USDG)
   assert.ok(new Set(cycle.edges.map((edge) => edge.venue)).size >= 2)
+})
+
+test('same-venue multi-pool cycle becomes one contiguous typed atomic plan', () => {
+  const TOKEN_B = '0x0000000000000000000000000000000000000041'
+  const TOKEN_C = '0x0000000000000000000000000000000000000042'
+  const graph = buildUnifiedLiquidityGraph({
+    earnPools: [
+      { address: BPT, initialized: true, tokens: [{ address: USDG }, { address: TOKEN_B }] },
+      { address: V3_A, initialized: true, tokens: [{ address: TOKEN_B }, { address: TOKEN_C }] },
+      { address: V3_B, initialized: true, tokens: [{ address: TOKEN_C }, { address: USDG }] },
+    ],
+  })
+  const cycle = enumerateAtomicSwapCycles(graph, USDG, { maximumHops: 3, maximumCycles: 32 }).find(
+    (item) => item.edges.length === 3,
+  )
+  const plan = buildCycleExecutionPlan(cycle, { principal: 100n, minimumProfit: 5n, deadline: 999n })
+  assert.deepEqual(
+    plan.actions.map((action) => action.kind),
+    [3, 3, 3],
+  )
+  assert.equal(plan.actions.at(-1).tokenOut, USDG)
+  assert.throws(
+    () =>
+      buildCycleExecutionPlan(
+        { ...cycle, edges: [cycle.edges[0], { ...cycle.edges[1], pool: cycle.edges[0].pool }, cycle.edges[2]] },
+        { principal: 100n, minimumProfit: 5n, deadline: 999n },
+      ),
+    /repeats a pool/,
+  )
 })

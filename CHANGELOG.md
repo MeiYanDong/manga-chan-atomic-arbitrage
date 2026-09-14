@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Generalize the universal opportunity graph from cross-venue-only cycles to all bounded same-venue or cross-venue
+  two-to-four-pool atomic cycles. Remove the offchain venue-count guard that hid the historical all-Earn
+  `PLTR -> EARN -> SPCX -> PLTR` route, preserve distinct-pool/simple-cycle checks in both discovery and plan building,
+  and add an address-only historical fixture so token labels cannot become route policy again.
+- Replace the fixed settlement allowlist with rule-based dynamic admission. USDG, WETH and configured extras are only
+  priority seeds; event wakes add touched graph assets and periodic recovery rotates across the wider graph. Every
+  admitted settlement must have trustworthy fixed-block decimals, Morpho flash liquidity or protected executor
+  inventory, and graph-verified executable V3 paths for Gas and USDG normalization. Funding checks remain capped at 64,
+  admitted assets at 16 and route work at the existing shared budgets; authorization v11 binds the new policy and
+  rejects superseded v10/v9/v8 arms.
 - Enforce `maximumEventRoutesPerWake` once across every settlement asset instead of once per asset. Event candidates
   now share the eight-route budget by deterministic round-robin, so USDG and WETH each receive fair coverage and an
   empty lane yields its slots to the other. Startup and periodic recovery keep their wider rotating workset, and no

@@ -343,7 +343,9 @@ export function buildBusinessSnapshot({
             lastResult: runtime?.global?.lastResult || null,
             lastNormalizedNetProfitUsdg: runtime?.global?.lastNormalizedNetProfitUsdg || null,
             nextPeriodicAt: runtime?.global?.nextPeriodicAt || null,
-            settlementAssets: arm.global.settlementAssets?.length || 0,
+            settlementAssets: Number(
+              runtime?.global?.graph?.settlementAdmission?.admitted ?? arm.global.settlementSeeds?.length ?? 0,
+            ),
             managedFallbackLogicalCallsToday: Number(
               runtime?.global?.rpc?.managedFallbackBudget?.consumedLogicalCalls || 0,
             ),

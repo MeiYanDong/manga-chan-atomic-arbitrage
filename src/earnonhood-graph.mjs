@@ -179,19 +179,22 @@ export function enumerateEarnOnHoodCycles(pools, options = {}) {
         const nextSteps = [...steps, { pool: pool.address, tokenIn: current, tokenOut }]
         if (key(tokenOut) === key(baseToken)) {
           if (nextSteps.length >= 2) {
-            const route = assertEarnRouteShape({
-              id: earnRouteId(baseToken, nextSteps),
-              symbols: [
-                tokenLabels.get(key(baseToken)) || 'WETH',
-                ...nextSteps.map((step) => tokenLabels.get(key(step.tokenOut)) || step.tokenOut),
-              ],
-              poolNames: [...steps.map((step) => step.poolName), pool.name],
-              steps: nextSteps.map(({ pool: stepPool, tokenIn, tokenOut: stepTokenOut }) => ({
-                pool: stepPool,
-                tokenIn,
-                tokenOut: stepTokenOut,
-              })),
-            })
+            const route = assertEarnRouteShape(
+              {
+                id: earnRouteId(baseToken, nextSteps),
+                symbols: [
+                  tokenLabels.get(key(baseToken)) || baseToken,
+                  ...nextSteps.map((step) => tokenLabels.get(key(step.tokenOut)) || step.tokenOut),
+                ],
+                poolNames: [...steps.map((step) => step.poolName), pool.name],
+                steps: nextSteps.map(({ pool: stepPool, tokenIn, tokenOut: stepTokenOut }) => ({
+                  pool: stepPool,
+                  tokenIn,
+                  tokenOut: stepTokenOut,
+                })),
+              },
+              { baseToken, maximumHops },
+            )
             routes.push(route)
             if (routes.length > maximumRoutes) throw new Error('Earn route graph exceeds the reviewed bound')
           }
@@ -333,9 +336,9 @@ export function buildEarnOnHoodExactQuoteShortlist({ pools, routes, amounts, gas
   }
 }
 
-export function routeExistsInCatalog(route, routes) {
+export function routeExistsInCatalog(route, routes, options = {}) {
   try {
-    const checked = assertEarnRouteShape(route)
+    const checked = assertEarnRouteShape(route, options)
     return routes.some((candidate) => candidate.id === checked.id)
   } catch {
     return false

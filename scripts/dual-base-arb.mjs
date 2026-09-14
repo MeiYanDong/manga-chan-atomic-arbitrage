@@ -44,8 +44,17 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
-import { globalSettlementAssets } from '../src/global-settlement-assets.mjs'
-import { GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE } from '../src/global-liquidity-graph.mjs'
+import {
+  GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
+  GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
+  GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+  globalSettlementSeeds,
+} from '../src/global-settlement-assets.mjs'
+import {
+  GLOBAL_ATOMIC_ROUTE_POLICY,
+  GLOBAL_GRAPH_POLICY,
+  GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
+} from '../src/global-liquidity-graph.mjs'
 import { GLOBAL_ROUTE_WORKSET_POLICY } from '../src/global-route-selection.mjs'
 import {
   GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
@@ -985,7 +994,7 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     18,
     'EarnOnHood wallet reserve',
   )
-  const configuredGlobalSettlementAssets = globalSettlementAssets(
+  const configuredGlobalSettlementSeeds = globalSettlementSeeds(
     [GENERIC_USDG, GENERIC_WETH],
     RUNTIME_CONFIG.globalExtraSettlementAssets,
   )
@@ -1036,9 +1045,15 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     Number(arm.global.managedFallbackDailyLogicalCallCap) !== RUNTIME_CONFIG.globalManagedFallbackDailyLogicalCallCap ||
     Number(arm.global.managedFallbackEventLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP ||
     Number(arm.global.managedFallbackRecoveryLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP ||
-    arm.global.settlementAssets.length !== configuredGlobalSettlementAssets.length ||
-    arm.global.settlementAssets.some(
-      (token, index) => token.toLowerCase() !== configuredGlobalSettlementAssets[index].toLowerCase(),
+    arm.global.settlementPolicy !== GLOBAL_SETTLEMENT_ADMISSION_POLICY ||
+    Number(arm.global.maximumSettlementFundingChecksPerWake) !== GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE ||
+    Number(arm.global.maximumSettlementAssetsPerWake) !== GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE ||
+    arm.global.graphPolicy !== GLOBAL_GRAPH_POLICY.version ||
+    arm.global.routePolicy !== GLOBAL_ATOMIC_ROUTE_POLICY ||
+    !Array.isArray(arm.global.settlementSeeds) ||
+    arm.global.settlementSeeds.length !== configuredGlobalSettlementSeeds.length ||
+    arm.global.settlementSeeds.some(
+      (token, index) => token.toLowerCase() !== configuredGlobalSettlementSeeds[index].toLowerCase(),
     ) ||
     Number(arm.global.minimumWakeIntervalMs) !== RUNTIME_CONFIG.globalWatchMinIntervalMs ||
     Number(arm.global.periodicMs) !== RUNTIME_CONFIG.globalWatchPeriodicMs
@@ -2084,12 +2099,15 @@ async function armDualWatcher() {
         sourceHash: deployments.universal.state.sourceHash,
         runtimeCodeHash: deployments.universal.state.runtimeCodeHash,
         fundingPolicy: 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY',
-        settlementAssets: globalSettlementAssets(
+        settlementSeeds: globalSettlementSeeds(
           [GENERIC_USDG, GENERIC_WETH],
           RUNTIME_CONFIG.globalExtraSettlementAssets,
         ),
-        graphPolicy: 'ALL_EARN_ASSETS_TO_SETTLEMENT_HUBS_V2_V3_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
-        routePolicy: 'BPT_HYPEREDGES_PLUS_ROTATING_CROSS_VENUE_CYCLES_UP_TO_4_HOPS',
+        settlementPolicy: GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+        maximumSettlementFundingChecksPerWake: GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
+        maximumSettlementAssetsPerWake: GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
+        graphPolicy: GLOBAL_GRAPH_POLICY.version,
+        routePolicy: GLOBAL_ATOMIC_ROUTE_POLICY,
         routeWorksetPolicy: GLOBAL_ROUTE_WORKSET_POLICY,
         maximumRoutesPerWake: RUNTIME_CONFIG.globalMaxRoutesPerWake,
         maximumEventRoutesPerWake: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
@@ -2201,7 +2219,9 @@ async function armDualWatcher() {
       global: {
         executor: arm.global.executor,
         fundingPolicy: arm.global.fundingPolicy,
-        settlementAssets: arm.global.settlementAssets,
+        settlementPolicy: arm.global.settlementPolicy,
+        settlementSeeds: arm.global.settlementSeeds,
+        maximumSettlementAssetsPerWake: arm.global.maximumSettlementAssetsPerWake,
         feedPolicy: arm.global.feedPolicy,
         routeWorksetPolicy: arm.global.routeWorksetPolicy,
         submissionPolicy: arm.global.submissionPolicy,
@@ -2353,7 +2373,7 @@ function runGlobalShared(arm, signal, wakeReason) {
 function globalFeedWatchPolicy() {
   return buildGlobalFeedWatchPolicy(readJson(GLOBAL_CATALOG_PATH), {
     protocolAddresses: [EARN_VAULT, EARN_ROUTER, POOL_MANAGER],
-    settlementAddresses: globalSettlementAssets(
+    settlementAddresses: globalSettlementSeeds(
       [GENERIC_USDG, GENERIC_WETH],
       RUNTIME_CONFIG.globalExtraSettlementAssets,
     ),
@@ -2710,7 +2730,8 @@ async function watchDual() {
         triggerMode: 'FILTERED_ORDERED_FEED_OR_PERIODIC_RECOVERY',
         executor: arm.global.executor,
         fundingPolicy: arm.global.fundingPolicy,
-        settlementAssets: arm.global.settlementAssets,
+        settlementPolicy: arm.global.settlementPolicy,
+        settlementSeeds: arm.global.settlementSeeds,
         nextPeriodicAt: new Date().toISOString(),
         lastWakeReason: null,
         lastPreflightAt: null,
@@ -3256,7 +3277,9 @@ async function dualWatchStatus() {
           ? {
               executor: arm.global.executor,
               fundingPolicy: arm.global.fundingPolicy,
-              settlementAssets: arm.global.settlementAssets,
+              settlementPolicy: arm.global.settlementPolicy,
+              settlementSeeds: arm.global.settlementSeeds,
+              maximumSettlementAssetsPerWake: arm.global.maximumSettlementAssetsPerWake,
               feedPolicy: arm.global.feedPolicy,
               routeWorksetPolicy: arm.global.routeWorksetPolicy,
               submissionPolicy: arm.global.submissionPolicy,

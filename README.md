@@ -25,17 +25,22 @@ net positive. It is not a second autonomous signer. See
 [ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md) and
 [ADR 0059](docs/decisions/0059-earn-onchain-factory-catalog.md).
 
-The v0.14.8 lane adds a typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4. It can
-atomically combine swaps and Earn BPT premium/discount actions, settle in USDG, WETH or an explicitly allowlisted asset,
-and fund a route with zero-fee Morpho flash liquidity or protected executor inventory. The Sequencer Feed only wakes
-exact state checks; signed raw transactions are persisted before direct Sequencer submission, and any managed-RPC
-fallback must broadcast the identical raw. Broad discovery batches through the official public endpoint first; a
-transport/rate-limit fallback has a persisted 20,000-logical-call daily ceiling. Feed wakes require one protocol/pool
-address or two distinct graph assets, evaluate at most eight related routes without filling unrelated work, and have
-separate 32-call event and 8-call recovery fallback ceilings committed by authorization v10. See
+The v0.16.0 lane uses the existing typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4.
+It atomically combines swaps and Earn BPT premium/discount actions, including simple two-to-four-hop cycles that stay
+inside one venue as well as cycles that cross venues. USDG and WETH are priority seeds, not an asset allowlist: any graph
+asset may become the settlement asset for a wake only after fixed-block decimals, Morpho flash liquidity or protected
+executor inventory, and graph-proven executable WETH/USDG valuation paths all agree. Event wakes check only seeds and
+event-touched assets; five-minute recovery rotates through the wider eligible graph under fixed funding and route
+budgets. The Sequencer Feed only wakes exact state checks; signed raw transactions are persisted before direct
+Sequencer submission, and any managed-RPC fallback must broadcast the identical raw. Broad discovery batches through
+the official public endpoint first; a transport/rate-limit fallback has a persisted 20,000-logical-call daily ceiling.
+Feed wakes require one protocol/pool address or two distinct graph assets, evaluate at most eight related routes without
+filling unrelated work, and have separate 32-call event and 8-call recovery fallback ceilings committed by
+authorization v11. See
 [ADR 0060](docs/decisions/0060-universal-cross-protocol-atomic-execution.md),
 [ADR 0063](docs/decisions/0063-bounded-public-first-global-rpc-fallback.md),
 [ADR 0064](docs/decisions/0064-sequencer-wake-relevance-and-per-wake-rpc-budget.md) and
+[ADR 0070](docs/decisions/0070-same-venue-cycles-and-dynamic-settlement-admission.md) plus
 [the global live stories](docs/stories/global-cross-protocol-live.md).
 
 The v0.13.1 policy keeps the balance-scaled coarse-to-fine sizing but separates cheap graph coverage from expensive

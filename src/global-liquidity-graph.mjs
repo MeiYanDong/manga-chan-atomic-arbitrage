@@ -3,7 +3,7 @@ import { getAddress, keccak256, toHex } from 'viem'
 import { stableStringify } from './journal.mjs'
 
 export const GLOBAL_GRAPH_POLICY = Object.freeze({
-  version: 'ROBINHOOD_TYPED_MULTI_PROTOCOL_GRAPH_V1',
+  version: 'ROBINHOOD_TYPED_MULTI_PROTOCOL_GRAPH_V2',
   maximumAssets: 512,
   maximumSwapEdges: 20_000,
   maximumCycleHops: 5,
@@ -12,6 +12,7 @@ export const GLOBAL_GRAPH_POLICY = Object.freeze({
   venues: ['EARN', 'UNISWAP_V2', 'UNISWAP_V3', 'UNISWAP_V4'],
   funding: ['EXECUTOR_INVENTORY', 'MORPHO_ZERO_FEE_FLASH'],
 })
+export const GLOBAL_ATOMIC_ROUTE_POLICY = 'BPT_HYPEREDGES_PLUS_ROTATING_SAME_OR_CROSS_VENUE_ATOMIC_CYCLES_UP_TO_4_HOPS'
 export const GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE = 16
 
 function key(value) {
@@ -306,7 +307,7 @@ export function selectBoundedManagedCandidates(candidates, maximum = GLOBAL_MAX_
   return result
 }
 
-export function enumerateCrossVenueCycles(graph, settlementToken, options = {}) {
+export function enumerateAtomicSwapCycles(graph, settlementToken, options = {}) {
   const settlement = address(settlementToken, 'settlement token')
   const maximumHops = finiteInteger(
     options.maximumHops ?? GLOBAL_GRAPH_POLICY.maximumCycleHops,
@@ -323,9 +324,9 @@ export function enumerateCrossVenueCycles(graph, settlementToken, options = {}) 
       if (!edge.executable || usedPools.has(edgePoolIdentity)) continue
       const nextPath = [...path, edge]
       if (key(edge.tokenOut) === key(settlement)) {
-        if (nextPath.length >= 2 && new Set(nextPath.map((item) => item.venue)).size >= 2) {
+        if (nextPath.length >= 2) {
           cycles.push({
-            id: `GLOBAL_CYCLE_${keccak256(toHex(stableStringify(nextPath.map((item) => item.id)))).slice(2, 18)}`,
+            id: `GLOBAL_SWAP_CYCLE_${keccak256(toHex(stableStringify(nextPath.map((item) => item.id)))).slice(2, 18)}`,
             settlementToken: settlement,
             edges: nextPath,
           })
@@ -345,6 +346,10 @@ export function enumerateCrossVenueCycles(graph, settlementToken, options = {}) 
   walk(settlement, [], new Set(), new Set([key(settlement)]))
   return cycles.sort((left, right) => left.id.localeCompare(right.id))
 }
+
+// Retain the old export for downstream readers while removing its former
+// cross-venue-only semantics. New code should use enumerateAtomicSwapCycles.
+export const enumerateCrossVenueCycles = enumerateAtomicSwapCycles
 
 export function shortestSwapPaths(graph, tokenIn, tokenOut, options = {}) {
   const start = address(tokenIn, 'path input token')

@@ -1,4 +1,4 @@
-export const GLOBAL_ROUTE_WORKSET_POLICY = 'SPECIFIC_EVENT_GLOBAL_BUDGET_THEN_PERIODIC_ROTATION_V3'
+export const GLOBAL_ROUTE_WORKSET_POLICY = 'SPECIFIC_EVENT_OR_RECOVERY_SHARED_SETTLEMENT_BUDGET_V4'
 
 function lowerAddress(value) {
   return /^0x[0-9a-f]{40}$/i.test(String(value || '')) ? String(value).toLowerCase() : null
@@ -129,6 +129,42 @@ export function applyGlobalEventRouteBudget(worksets, maximumEventRoutesPerWake)
     rank += 1
   }
 
+  return worksets.map((workset, lane) => ({
+    ...workset,
+    routes: allocated[lane],
+    preBudgetSelectedRoutes: workset.routes.length,
+    allocatedRouteLimit: allocated[lane].length,
+  }))
+}
+
+/**
+ * Dynamic settlement admission can produce more than the original USDG/WETH
+ * pair. Recovery therefore shares one total route budget too; otherwise every
+ * newly admitted asset would multiply the RPC ceiling.
+ */
+export function applyGlobalRecoveryRouteBudget(worksets, maximumRoutesPerWake) {
+  if (!Array.isArray(worksets) || !Number.isSafeInteger(maximumRoutesPerWake) || maximumRoutesPerWake < 1) {
+    throw new Error('global recovery route budget is invalid')
+  }
+  if (worksets.length === 0) return worksets
+  if (!worksets.every((workset) => workset.wakeKind === 'RECOVERY' && Array.isArray(workset.routes))) {
+    throw new Error('global recovery route worksets cannot mix wake kinds')
+  }
+  const allocated = worksets.map(() => [])
+  let selected = 0
+  let rank = 0
+  while (selected < maximumRoutesPerWake) {
+    let progressed = false
+    for (let lane = 0; lane < worksets.length && selected < maximumRoutesPerWake; lane += 1) {
+      const route = worksets[lane].routes[rank]
+      if (!route) continue
+      allocated[lane].push(route)
+      selected += 1
+      progressed = true
+    }
+    if (!progressed) break
+    rank += 1
+  }
   return worksets.map((workset, lane) => ({
     ...workset,
     routes: allocated[lane],

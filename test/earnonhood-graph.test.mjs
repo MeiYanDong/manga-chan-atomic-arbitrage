@@ -68,6 +68,14 @@ test('dynamic graph discovers non-AI two-pool and longer simple cycles', () => {
   }
 })
 
+test('dynamic graph preserves an arbitrary non-WETH settlement through route validation', () => {
+  const normalized = catalog()
+  const routes = enumerateEarnOnHoodCycles(normalized.pools, { baseToken: PONS })
+  const triangle = routes.find((route) => route.symbols.join('>') === 'PONS>CASHCAT>WETH>PONS')
+  assert.ok(triangle)
+  assert.equal(assertEarnRouteShape(triangle, { baseToken: PONS }).id, triangle.id)
+})
+
 test('catalog rejects malformed pools but keeps unrelated valid discovery', () => {
   const source = {
     ready: true,
