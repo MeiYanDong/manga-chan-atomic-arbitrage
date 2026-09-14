@@ -12,11 +12,23 @@ function integer(value) {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
 }
 
-function sequenceNumber(value) {
+function sequenceNumber(value, context = 'requested') {
   if (typeof value === 'bigint' && value >= 0n) return value
   if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
   if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value)
-  throw new Error('sequencer feed requested sequence number is invalid')
+  throw new Error(`sequencer feed ${context} sequence number is invalid`)
+}
+
+function publicSequenceNumber(value) {
+  if (value === null || value === undefined) return null
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString()
+}
+
+function sequencedMessages(source) {
+  return source.messages.map((item) => ({
+    item,
+    sequenceNumber: sequenceNumber(item?.sequenceNumber ?? source.sequenceNumber, 'message'),
+  }))
 }
 
 function retryAfterMs(value, now = Date.now()) {
@@ -38,11 +50,68 @@ export function parseSequencerFeedEnvelope(value) {
   if (version === null || !messages || messages.length === 0 || messages.length > 1_000) {
     throw new Error('sequencer feed envelope is outside bounds')
   }
-  const sequenceNumber = integer(messages[0]?.sequenceNumber ?? source.sequenceNumber)
+  const sequenced = sequencedMessages(source)
   return {
     version,
     messageCount: messages.length,
-    firstSequenceNumber: sequenceNumber,
+    firstSequenceNumber: publicSequenceNumber(sequenced[0].sequenceNumber),
+    lastSequenceNumber: publicSequenceNumber(sequenced.at(-1).sequenceNumber),
+  }
+}
+
+/**
+ * Remove only already-consumed messages from an ordered-feed frame. Nitro may
+ * replay an overlapping frame after reconnect, so frame-level deduplication is
+ * unsafe: [100, 101] must still deliver 101 when 100 is the high-water mark.
+ *
+ * The feed is a wake hint rather than executable state. A gap is therefore
+ * surfaced for public-log/periodic recovery while the newest message remains
+ * usable; exact RPC state is still required before signing.
+ */
+export function selectUnseenSequencerFeedMessages(value, lastSequenceNumber = null) {
+  const source = typeof value === 'string' ? JSON.parse(value) : value
+  const envelope = parseSequencerFeedEnvelope(source)
+  const prior = lastSequenceNumber === null ? null : sequenceNumber(lastSequenceNumber, 'last consumed')
+  const sequenced = sequencedMessages(source)
+  const seenInFrame = new Set()
+  const fresh = []
+  let duplicateMessages = 0
+  let outOfOrder = false
+  let previous = null
+
+  for (const entry of sequenced) {
+    const key = entry.sequenceNumber.toString()
+    if (previous !== null && entry.sequenceNumber <= previous) outOfOrder = true
+    previous = entry.sequenceNumber
+    if (seenInFrame.has(key) || (prior !== null && entry.sequenceNumber <= prior)) {
+      duplicateMessages += 1
+      continue
+    }
+    seenInFrame.add(key)
+    fresh.push(entry)
+  }
+
+  const freshNumbers = fresh.map((entry) => entry.sequenceNumber)
+  const lowestFresh = freshNumbers.length > 0 ? freshNumbers.reduce((a, b) => (a < b ? a : b)) : null
+  const highestFresh = freshNumbers.length > 0 ? freshNumbers.reduce((a, b) => (a > b ? a : b)) : prior
+  const expected = prior === null ? null : prior + 1n
+  const gapSize = expected !== null && lowestFresh !== null && lowestFresh > expected ? lowestFresh - expected : 0n
+
+  return {
+    source: { ...source, messages: fresh.map((entry) => entry.item) },
+    envelope: {
+      ...envelope,
+      messageCount: fresh.length,
+      firstSequenceNumber: publicSequenceNumber(lowestFresh),
+      lastSequenceNumber: publicSequenceNumber(highestFresh),
+    },
+    duplicateMessages,
+    overlapping: prior !== null && duplicateMessages > 0 && fresh.length > 0,
+    outOfOrder,
+    gap: gapSize > 0n,
+    gapSize: publicSequenceNumber(gapSize),
+    expectedSequenceNumber: publicSequenceNumber(expected),
+    highestSequenceNumber: highestFresh,
   }
 }
 
@@ -114,6 +183,11 @@ export class SequencerFeedWakeClient {
       frames: 0,
       wakes: 0,
       filtered: 0,
+      duplicateFrames: 0,
+      duplicateMessages: 0,
+      overlappingFrames: 0,
+      sequenceGapFrames: 0,
+      outOfOrderFrames: 0,
       malformed: 0,
       errors: 0,
       rejections: 0,
@@ -140,7 +214,7 @@ export class SequencerFeedWakeClient {
     return {
       ...this.metrics,
       connected: this.socket?.readyState === 1,
-      lastSequenceNumber: this.lastSequenceNumber,
+      lastSequenceNumber: publicSequenceNumber(this.lastSequenceNumber),
       requestedSequenceNumber: this.#nextRequestedSequenceNumber().toString(),
       feedClientVersion: FEED_CLIENT_VERSION,
       expectedChainId: this.expectedChainId,
@@ -247,23 +321,37 @@ export class SequencerFeedWakeClient {
       try {
         const text = await eventDataText(event.data)
         const source = JSON.parse(text)
-        const envelope = parseSequencerFeedEnvelope(source)
-        if (
-          envelope.firstSequenceNumber !== null &&
-          this.lastSequenceNumber !== null &&
-          envelope.firstSequenceNumber <= this.lastSequenceNumber
-        ) {
+        const selected = selectUnseenSequencerFeedMessages(source, this.lastSequenceNumber)
+        this.metrics.frames += 1
+        this.metrics.duplicateMessages += selected.duplicateMessages
+        if (selected.overlapping) this.metrics.overlappingFrames += 1
+        if (selected.outOfOrder) this.metrics.outOfOrderFrames += 1
+        if (selected.gap) {
+          this.metrics.sequenceGapFrames += 1
+          this.onStatus({
+            status: 'SEQUENCE_GAP_RECOVERABLE',
+            expectedSequenceNumber: selected.expectedSequenceNumber,
+            firstSequenceNumber: selected.envelope.firstSequenceNumber,
+            gapSize: selected.gapSize,
+            recovery: 'PUBLIC_LOG_AND_PERIODIC',
+          })
+        }
+        if (selected.highestSequenceNumber !== null) this.lastSequenceNumber = selected.highestSequenceNumber
+        if (selected.source.messages.length === 0) {
+          this.metrics.duplicateFrames += 1
           return
         }
-        if (envelope.firstSequenceNumber !== null) {
-          const highestSequenceNumber = Math.max(
-            ...source.messages.map((item) => integer(item?.sequenceNumber)).filter((item) => item !== null),
-          )
-          this.lastSequenceNumber = highestSequenceNumber
+        const matchedAddresses = sequencerFeedAddressMatches(selected.source, this.watchedAddresses)
+        const signal = {
+          ...selected.envelope,
+          matchedAddresses,
+          duplicateMessages: selected.duplicateMessages,
+          overlappingFrame: selected.overlapping,
+          outOfOrderFrame: selected.outOfOrder,
+          sequenceGap: selected.gap,
+          sequenceGapSize: selected.gapSize,
+          receivedAt: new Date().toISOString(),
         }
-        this.metrics.frames += 1
-        const matchedAddresses = sequencerFeedAddressMatches(source, this.watchedAddresses)
-        const signal = { ...envelope, matchedAddresses, receivedAt: new Date().toISOString() }
         if (matchedAddresses.length < this.minimumAddressMatches || !this.matchFilter(signal)) {
           this.metrics.filtered += 1
           return

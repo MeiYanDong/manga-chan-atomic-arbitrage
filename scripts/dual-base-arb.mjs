@@ -48,6 +48,7 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
+import { mergePendingMarketSignals } from '../src/feed-signal-coalescer.mjs'
 import {
   GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
   GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
@@ -2831,6 +2832,26 @@ async function watchDual() {
     let pendingGlobalWake = 'STARTUP'
     let pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
     let coalescedGlobalWakes = 0
+    const marketWakeReasons = new Set(['FILTERED_SEQUENCER_FEED', 'REVIEWED_POOL_SWAP_EVENT'])
+    const enqueueEarnMarketWake = (wakeReason, signal) => {
+      const mergeExisting = marketWakeReasons.has(pendingEarnWake)
+      if (mergeExisting) coalescedEarnWakes += 1
+      pendingEarnSignal = mergeExisting
+        ? mergePendingMarketSignals(pendingEarnSignal, signal, { coalescedWakeCount: coalescedEarnWakes })
+        : { ...signal, coalescedWakeCount: coalescedEarnWakes }
+      pendingEarnWake =
+        pendingEarnWake === 'FILTERED_SEQUENCER_FEED' || wakeReason === 'FILTERED_SEQUENCER_FEED'
+          ? 'FILTERED_SEQUENCER_FEED'
+          : wakeReason
+    }
+    const enqueueGlobalFeedWake = (signal) => {
+      const mergeExisting = pendingGlobalWake === 'FILTERED_SEQUENCER_FEED'
+      if (mergeExisting) coalescedGlobalWakes += 1
+      pendingGlobalSignal = mergeExisting
+        ? mergePendingMarketSignals(pendingGlobalSignal, signal, { coalescedWakeCount: coalescedGlobalWakes })
+        : { ...signal, coalescedWakeCount: coalescedGlobalWakes }
+      pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
+    }
     let activeGlobalFeedPolicy = globalFeedWatchPolicy()
     let reconciliationTask = null
     let reconciliationHash = null
@@ -2851,27 +2872,21 @@ async function watchDual() {
         const globalClassification = classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
         const earnClassification = classifyEarnFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
         if (earnClassification.actionable) {
-          if (pendingEarnWake) coalescedEarnWakes += 1
-          pendingEarnWake = 'FILTERED_SEQUENCER_FEED'
-          pendingEarnSignal = {
+          enqueueEarnMarketWake('FILTERED_SEQUENCER_FEED', {
             ...signal,
             sourceReceivedAt: signal.receivedAt,
             eventPool: earnClassification.matchedPoolAddresses[0] || null,
             eventPools: earnClassification.matchedPoolAddresses,
             routeAddresses: earnClassification.routeAddresses,
             classificationReason: earnClassification.reason,
-            coalescedWakeCount: coalescedEarnWakes,
-          }
+          })
         }
         if (globalClassification.actionable) {
-          if (pendingGlobalWake) coalescedGlobalWakes += 1
-          pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
-          pendingGlobalSignal = {
+          enqueueGlobalFeedWake({
             ...signal,
             routeAddresses: globalClassification.routeAddresses,
             classificationReason: globalClassification.reason,
-            coalescedWakeCount: coalescedGlobalWakes,
-          }
+          })
         }
       },
     })
@@ -2941,8 +2956,7 @@ async function watchDual() {
               const wake = await pollEarnOnHoodWake(earnEventCursor)
               earnEventCursor = wake.cursor
               if (wake.event) {
-                pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'
-                pendingEarnSignal = wake
+                enqueueEarnMarketWake('REVIEWED_POOL_SWAP_EVENT', wake)
               }
               watchState = {
                 ...watchState,
@@ -3104,8 +3118,7 @@ async function watchDual() {
             const wake = await pollEarnOnHoodWake(earnEventCursor)
             earnEventCursor = wake.cursor
             if (wake.event) {
-              pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'
-              pendingEarnSignal = wake
+              enqueueEarnMarketWake('REVIEWED_POOL_SWAP_EVENT', wake)
             }
             watchState = {
               ...watchState,
