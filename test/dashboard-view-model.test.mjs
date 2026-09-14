@@ -14,6 +14,8 @@ import {
   evidenceClaimLabel,
   formatBeijingTime,
   formatMetric,
+  globalExecutionOutcome,
+  globalWakeKindLabel,
   humanStatus,
   noTradeReason,
   opportunityLane,
@@ -79,6 +81,14 @@ test('competition labels state only the receipt-proven path shape', () => {
   assert.equal(competitionStrategyLabel('EARN_VAULT_2_HOP_CLOSED_CYCLE'), 'Earn 内部 2 跳闭环')
   assert.equal(competitionStrategyLabel('EARN_VAULT_4_HOP_CLOSED_CYCLE'), 'Earn 内部 4 跳闭环')
   assert.equal(competitionStrategyLabel('UNKNOWN'), 'Earn 内部闭环')
+})
+
+test('global execution evidence is translated without hiding unknown race attribution', () => {
+  assert.equal(globalWakeKindLabel('EVENT'), '市场事件即时触发')
+  assert.equal(globalWakeKindLabel('RECOVERY'), '周期完整性扫描')
+  assert.equal(globalExecutionOutcome('NO_EXACT_NET_OPPORTUNITY'), '精确报价后没有净利润过线')
+  assert.equal(globalExecutionOutcome('NO_SIGNATURE_RPC_BUDGET_EXHAUSTED'), '读取额度不足，本轮未签名')
+  assert.equal(globalExecutionOutcome('UNRECOGNIZED'), '结果待核验')
 })
 
 test('opportunity presentation keeps live, near, filtered and unknown stages distinct', () => {

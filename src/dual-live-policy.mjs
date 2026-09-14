@@ -14,7 +14,8 @@ import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v9'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v10'
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9 = 'dual-base-loopback-escalation-v9'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8 = 'dual-base-loopback-escalation-v8'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7 = 'dual-base-loopback-escalation-v7'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6 = 'dual-base-loopback-escalation-v6'
@@ -336,6 +337,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V7,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V6,
@@ -351,7 +353,11 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
   ) {
     return { allowed: false, reason: 'invalid-authorization-policy' }
   }
-  if (arm.policyVersion === LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8) {
+  if (
+    [LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9, LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8].includes(
+      arm.policyVersion,
+    )
+  ) {
     return { allowed: false, reason: 'invalid-authorization-policy' }
   }
   if (

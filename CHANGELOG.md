@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Stop shared protocol roots and WETH/USDG settlement hubs from marking every global route as event-relevant. Project
+  Sequencer Feed matches into exact pool/hook and non-hub asset dependencies, quote only those dependent routes, keep
+  rotating periodic recovery for completeness, and bind the new semantics to authorization v10. Persist wake-to-decision
+  latency and selected-workset evidence, then expose a Chinese execution funnel on the competition page without claiming
+  a lost race when same-block counterfactual evidence is absent.
 - Add a dedicated Chinese market-competition page for the seven-day Earn receipt census. Rank public competitor
   addresses and route shapes by confirmed closed-cycle receipts, aggregate receipt-based WETH/ETH net estimates, and
   preserve USDG/NVDA or unknown settlement profit in its native asset beside ETH Gas instead of calling the whole

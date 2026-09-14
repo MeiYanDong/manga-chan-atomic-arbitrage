@@ -10,6 +10,8 @@ import {
   evidenceClaimLabel,
   formatBeijingTime,
   formatMetric,
+  globalExecutionOutcome,
+  globalWakeKindLabel,
   humanStatus,
   noTradeReason,
   opportunityLane,
@@ -1130,7 +1132,7 @@ function CompetitorAddress({ alias, address }) {
   )
 }
 
-function CompetitionPage({ state }) {
+function CompetitionPage({ state, business }) {
   const snapshot = state.snapshot
   const summary = snapshot?.summary
   const leaders = snapshot?.leaders || []
@@ -1139,6 +1141,17 @@ function CompetitionPage({ state }) {
   const generatedAtMs = Date.parse(snapshot?.generatedAt || '')
   const stale = !Number.isFinite(generatedAtMs) || Date.now() - generatedAtMs > 2 * 60 * 1_000
   const status = snapshot && !stale ? snapshot.status : 'STALE'
+  const global = business?.strategy?.global
+  const funnel = global?.executionFunnel
+  const workset = global?.latestWorkset
+  const executionStages = [
+    ['Feed 消息', funnel?.feedMessages],
+    ['通过相关性过滤', funnel?.relevantSignals],
+    ['启动精确扫描', funnel?.exactPreflights],
+    ['出现毛利', funnel?.grossPositiveRounds],
+    ['净利润过线', funnel?.exactNetPositiveRounds],
+    ['链上成交', funnel?.confirmedExecutions],
+  ]
   return (
     <div className="page-stack">
       <PageTitle
@@ -1169,6 +1182,46 @@ function CompetitionPage({ state }) {
           <small>笔 · 原币毛利已确认，尚未扣统一 Gas</small>
         </div>
       </section>
+      <Section title="我们的执行漏斗" side={<Status value={global?.status || 'UNKNOWN'} />}>
+        <div className="funnel-line">
+          {executionStages.map(([label, value], index) => (
+            <div key={label}>
+              <span>{label}</span>
+              <strong>{value ?? '—'}</strong>
+              {index < executionStages.length - 1 && <i aria-hidden="true">›</i>}
+            </div>
+          ))}
+        </div>
+        <dl className="fact-grid execution-facts">
+          <div>
+            <dt>最近触发</dt>
+            <dd>{globalWakeKindLabel(workset?.wakeKind)}</dd>
+          </div>
+          <div>
+            <dt>相关路线</dt>
+            <dd>{workset ? `${workset.touchedRoutes} / ${workset.totalRoutes}` : '待首轮新策略扫描'}</dd>
+          </div>
+          <div>
+            <dt>本轮实际报价</dt>
+            <dd>{workset ? `${workset.selectedRoutes} 条` : '待核验'}</dd>
+          </div>
+          <div>
+            <dt>从事件到结论</dt>
+            <dd>
+              {global?.latestDecisionLatencyMs === null || global?.latestDecisionLatencyMs === undefined
+                ? '待核验'
+                : `${number(global.latestDecisionLatencyMs / 1_000, 2)} 秒`}
+            </dd>
+          </div>
+        </dl>
+        <p className="coverage-note">
+          最近结论：{globalExecutionOutcome(global?.attribution?.latestOutcome)}。已过滤{' '}
+          {funnel?.filteredSignals ?? '—'} 条无关消息，合并 {funnel?.coalescedSignals ?? '—'} 条等待中的重复唤醒。
+        </p>
+        <p className="coverage-note">
+          “被竞争者抢走”仍需同区块机会、我方报价与提交时序同时成立；当前没有这组反事实证据，因此保持未知。
+        </p>
+      </Section>
       <Section title="竞争者排行" side={<span className="section-summary">按已确认闭环次数排序</span>}>
         <p className="section-note">
           “收益”是闭环回执中的资产增量减该笔链上 Gas，不等于对方钱包的全部经营利润，也不包含私有基础设施成本。
@@ -1704,7 +1757,7 @@ export default function App() {
   } else if (page === 'opportunities') {
     content = <OpportunitiesPage data={state.data} />
   } else if (page === 'competition') {
-    content = <CompetitionPage state={competition} />
+    content = <CompetitionPage state={competition} business={state.data.business} />
   } else if (page === 'strategy') {
     content = (
       <StrategyPage data={state.data} opportunityData={strategyOpportunities} onOpenOpportunity={openOpportunity} />

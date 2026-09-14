@@ -1,4 +1,4 @@
-export const GLOBAL_ROUTE_WORKSET_POLICY = 'EVENT_RELEVANCE_THEN_PERIODIC_ROTATION_V1'
+export const GLOBAL_ROUTE_WORKSET_POLICY = 'SPECIFIC_EVENT_DEPENDENCY_THEN_PERIODIC_ROTATION_V2'
 
 function lowerAddress(value) {
   return /^0x[0-9a-f]{40}$/i.test(String(value || '')) ? String(value).toLowerCase() : null

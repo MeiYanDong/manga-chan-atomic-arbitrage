@@ -2344,7 +2344,8 @@ function runGlobalShared(arm, signal, wakeReason) {
       signal?.firstSequenceNumber === null || signal?.firstSequenceNumber === undefined
         ? ''
         : String(signal.firstSequenceNumber),
-    GLOBAL_WAKE_MATCHED_ADDRESSES: (signal?.matchedAddresses || []).join(','),
+    GLOBAL_WAKE_ROUTE_ADDRESSES: (signal?.routeAddresses || []).join(','),
+    GLOBAL_WAKE_CLASSIFICATION: signal?.classificationReason || '',
     GLOBAL_WAKE_REASON: wakeReason || '',
   })
 }
@@ -2352,6 +2353,10 @@ function runGlobalShared(arm, signal, wakeReason) {
 function globalFeedWatchPolicy() {
   return buildGlobalFeedWatchPolicy(readJson(GLOBAL_CATALOG_PATH), {
     protocolAddresses: [EARN_VAULT, EARN_ROUTER, POOL_MANAGER],
+    settlementAddresses: globalSettlementAssets(
+      [GENERIC_USDG, GENERIC_WETH],
+      RUNTIME_CONFIG.globalExtraSettlementAssets,
+    ),
     ignoredAddresses: [MORPHO, V3_FACTORY],
   })
 }
@@ -2406,6 +2411,9 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
     sourceReceivedAt: signal?.receivedAt || null,
     feedSequenceNumber: signal?.firstSequenceNumber ?? null,
     matchedAddressCount: signal?.matchedAddresses?.length || 0,
+    routeAddressCount: signal?.routeAddresses?.length || 0,
+    classificationReason: signal?.classificationReason || null,
+    coalescedWakeCount: signal?.coalescedWakeCount || 0,
   })
   let nextState = {
     ...watchState,
@@ -2416,6 +2424,9 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
       ...watchState.global,
       status: 'PREFLIGHT_RUNNING',
       lastWakeReason: wakeReason,
+      lastWakeClassification: signal?.classificationReason || null,
+      lastWakeRouteAddressCount: signal?.routeAddresses?.length || 0,
+      coalescedFeedWakes: signal?.coalescedWakeCount || watchState.global?.coalescedFeedWakes || 0,
       lastPreflightAt: new Date().toISOString(),
       nextPeriodicAt: new Date(nextPeriodicAt).toISOString(),
       feed: feed.snapshot(),
@@ -2427,7 +2438,7 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
     wakeReason,
   })
   const result = await runGlobalShared(arm, signal, wakeReason)
-  applyGlobalFeedWatchPolicy(feed)
+  const feedPolicy = applyGlobalFeedWatchPolicy(feed)
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const usage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = result.status === 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED'
@@ -2454,6 +2465,9 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
       lastNormalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
       graph: result.graph || result.latestOpportunity?.graph || nextState.global.graph || null,
       rpc: result.rpc || result.latestOpportunity?.rpc || null,
+      wake: result.wake || result.latestOpportunity?.wake || null,
+      workset: result.workset || result.latestOpportunity?.workset || null,
+      timing: result.timing || result.latestOpportunity?.timing || null,
       feed: feed.snapshot(),
     },
   }
@@ -2464,8 +2478,13 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
     status: result.status,
     transaction: result.transaction || null,
     normalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
+    evaluated: result.evaluated ?? null,
+    grossPositive: result.grossPositive ?? null,
+    exactNetPositive: result.exactNetPositive ?? null,
+    workset: result.workset || null,
+    timing: result.timing || null,
   })
-  return { watchState: nextState, deployments: nextDeployments }
+  return { watchState: nextState, deployments: nextDeployments, feedPolicy }
 }
 
 async function executeEarnWatcherWake({
@@ -2731,15 +2750,24 @@ async function watchDual() {
     let lastGlobalRunAt = 0
     let pendingGlobalWake = 'STARTUP'
     let pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
-    const initialGlobalFeedPolicy = globalFeedWatchPolicy()
+    let coalescedGlobalWakes = 0
+    let activeGlobalFeedPolicy = globalFeedWatchPolicy()
     sequencerFeed = new SequencerFeedWakeClient({
       requestedSequenceNumber: startup.wallet.blockNumber,
-      watchedAddresses: initialGlobalFeedPolicy.watchedAddresses,
+      watchedAddresses: activeGlobalFeedPolicy.watchedAddresses,
       minimumAddressMatches: 1,
-      matchFilter: (signal) => classifyGlobalFeedMatches(signal.matchedAddresses, initialGlobalFeedPolicy).actionable,
+      matchFilter: (signal) => classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy).actionable,
       onWake: (signal) => {
+        const classification = classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
+        if (!classification.actionable) return
+        if (pendingGlobalWake) coalescedGlobalWakes += 1
         pendingGlobalWake = 'FILTERED_SEQUENCER_FEED'
-        pendingGlobalSignal = signal
+        pendingGlobalSignal = {
+          ...signal,
+          routeAddresses: classification.routeAddresses,
+          classificationReason: classification.reason,
+          coalescedWakeCount: coalescedGlobalWakes,
+        }
       },
     })
     sequencerFeed.start()
@@ -2775,6 +2803,7 @@ async function watchDual() {
           })
           watchState = globalRun.watchState
           deployments = globalRun.deployments
+          activeGlobalFeedPolicy = globalRun.feedPolicy
           await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
           continue
         }

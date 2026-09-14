@@ -1,6 +1,6 @@
 # ADR 0064：Sequencer 唤醒相关性与单轮 RPC 成本门禁
 
-- 状态：Accepted
+- 状态：Superseded by ADR 0067
 - 日期：2026-09-14
 
 ## 背景
