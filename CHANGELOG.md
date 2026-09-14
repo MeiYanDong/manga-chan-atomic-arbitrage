@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Treat viem's exact missing-batch-item failure as a transport fault and retry only that omitted logical call on the
+  authorization-bounded managed fallback. Arbitrary `TypeError`, malformed RPC requests and EVM reverts still fail
+  without provider fanout.
 - Batch global graph reads on the official public RPC and use the managed endpoint only after a transport or rate-limit
   failure. Persist a 20,000-logical-call UTC-day ceiling, debit it before fallback, bind it to authorization v8 and
   expose only the operator-safe used/limit totals in the business snapshot. Deterministic EVM reverts, signed-raw

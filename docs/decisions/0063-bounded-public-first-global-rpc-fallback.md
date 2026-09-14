@@ -17,7 +17,8 @@ Global discovery uses one public-first transport with these boundaries:
 
 1. concurrent JSON-RPC calls are batched on both providers, with at most 32 logical calls per HTTP request;
 2. the official public endpoint is always attempted first;
-3. only transport or rate-limit failure may fall back to the managed endpoint; deterministic EVM reverts remain final;
+3. only transport, rate-limit or a viem-proven missing batch-response item may fall back to the managed endpoint;
+   deterministic EVM reverts and malformed requests remain final;
 4. every managed fallback is debited by logical call count before the request and persisted by UTC day;
 5. the default daily managed allowance is 20,000 logical calls, and exhaustion fails closed without signing; and
 6. authorization policy v8 commits that allowance together with the executor, graph and submission policy.

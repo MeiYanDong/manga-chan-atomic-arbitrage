@@ -145,11 +145,12 @@ not profit and a negative result must not be turned into a Gas-spending probe. S
 then execute a route only after current exact simulation; accepted effects require receipt, `Executed` event and balance
 delta.
 
-Broad graph discovery uses the official public RPC first and batches concurrent reads. A transport or HTTP 429 failure
-may retry the same read batch on the managed endpoint only while the restart-durable UTC-day logical-call budget has
-capacity. The default ceiling is `GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=20000`; changing it requires a fresh
-authorization. A deterministic EVM revert never triggers provider fallback. Budget exhaustion is a signer-free coverage
-degradation, not permission to lower the profit floor or broadcast a probe.
+Broad graph discovery uses the official public RPC first and batches concurrent reads. A transport failure, HTTP 429 or
+viem-proven missing batch-response item may retry only the failed logical call on the managed endpoint while the
+restart-durable UTC-day budget has capacity. The default ceiling is
+`GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=20000`; changing it requires a fresh authorization. A deterministic EVM
+revert or malformed request never triggers provider fallback. Budget exhaustion is a signer-free coverage degradation,
+not permission to lower the profit floor or broadcast a probe.
 
 If deployment or execution becomes UNKNOWN, leave the watcher stopped and run `npm run global:reconcile` (or the parent
 `dual:reconcile`). Reconciliation may replay only the exact persisted raw transaction. Never deploy a second universal
