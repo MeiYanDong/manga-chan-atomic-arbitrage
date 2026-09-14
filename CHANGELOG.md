@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Remove every shared protocol root from the route-specific pool set even when an adapter repeats that root in each
+  pool record. In particular, Uniswap v4 PoolManager-only Feed matches are now shared context instead of exact-pool
+  wakes; PoolManager plus a non-settlement asset still projects that asset into the event workset. This closes the
+  production-observed case where one nominal pool match still touched hundreds of routes without changing profit,
+  signing, Gas, nonce, capital or recovery-coverage gates.
 - Stop shared protocol roots and WETH/USDG settlement hubs from marking every global route as event-relevant. Project
   Sequencer Feed matches into exact pool/hook and non-hub asset dependencies, quote only those dependent routes, keep
   rotating periodic recovery for completeness, and bind the new semantics to authorization v10. Persist wake-to-decision
