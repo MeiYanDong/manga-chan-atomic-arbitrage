@@ -41,11 +41,13 @@ test('counts policy-rejected matched frames as filtered and wakes only actionabl
   const second = '0x0000000000000000000000000000000000000002'
   class FakeWebSocket {
     static latest = null
+    static constructorArguments = null
 
-    constructor() {
+    constructor(...args) {
       this.readyState = 0
       this.listeners = new Map()
       FakeWebSocket.latest = this
+      FakeWebSocket.constructorArguments = args
     }
 
     addEventListener(name, listener) {
@@ -63,11 +65,21 @@ test('counts policy-rejected matched frames as filtered and wakes only actionabl
   const wakes = []
   const client = new SequencerFeedWakeClient({
     WebSocketImpl: FakeWebSocket,
+    requestedSequenceNumber: 100,
     watchedAddresses: [first, second],
     matchFilter: (signal) => signal.matchedAddresses.length >= 2,
     onWake: (signal) => wakes.push(signal),
   })
   client.start()
+  assert.deepEqual(FakeWebSocket.constructorArguments.slice(0, 2), ['wss://feed.mainnet.chain.robinhood.com', []])
+  assert.deepEqual(FakeWebSocket.constructorArguments[2], {
+    headers: {
+      'Arbitrum-Feed-Client-Version': '2',
+      'Arbitrum-Requested-Sequence-Number': '100',
+    },
+    perMessageDeflate: true,
+    handshakeTimeout: 10_000,
+  })
   FakeWebSocket.latest.readyState = 1
   FakeWebSocket.latest.emit('open')
   const frame = (sequenceNumber, addresses) =>
@@ -96,12 +108,74 @@ test('counts policy-rejected matched frames as filtered and wakes only actionabl
     filtered: 1,
     malformed: 0,
     errors: 0,
+    rejections: 0,
     reconnects: 0,
     connected: true,
     lastSequenceNumber: 2,
+    requestedSequenceNumber: '3',
+    feedClientVersion: 2,
+    expectedChainId: '4663',
+    lastStatus: 'CONNECTED',
+    lastHttpStatus: 101,
+    nextReconnectAt: null,
     feedUrl: 'wss://feed.mainnet.chain.robinhood.com',
     watchedAddresses: 2,
   })
+  client.stop()
+})
+
+test('respects feed rejection retry-after instead of reconnecting in a tight loop', () => {
+  class RejectedWebSocket {
+    static latest = null
+
+    constructor() {
+      this.readyState = 0
+      this.listeners = new Map()
+      this.onceListeners = new Map()
+      RejectedWebSocket.latest = this
+    }
+
+    addEventListener(name, listener) {
+      this.listeners.set(name, listener)
+    }
+
+    once(name, listener) {
+      this.onceListeners.set(name, listener)
+    }
+
+    reject(response) {
+      this.onceListeners.get('unexpected-response')?.(null, response)
+    }
+
+    terminate() {
+      this.readyState = 3
+    }
+
+    close() {
+      this.readyState = 3
+    }
+  }
+  const statuses = []
+  const client = new SequencerFeedWakeClient({
+    WebSocketImpl: RejectedWebSocket,
+    requestedSequenceNumber: 42,
+    reconnectMs: 1,
+    onStatus: (status) => statuses.push(status),
+  })
+  client.start()
+  RejectedWebSocket.latest.reject({
+    statusCode: 403,
+    headers: { 'retry-after': '60' },
+    resume() {},
+  })
+  const snapshot = client.snapshot()
+  assert.equal(snapshot.errors, 1)
+  assert.equal(snapshot.rejections, 1)
+  assert.equal(snapshot.reconnects, 1)
+  assert.equal(snapshot.lastStatus, 'REJECTED')
+  assert.equal(snapshot.lastHttpStatus, 403)
+  assert.ok(Date.parse(snapshot.nextReconnectAt) - Date.now() >= 60_000)
+  assert.equal(statuses[0].status, 'REJECTED')
   client.stop()
 })
 
