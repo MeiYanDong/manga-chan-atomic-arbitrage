@@ -33,7 +33,7 @@
 ## 本地验证
 
 - `npm run check`：通过；
-- Node 测试：378/378 通过；
+- Node 测试：379/379 通过；
 - deterministic contract suites：4/4 通过；
 - secret scan：414 个文件通过；
 - 修复后重点测试：57/57 通过；
