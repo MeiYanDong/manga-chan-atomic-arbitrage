@@ -1,5 +1,12 @@
 import { keccak256, toHex } from 'viem'
 import { EARN_SIZING_ALGORITHM } from './earnonhood-live-policy.mjs'
+import {
+  EARN_DISCOVERY_RPC_POLICY,
+  EARN_EVENT_SOURCE_POLICY,
+  EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+  EARN_PUBLIC_RECOVERY_POLL_MS,
+} from './earn-rpc-policy.mjs'
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from './earnonhood-routes.mjs'
 import {
   GLOBAL_ATOMIC_ROUTE_POLICY,
@@ -23,13 +30,14 @@ import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v11'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v12'
 export const DUAL_WATCH_EXIT_STATUS = Object.freeze({
   UNKNOWN: 70,
   INVARIANT: 71,
   NONCE_CONFLICT: 72,
   TEMPORARY_FAILURE: 75,
 })
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V11 = 'dual-base-loopback-escalation-v11'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10 = 'dual-base-loopback-escalation-v10'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9 = 'dual-base-loopback-escalation-v9'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8 = 'dual-base-loopback-escalation-v8'
@@ -426,6 +434,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V11,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8,
@@ -445,6 +454,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
   }
   if (
     [
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V11,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V8,
@@ -489,6 +499,20 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       arm.global?.feedPolicy !== GLOBAL_FEED_MATCH_POLICY)
   ) {
     return { allowed: false, reason: 'invalid-global-policy' }
+  }
+  if (
+    arm.policyVersion === DUAL_AUTHORIZATION_POLICY_VERSION &&
+    (arm.earnOnHood?.discoveryRpc !== EARN_DISCOVERY_RPC_POLICY ||
+      arm.earnOnHood?.eventSource !== EARN_EVENT_SOURCE_POLICY ||
+      arm.earnOnHood?.eventPollMs !== EARN_PUBLIC_RECOVERY_POLL_MS ||
+      arm.earnOnHood?.escalationRpc !== 'MANGA_RPC_URL_ONLY_AFTER_PUBLIC_NET_POSITIVE' ||
+      !Number.isSafeInteger(arm.earnOnHood?.managedFallbackDailyLogicalCallCap) ||
+      arm.earnOnHood.managedFallbackDailyLogicalCallCap < 1_000 ||
+      arm.earnOnHood.managedFallbackDailyLogicalCallCap > 1_000_000 ||
+      arm.earnOnHood?.managedFallbackEventLogicalCallCap !== EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP ||
+      arm.earnOnHood?.managedFallbackRecoveryLogicalCallCap !== EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP)
+  ) {
+    return { allowed: false, reason: 'invalid-earnonhood-rpc-policy' }
   }
   let maxFailedGas
   let minimumNetProfitUsdg

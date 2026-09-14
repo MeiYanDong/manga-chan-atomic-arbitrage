@@ -5,6 +5,18 @@ export const RpcErrorClass = Object.freeze({
   INVARIANT: 'INVARIANT',
 })
 
+export const MAX_ERROR_TEXT_CHARS = 4_096
+export const MAX_DIAGNOSTIC_ERROR_TEXT_CHARS = 8_192
+
+/** @param {string} value @param {number} maximum @param {number} tailChars */
+function boundedText(value, maximum, tailChars) {
+  if (value.length <= maximum) return value
+  const marker = '\n<DIAGNOSTIC_TRUNCATED>\n'
+  const tail = Math.min(tailChars, maximum - marker.length - 1)
+  const head = maximum - marker.length - tail
+  return `${value.slice(0, head)}${marker}${value.slice(-tail)}`
+}
+
 /** @param {string} value */
 export function redactSensitiveText(value) {
   return value.replace(/\b(?:https?|wss?):\/\/[^\s"'<>|]+/gi, '<RPC_URL_REDACTED>')
@@ -33,13 +45,15 @@ export function errorText(error) {
       break
     }
   }
-  return redactSensitiveText([...new Set(parts)].join(' | ')) || 'UNKNOWN'
+  const redacted = redactSensitiveText([...new Set(parts)].join(' | ')) || 'UNKNOWN'
+  return boundedText(redacted, MAX_ERROR_TEXT_CHARS, 768)
 }
 
 /** @param {unknown} error */
 export function diagnosticErrorText(error) {
   const object = error && typeof error === 'object' ? /** @type {Record<string, any>} */ (error) : null
-  return redactSensitiveText(typeof object?.stack === 'string' ? object.stack : errorText(error))
+  const redacted = redactSensitiveText(typeof object?.stack === 'string' ? object.stack : errorText(error))
+  return boundedText(redacted, MAX_DIAGNOSTIC_ERROR_TEXT_CHARS, 1_024)
 }
 
 /** @param {unknown} error */

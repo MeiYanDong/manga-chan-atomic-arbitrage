@@ -504,7 +504,8 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualWatcher, /^MemoryMax=512M$/m)
   for (const unit of [dualWatcher, dualArm]) {
     assert.match(unit, /^Environment=EARN_WATCH_ENABLED=1$/m)
-    assert.match(unit, /^Environment=EARN_WATCH_EVENT_POLL_MS=1000$/m)
+    assert.match(unit, /^Environment=EARN_WATCH_EVENT_POLL_MS=60000$/m)
+    assert.match(unit, /^Environment=EARN_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=40000$/m)
     assert.match(unit, /^Environment=EARN_LIVE_COARSE_PROBE_POINTS=8$/m)
     assert.match(unit, /^Environment=EARN_LIVE_REFINEMENT_POINTS=6$/m)
     assert.match(unit, /^Environment=EARN_LIVE_MIN_NET_WETH=0\.000000000000000001$/m)
@@ -581,7 +582,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualWatchSource, /id: 'EARN',[\s\S]*id: 'GLOBAL'/)
   assert.match(dualWatchSource, /strategyScheduler\.enqueueEvent\('EARN'/)
   assert.match(dualWatchSource, /strategyScheduler\.enqueueEvent\('GLOBAL'/)
-  assert.match(dualWatchSource, /wakeReason === 'FILTERED_SEQUENCER_FEED' \? 100 : 50/)
+  assert.match(
+    dualWatchSource,
+    /wakeReason === 'FILTERED_SEQUENCER_FEED' \? 100 : wakeReason === 'MANAGED_WSS_EARN_SWAP' \? 90 : 50/,
+  )
+  assert.match(dualWatchSource, /new ManagedEarnEventSource/)
+  assert.match(dualWatchSource, /assertLiveTransport\(RUNTIME_CONFIG, \{ requireWss: true \}\)/)
   assert.match(dualWatchSource, /const scheduledWork = strategyScheduler\.claimNext\(Date\.now\(\)\)/)
   assert.match(dualWatchSource, /strategyScheduler: strategyScheduler\.snapshot\(\)/)
   assert.doesNotMatch(dualWatchSource, /pendingEarnWake|pendingGlobalWake/)
@@ -612,6 +618,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(criticalAlertSource, /secure-credential\.mjs/)
 
   const earnLiveSource = fs.readFileSync(path.join(root, 'scripts', 'earnonhood-live.mjs'), 'utf8')
+  assert.match(earnLiveSource, /publicFirstRpcTransport\(PUBLIC_READ_ONLY_RPC, rpcUrl/)
+  assert.match(earnLiveSource, /consumeManagedFallbackBudget\(init\?\.body\)/)
+  assert.match(earnLiveSource, /earn-rpc-fallback-budget\.json/)
+  assert.match(earnLiveSource, /NO_SHOT_RPC_BUDGET_EXHAUSTED/)
+  assert.match(dualSource, /new ManagedEarnEventSource/)
+  assert.match(dualSource, /EARN_PUBLIC_RECOVERY_POLL_MS/)
   const globalLiveSource = fs.readFileSync(path.join(root, 'scripts', 'global-arb.mjs'), 'utf8')
   assert.match(earnLiveSource, /status: 'CONFIRMED_REVERTED'/)
   assert.match(earnLiveSource, /earnOnHoodRouteQuarantine/)

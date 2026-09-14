@@ -159,7 +159,7 @@ sudo systemctl --no-pager --full status manga-global-deploy.service
 Require `UNIVERSAL_DEPLOYMENT_CONFIRMED`, a successful canonical receipt, exact runtime hash, operator and Morpho
 readback, and equal latest/pending nonce. Then run `npm run global:preflight` without a signer. A positive quote is still
 not profit and a negative result must not be turned into a Gas-spending probe. Start `manga-dual-arm.service` only after
-`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v11 watcher may
+`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v12 watcher may
 then execute a route only after current exact simulation; accepted effects require receipt, `Executed` event and balance
 delta.
 
@@ -171,12 +171,18 @@ caps. Changing them or the admission policy invalidates the current authorizatio
 reconcile and re-arm.
 
 Broad graph discovery uses the official public RPC first and batches at most eight concurrent reads per HTTP request,
-which is the verified live `eth_call` ceiling. A transport failure, HTTP 429 or
+which is the verified live `eth_call` ceiling. A transport failure, public HTTP 403/429 or
 viem-proven missing batch-response item may retry only the failed logical call on the managed endpoint while the
 restart-durable UTC-day budget has capacity. The default ceiling is
 `GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=20000`; changing it requires a fresh authorization. A deterministic EVM
 revert or malformed request never triggers provider fallback. Budget exhaustion is a signer-free coverage degradation,
 not permission to lower the profit floor or broadcast a probe.
+
+Earn uses a separate authorization-bound fallback ledger at
+`/var/lib/manga-chan-arbitrage/earn-rpc-fallback-budget.json`. The default ceiling is 40,000 logical calls per UTC day,
+with 128 calls for one event wake and 192 for one recovery wake. Canonical Vault swaps are subscribed through
+`MANGA_WS_URL`; reconnect replays are deduplicated by block, transaction and log index. The official public HTTP event
+reader runs only every 60 seconds as a recovery backstop and never consumes managed capacity itself.
 
 Feed filtering and route work are also authorization-bound. An exact reviewed pool/hook match may wake the event lane.
 A shared protocol root is only context: it also needs a non-settlement asset, while an asset-only frame needs at least

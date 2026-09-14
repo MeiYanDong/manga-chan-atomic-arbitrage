@@ -18,6 +18,7 @@ import {
   parseTransaction,
   parseUnits,
   recoverTransactionAddress,
+  webSocket,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { isChildProcessDeadlineError, runBoundedProcess } from '../src/bounded-child-process.mjs'
@@ -75,6 +76,13 @@ import {
   earnOnHoodGasSolvency,
   earnOnHoodRouteQuarantine,
 } from '../src/earnonhood-live-policy.mjs'
+import {
+  EARN_DISCOVERY_RPC_POLICY,
+  EARN_EVENT_SOURCE_POLICY,
+  EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+  EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+  EARN_PUBLIC_RECOVERY_POLL_MS,
+} from '../src/earn-rpc-policy.mjs'
 import { EARN_SWAP_ABI } from '../src/earnonhood-receipt.mjs'
 import {
   EARN_BATCH_ROUTER,
@@ -87,7 +95,9 @@ import {
 import { retryReadOnly } from '../src/event-driven-shadow.mjs'
 import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/generic-plan.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
+import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
 import { ProtectedStrategyScheduler } from '../src/protected-strategy-scheduler.mjs'
+import { ManagedEarnEventSource } from '../src/managed-earn-event-source.mjs'
 import { SequencerFeedWakeClient } from '../src/sequencer-feed.mjs'
 import { loadUniversalContractArtifact } from '../src/universal-contract-artifact.mjs'
 import {
@@ -160,6 +170,17 @@ const earnEventClient = createPublicClient({
   chain,
   transport: http(PUBLIC_READ_ONLY_RPC, { timeout: 30_000, retryCount: 2 }),
 })
+const managedEarnEventClient = RUNTIME_CONFIG.wsUrl
+  ? createPublicClient({
+      chain,
+      transport: webSocket(RUNTIME_CONFIG.wsUrl, {
+        keepAlive: { interval: 30_000 },
+        reconnect: { attempts: 1_000_000, delay: 2_000 },
+        retryCount: 2,
+        timeout: 10_000,
+      }),
+    })
+  : null
 
 const ERC20_ABI = parseAbi([
   'function symbol() view returns (string)',
@@ -206,12 +227,7 @@ function readJson(file) {
 }
 
 function readAuditRecords(file = AUDIT_PATH) {
-  if (!fs.existsSync(file)) return []
-  return fs
-    .readFileSync(file, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
+  return readSafetyAuditRecords(file)
 }
 
 function appendAudit(event, details = {}) {
@@ -1041,6 +1057,14 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     Number(arm.earnOnHood.publicMaximumExactQuotesPerWake) !==
       maximumEarnPublicExactQuotes(RUNTIME_CONFIG.earnLiveRefinementPoints) ||
     Number(arm.earnOnHood.managedMaximumExactQuotesPerWake) !== RUNTIME_CONFIG.earnLiveRefinementPoints + 3 ||
+    arm.earnOnHood.discoveryRpc !== EARN_DISCOVERY_RPC_POLICY ||
+    arm.earnOnHood.eventSource !== EARN_EVENT_SOURCE_POLICY ||
+    Number(arm.earnOnHood.eventPollMs) !== RUNTIME_CONFIG.earnWatchEventPollMs ||
+    Number(arm.earnOnHood.periodicMs) !== RUNTIME_CONFIG.earnWatchPeriodicMs ||
+    Number(arm.earnOnHood.managedFallbackDailyLogicalCallCap) !==
+      RUNTIME_CONFIG.earnManagedFallbackDailyLogicalCallCap ||
+    Number(arm.earnOnHood.managedFallbackEventLogicalCallCap) !== EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP ||
+    Number(arm.earnOnHood.managedFallbackRecoveryLogicalCallCap) !== EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP ||
     !RUNTIME_CONFIG.globalWatchEnabled ||
     arm.global?.enabled !== true ||
     arm.global.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
@@ -2011,6 +2035,9 @@ async function armDualWatcher() {
     if (!RUNTIME_CONFIG.earnWatchEnabled) {
       throw new Error('unified dual watcher requires EARN_WATCH_ENABLED=1')
     }
+    if (RUNTIME_CONFIG.earnWatchEventPollMs !== EARN_PUBLIC_RECOVERY_POLL_MS) {
+      throw new Error(`unified dual watcher requires a ${EARN_PUBLIC_RECOVERY_POLL_MS}ms public Earn recovery poll`)
+    }
     if (!RUNTIME_CONFIG.globalWatchEnabled) {
       throw new Error('unified watcher requires GLOBAL_WATCH_ENABLED=1')
     }
@@ -2109,7 +2136,7 @@ async function armDualWatcher() {
       usdgPrincipalWeiAtArm: usdgPrincipal.toString(),
       wethPrincipalWeiAtArm: wethPrincipal.toString(),
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
-      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_SWAP_EVENTS',
+      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_MANAGED_EARN_WSS_WITH_PUBLIC_RECOVERY',
       escalationRpcBehavior: 'MANAGED_EXACT_PREFLIGHT_ONLY_AFTER_POSITIVE_SCREEN_THEN_ONE_SIGNATURE',
       rpcSource: RUNTIME_CONFIG.rpcSource,
       global: {
@@ -2165,7 +2192,11 @@ async function armDualWatcher() {
         refinementPoints: RUNTIME_CONFIG.earnLiveRefinementPoints,
         publicMaximumExactQuotesPerWake: maximumEarnPublicExactQuotes(RUNTIME_CONFIG.earnLiveRefinementPoints),
         managedMaximumExactQuotesPerWake: RUNTIME_CONFIG.earnLiveRefinementPoints + 3,
-        discoveryRpc: 'ROBINHOOD_OFFICIAL_PUBLIC',
+        discoveryRpc: EARN_DISCOVERY_RPC_POLICY,
+        eventSource: EARN_EVENT_SOURCE_POLICY,
+        managedFallbackDailyLogicalCallCap: RUNTIME_CONFIG.earnManagedFallbackDailyLogicalCallCap,
+        managedFallbackEventLogicalCallCap: EARN_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
+        managedFallbackRecoveryLogicalCallCap: EARN_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
         escalationRpc: 'MANGA_RPC_URL_ONLY_AFTER_PUBLIC_NET_POSITIVE',
       },
     }
@@ -2654,6 +2685,7 @@ async function executeEarnWatcherWake({
       lastDynamicMaximumPrincipalEth: earnResult.dynamicMaximumPrincipalEth || null,
       lastQuotedNetAtGasCapEth: earnResult.quotedNetAtGasCapEth || earnResult.bestQuotedNetAtGasCapEth || null,
       lastReasons: earnResult.reasons || [],
+      rpc: earnResult.rpc || nextState.earnOnHood.rpc || null,
     },
   }
   writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
@@ -2678,6 +2710,7 @@ async function watchDual() {
   let watchState = null
   let startupRpcRetries = 0
   let sequencerFeed = null
+  let managedEarnEventSource = null
   const persistStopRequested = () => {
     if (!watchState) return
     watchState = { ...watchState, status: 'STOPPED_BY_SIGNAL', updatedAt: new Date().toISOString() }
@@ -2697,7 +2730,6 @@ async function watchDual() {
   process.once('SIGTERM', requestStop)
   process.once('SIGINT', requestStop)
   try {
-    assertLiveTransport(RUNTIME_CONFIG)
     assertLegacySignersInactive()
     const arm = readJson(DUAL_WATCH_ARM_PATH)
     if (!arm || arm.status !== 'ARMED') {
@@ -2710,6 +2742,7 @@ async function watchDual() {
       error.watchPolicyStop = true
       throw error
     }
+    assertLiveTransport(RUNTIME_CONFIG, { requireWss: true })
     const startup = await retryReadOnly(
       async () => {
         await assertCanonicalBase()
@@ -2810,7 +2843,7 @@ async function watchDual() {
       startedAt,
       updatedAt: startedAt,
       triggerMode: 'ONE_SUPERVISOR_ROUTES_LOOPBACK_EVENTS_AND_ORDERED_FEED_TO_TYPED_ADAPTERS',
-      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_PUBLIC_EARN_EVENT_PLUS_SHARED_ORDERED_FEED_FILTER',
+      idleRpcBehavior: 'LOOPBACK_BOARD_PLUS_MANAGED_EARN_WSS_PLUS_PUBLIC_RECOVERY_PLUS_SHARED_ORDERED_FEED',
       pollIntervalMs: RUNTIME_CONFIG.genericWatchPollMs,
       authorizationLifetime: arm.authorizationLifetime,
       principalPolicy: arm.principalPolicy,
@@ -2829,11 +2862,12 @@ async function watchDual() {
       strategyScheduler: strategyScheduler.snapshot(),
       earnOnHood: {
         status: 'STARTING',
-        triggerMode: 'FILTERED_ORDERED_FEED_OR_PUBLIC_SWAP_EVENT_OR_PERIODIC_RECOVERY',
+        triggerMode: 'MANAGED_WSS_OR_FILTERED_ORDERED_FEED_OR_PUBLIC_RECOVERY_OR_PERIODIC_RECOVERY',
         principalPolicy: arm.earnOnHood.principalPolicy,
         fixedPrincipalCap: null,
         routeCommitment: arm.earnOnHood.routeCommitment,
-        publicEventCursor: null,
+        publicEventCursor: String(startup.wallet.blockNumber),
+        eventSource: null,
         nextPeriodicAt: new Date(strategyScheduler.laneSnapshot('EARN').nextPeriodicAt).toISOString(),
         lastWakeReason: null,
         lastPreflightAt: null,
@@ -2877,13 +2911,14 @@ async function watchDual() {
 
     let lastGeneration = null
     let attemptedHashes = new Set()
-    let earnEventCursor = null
+    let earnEventCursor = startup.wallet.blockNumber
     let lastEarnEventPollAt = 0
+    let lastManagedEarnStartAttemptAt = 0
     const enqueueEarnMarketWake = (wakeReason, signal) => {
       strategyScheduler.enqueueEvent('EARN', {
         reason: wakeReason,
         signal,
-        priority: wakeReason === 'FILTERED_SEQUENCER_FEED' ? 100 : 50,
+        priority: wakeReason === 'FILTERED_SEQUENCER_FEED' ? 100 : wakeReason === 'MANAGED_WSS_EARN_SWAP' ? 90 : 50,
       })
     }
     const enqueueGlobalFeedWake = (signal) => {
@@ -2894,6 +2929,44 @@ async function watchDual() {
       })
     }
     let activeGlobalFeedPolicy = globalFeedWatchPolicy()
+    managedEarnEventSource = new ManagedEarnEventSource({
+      client: managedEarnEventClient,
+      chainId: CHAIN_ID,
+      address: EARN_VAULT,
+      event: EARN_SWAP_ABI[0],
+      eventFilter: isEarnOnHoodVaultSwap,
+      errorText,
+      onWake: (signal) => {
+        if (signal.eventBlockNumber !== null && signal.eventBlockNumber !== undefined) {
+          const eventBlockNumber = BigInt(signal.eventBlockNumber)
+          if (eventBlockNumber > earnEventCursor) earnEventCursor = eventBlockNumber
+        }
+        enqueueEarnMarketWake('MANAGED_WSS_EARN_SWAP', signal)
+      },
+      onState: (eventSource) => {
+        if (!watchState) return
+        watchState = {
+          ...watchState,
+          updatedAt: new Date().toISOString(),
+          earnOnHood: { ...watchState.earnOnHood, eventSource },
+        }
+        writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+      },
+    })
+    lastManagedEarnStartAttemptAt = Date.now()
+    try {
+      await managedEarnEventSource.start()
+      appendAudit('earn_managed_wss_subscribed', {
+        authorizationId: arm.authorizationId,
+        policy: EARN_EVENT_SOURCE_POLICY,
+      })
+    } catch (error) {
+      appendAudit('earn_managed_wss_degraded', {
+        authorizationId: arm.authorizationId,
+        reason: errorText(error),
+        retryAfterMs: 30_000,
+      })
+    }
     let reconciliationTask = null
     let reconciliationHash = null
     let reconciliationAttempts = 0
@@ -3105,6 +3178,26 @@ async function watchDual() {
             reason: null,
           }
           writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+        }
+        if (
+          managedEarnEventSource?.snapshot().status === 'DEGRADED' &&
+          !managedEarnEventSource.snapshot().subscriptionActive &&
+          Date.now() - lastManagedEarnStartAttemptAt >= 30_000
+        ) {
+          lastManagedEarnStartAttemptAt = Date.now()
+          try {
+            await managedEarnEventSource.start()
+            appendAudit('earn_managed_wss_recovered', {
+              authorizationId: currentArm.authorizationId,
+              policy: EARN_EVENT_SOURCE_POLICY,
+            })
+          } catch (error) {
+            appendAudit('earn_managed_wss_degraded', {
+              authorizationId: currentArm.authorizationId,
+              reason: errorText(error),
+              retryAfterMs: 30_000,
+            })
+          }
         }
         if (Date.now() - lastEarnEventPollAt >= RUNTIME_CONFIG.earnWatchEventPollMs) {
           lastEarnEventPollAt = Date.now()
@@ -3525,6 +3618,7 @@ async function watchDual() {
     })
     return watchState
   } finally {
+    managedEarnEventSource?.stop()
     sequencerFeed?.stop()
     process.removeListener('SIGTERM', requestStop)
     process.removeListener('SIGINT', requestStop)

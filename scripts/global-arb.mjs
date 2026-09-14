@@ -63,6 +63,7 @@ import {
 } from '../src/global-settlement-assets.mjs'
 import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
+import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
 import {
   DailyHotRpcBudget,
   LogicalCallBudget,
@@ -249,12 +250,7 @@ function appendAudit(event, details = {}) {
 }
 
 function readAuditRecords() {
-  if (!fs.existsSync(AUDIT_PATH)) return []
-  return fs
-    .readFileSync(AUDIT_PATH, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
+  return readSafetyAuditRecords(AUDIT_PATH)
 }
 
 function processIsAlive(pid) {
