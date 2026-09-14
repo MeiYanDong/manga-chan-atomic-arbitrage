@@ -48,6 +48,7 @@ import {
   wethFloorFromUsdg,
 } from '../src/dual-live-policy.mjs'
 import { deriveExecutionEconomics, deriveWethExecutionEconomics } from '../src/execution-economics.mjs'
+import { loadGenericContractArtifact, loadWethContractArtifact } from '../src/dual-contract-artifacts.mjs'
 import {
   GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
   GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
@@ -88,6 +89,7 @@ import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/gene
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import { ProtectedStrategyScheduler } from '../src/protected-strategy-scheduler.mjs'
 import { SequencerFeedWakeClient } from '../src/sequencer-feed.mjs'
+import { loadUniversalContractArtifact } from '../src/universal-contract-artifact.mjs'
 import {
   classifyReconciliation,
   diagnosticErrorText,
@@ -100,9 +102,6 @@ import {
   isTransientRpcError,
   latestUnresolvedMutation,
 } from '../src/policy.mjs'
-import { compileGenericContract } from './generic-contract-compile.mjs'
-import { compileWethContract } from './weth-contract-compile.mjs'
-import { compileUniversalContract } from './universal-contract-compile.mjs'
 
 const CHAIN_ID = 4_663
 const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
@@ -620,7 +619,7 @@ async function wethDeployPreflight({ print = true } = {}) {
     throw new Error('WETH deployment bounds violate the reviewed constructor limits')
   }
   await assertCanonicalBase()
-  const compiled = compileWethContract()
+  const compiled = loadWethContractArtifact()
   const snapshot = await walletSnapshot()
   if (snapshot.nonceLatest !== snapshot.noncePending) throw new Error('wallet has a pending nonce')
   const data = encodeDeployData({
@@ -873,9 +872,9 @@ async function deployWeth() {
 
 async function loadVerifiedDeployments() {
   const [usdgCompiled, wethCompiled, universalCompiled] = [
-    compileGenericContract(),
-    compileWethContract(),
-    compileUniversalContract(),
+    loadGenericContractArtifact(),
+    loadWethContractArtifact(),
+    loadUniversalContractArtifact(),
   ]
   const universalState = readJson(UNIVERSAL_STATE_PATH)
   const [usdg, weth, universal] = await Promise.all([
@@ -1326,7 +1325,7 @@ async function executionStateFromReceipt(plan, hash, receipt, reconciled = false
   const isWeth = plan.kind === 'weth-execute'
   const statePath = isWeth ? WETH_STATE_PATH : USDG_STATE_PATH
   const state = readJson(statePath)
-  const compiled = isWeth ? compileWethContract() : compileGenericContract()
+  const compiled = isWeth ? loadWethContractArtifact() : loadGenericContractArtifact()
   const deployment = isWeth ? await assertWethDeployment(state, compiled) : await assertUsdgDeployment(state, compiled)
   const baseToken = isWeth ? GENERIC_WETH : GENERIC_USDG
   const baseAsset = isWeth ? 'WETH' : 'USDG'
@@ -1635,7 +1634,7 @@ async function execute({ authorizationId = null, abortRequested = null, frozenTr
 }
 
 async function wethWithdrawalStateFromReceipt(plan, hash, receipt, reconciled = false) {
-  const compiled = compileWethContract()
+  const compiled = loadWethContractArtifact()
   const state = readJson(WETH_STATE_PATH)
   const deployment = await assertWethDeployment(state, compiled)
   if (receipt.status !== 'success') throw new Error('WETH withdrawal receipt failed')
@@ -1696,7 +1695,7 @@ async function withdrawWethAll() {
     assertLegacySignersInactive()
     const unresolved = latestUnresolved()
     if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
-    const compiled = compileWethContract()
+    const compiled = loadWethContractArtifact()
     const state = readJson(WETH_STATE_PATH)
     const deployment = await assertWethDeployment(state, compiled)
     const [amount, walletBaseBefore, wallet] = await Promise.all([
@@ -1891,7 +1890,13 @@ async function reconcile() {
     if (outcome.state === 'CONFIRMED_SUCCESS') {
       let effect
       if (mutation.kind === 'weth-deploy') {
-        effect = await wethDeploymentStateFromReceipt(plan, mutation.hash, outcome.receipt, compileWethContract(), true)
+        effect = await wethDeploymentStateFromReceipt(
+          plan,
+          mutation.hash,
+          outcome.receipt,
+          loadWethContractArtifact(),
+          true,
+        )
       } else if (['weth-execute', 'generic-execute'].includes(mutation.kind)) {
         effect = await executionStateFromReceipt(plan, mutation.hash, outcome.receipt, true)
       } else {
@@ -3824,6 +3829,10 @@ async function status() {
 async function main() {
   const command = process.argv[2] || 'status'
   if (command === 'compile') {
+    const [{ compileGenericContract }, { compileWethContract }] = await Promise.all([
+      import('./generic-contract-compile.mjs'),
+      import('./weth-contract-compile.mjs'),
+    ])
     const generic = compileGenericContract()
     const weth = compileWethContract()
     return console.log(

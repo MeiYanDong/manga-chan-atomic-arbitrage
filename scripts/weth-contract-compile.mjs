@@ -7,6 +7,7 @@ import { keccak256, toHex } from 'viem'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dependencyPath = path.join(root, 'contracts', 'GenericAtomicArb.sol')
 const contractPath = path.join(root, 'contracts', 'WethAtomicArb.sol')
+const artifactPath = path.join(root, 'artifacts', 'weth-atomic-arb.json')
 
 export function compileWethContract() {
   const dependencySource = fs.readFileSync(dependencyPath, 'utf8')
@@ -35,6 +36,11 @@ export function compileWethContract() {
   if (!contract) throw new Error('WethAtomicArb compile output is missing')
   const sourceBundle = `${dependencySource}\n---WethAtomicArb.sol---\n${source}`
   return {
+    schemaVersion: 1,
+    contract: 'WethAtomicArb',
+    evmVersion: 'cancun',
+    optimizerRuns: 200,
+    viaIR: true,
     abi: contract.abi,
     bytecode: `0x${contract.evm.bytecode.object}`,
     deployedBytecode: `0x${contract.evm.deployedBytecode.object}`,
@@ -44,12 +50,22 @@ export function compileWethContract() {
     dependencySourceHash: keccak256(toHex(dependencySource)),
     sourceBundleHash: keccak256(toHex(sourceBundle)),
     creationCodeHash: keccak256(`0x${contract.evm.bytecode.object}`),
+    runtimeTemplateCodeHash: keccak256(`0x${contract.evm.deployedBytecode.object}`),
     compiler: solc.version(),
   }
 }
 
+export function writeWethContractArtifact(compiled, outputPath = artifactPath) {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o755 })
+  const temporary = `${outputPath}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${JSON.stringify(compiled, null, 2)}\n`, { mode: 0o644 })
+  fs.renameSync(temporary, outputPath)
+  return outputPath
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const compiled = compileWethContract()
+  writeWethContractArtifact(compiled)
   console.log(
     JSON.stringify(
       {
@@ -63,6 +79,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         dependencySourceHash: compiled.dependencySourceHash,
         sourceBundleHash: compiled.sourceBundleHash,
         creationCodeHash: compiled.creationCodeHash,
+        runtimeTemplateCodeHash: compiled.runtimeTemplateCodeHash,
+        artifact: 'artifacts/weth-atomic-arb.json',
       },
       null,
       2,
