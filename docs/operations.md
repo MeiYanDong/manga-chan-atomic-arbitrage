@@ -224,11 +224,24 @@ For a planned production promotion, prevent a maintenance switch from becoming a
 2. stop the watcher and require its runtime state to become `STOPPED_BY_SIGNAL`;
 3. install and verify the immutable release, then start the watcher;
 4. require the new PID, exact release cwd, current authorization and `RUNNING`/`EXECUTING` runtime state;
-5. start the critical timer, run one health check and require `TRADING_HEALTHY` before ending the cutover.
+5. run one manual health check and require `TRADING_HEALTHY`, then start the critical timer before ending the cutover.
 
 From v0.16.3 onward SIGTERM/SIGINT writes the maintenance state immediately, even while a bounded adapter child is
 finishing. The explicit timer sequence remains the preferred production procedure because it also covers upgrades from
 older releases that lack that behavior.
+
+When Cloud Assistant performs the promotion, never rely on its 60-second default command timeout. Release installation
+includes `npm ci`, the release build and an atomic symlink switch, while the first board projection can itself take more
+than one minute. Set an explicit bounded timeout that covers the build, and split installation from post-start
+acceptance so the latter can be polled independently. A timed-out invocation is `UNKNOWN`, not a rollback receipt:
+first read the current symlink, service state and process working directories before choosing recovery or rollback.
+
+Keep `manga-critical-health.timer` stopped across those invocation boundaries. Start the watcher, require its runtime
+PID to be alive and its state to be fresh, run one manual health check, require `TRADING_HEALTHY`, and only then restore
+the timer. Do not start the timer from a generic failure trap before the watcher has published its new runtime PID. The
+systemd `MainPID` is currently the `npm` wrapper while `dual-watch-state.json.pid` is the Node child, so equality between
+those two values is not an acceptance gate. Instead require both processes in the same service cgroup, the Node child
+alive, the process working directory at the exact release and zero unexpected restarts.
 
 The release installer compiles and verifies the code before atomically moving the `current` symlink. The hardened runtime service only reads that release and writes under `/var/lib/manga-chan-arbitrage`; it does not attempt to compile inside the read-only `/opt` tree at service start.
 
