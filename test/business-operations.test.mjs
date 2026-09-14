@@ -192,6 +192,7 @@ test('uses Beijing calendar boundaries and schedules the completed prior day', (
 test('an in-flight exact execution remains a healthy live process in read models', () => {
   assert.equal(publicRuntimeStatus({ status: 'EXECUTING' }, true), 'RUNNING')
   assert.equal(publicRuntimeStatus({ status: 'HALTED_UNKNOWN' }, true), 'HALTED')
+  assert.equal(publicRuntimeStatus({ status: 'RECONCILING_UNKNOWN' }, true), 'RECONCILING')
   assert.equal(publicRuntimeStatus({ status: 'RUNNING' }, false), 'STOPPED')
 })
 
@@ -377,12 +378,14 @@ test('daily Feishu copy reports business outcomes without raw execution identifi
   const snapshot = buildBusinessSnapshot(fixture())
   const report = formatFeishuDailyReport(snapshot, '2026-09-07')
 
-  assert.match(report, /昨日结果：已确认净收益 \+1\.70 USDG；\+0\.000020 ETH/)
-  assert.match(report, /成交：2 笔（USDG 本金 1 笔，WETH 本金 0 笔，Earn ETH 1 笔，全局跨池 0 笔）/)
-  assert.match(report, /当前策略：运行中，累计净收益 \+1\.30 USDG；\+0\.000030 ETH，共 3 笔/)
-  assert.match(report, /可复投资金：11\.00 USDG；0\.0011 WETH/)
-  assert.match(report, /当前机会：可以执行 0 条；接近门槛 1 条/)
-  assert.match(report, /资金监控：5 个活跃地址；2 个待归集地址（15\.68 USDG）/)
+  assert.match(report, /【套利日报｜9月7日】/)
+  assert.match(report, /净收益：\+1\.70 USDG；\+0\.000020 ETH/)
+  assert.match(report, /成交：2 笔已确认/)
+  assert.match(report, /当前实盘累计：\+1\.30 USDG；\+0\.000030 ETH（3 笔）/)
+  assert.match(report, /可用资金：11\.00 USDG；0\.0011 WETH/)
+  assert.match(report, /需要你处理：无/)
+  assert.match(report, /只计算链上已确认且已扣 Gas/)
+  assert.doesNotMatch(report, /USDG 本金|Earn ETH|全局跨池|当前机会|资金监控/)
   assert.doesNotMatch(report, /扫描 863 个标的|canonical receipt/)
   assert.doesNotMatch(report, /0x[0-9a-f]{64}|authorization|webhook/i)
 })

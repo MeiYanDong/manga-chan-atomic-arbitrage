@@ -167,6 +167,7 @@ export function economicHeadline(overview) {
 
 export function businessHeadline(business, _overview) {
   if (!business) return '正在建立经营快照'
+  if (business.strategy?.status === 'RECONCILING') return '市场仍在扫描，一笔交易正在核对'
   if (business && business.strategy?.status !== 'RUNNING') return '执行服务需要检查'
   if (business && !['RUNNING', 'SCANNING', 'HEALTHY'].includes(business.market?.status)) return '市场数据暂时降级'
   const active = business?.economics?.activeStrategy
@@ -179,6 +180,7 @@ export function businessHeadline(business, _overview) {
 export function runtimeBadge(business, { loading = false, error = false } = {}) {
   const status = business?.strategy?.status
   if (status === 'RUNNING') return { status: 'RUNNING', label: '实盘运行中' }
+  if (status === 'RECONCILING') return { status: 'PENDING', label: '交易核对中' }
   if (status === 'STOPPED') return { status: 'STOPPED', label: '执行已停止' }
   if (status === 'HALTED' || status === 'HALTED_UNKNOWN') return { status: 'HALTED', label: '执行已熔断' }
   if (!business && loading) return { status: 'PENDING', label: '正在更新' }
@@ -231,6 +233,7 @@ export function selectOpportunitiesForOperator(items, limit = OPERATOR_OPPORTUNI
 
 export function noTradeReason(business, overview) {
   if (!business) return '正在读取链上回执、余额和策略状态，请稍候。'
+  if (business.strategy?.status === 'RECONCILING') return '市场扫描仍在继续；新交易暂缓，核对完成后会自动恢复。'
   if (business && business.strategy?.status !== 'RUNNING') return '自动执行服务没有处于运行状态，需要检查。'
   if (business && !['RUNNING', 'SCANNING', 'HEALTHY'].includes(business.market?.status)) {
     return '市场数据暂时降级，系统不会用不完整报价冒险成交。'

@@ -3,6 +3,8 @@ import { formatUnits, parseUnits } from 'viem'
 import { buildBusinessActivities, summarizeProjectEconomics } from './business-activity.mjs'
 import { dualSpendablePrincipal } from './dual-live-policy.mjs'
 
+export { assertFeishuWebhookUrl } from './feishu-webhook.mjs'
+
 export const BUSINESS_SNAPSHOT_SCHEMA_VERSION = 3
 export const BUSINESS_SNAPSHOT_MODE = 'READ_ONLY_SANITIZED_OPERATIONS'
 export const BUSINESS_TIME_ZONE = 'Asia/Shanghai'
@@ -239,6 +241,7 @@ export function publicRuntimeStatus(runtime, processAlive) {
   if (!runtime) return 'NOT_CONFIGURED'
   if (!processAlive) return 'STOPPED'
   if (runtime.status === 'EXECUTING') return 'RUNNING'
+  if (runtime.status === 'RECONCILING_UNKNOWN') return 'RECONCILING'
   if (runtime.status === 'HALTED_UNKNOWN') return 'HALTED'
   return runtime.status || 'UNKNOWN'
 }
@@ -321,7 +324,7 @@ export function buildBusinessSnapshot({
       exactPreflights: Number(runtime?.usage?.exactPreflights || 0),
       signedAttempts: Number(runtime?.usage?.signedAttempts || 0),
       confirmedExecutions: Number(runtime?.usage?.confirmedExecutions || 0),
-      unresolvedMutation: runtime?.status === 'HALTED_UNKNOWN',
+      unresolvedMutation: ['HALTED_UNKNOWN', 'RECONCILING_UNKNOWN'].includes(runtime?.status),
       earnOnHood: arm?.earnOnHood
         ? {
             status: runtime?.earnOnHood?.status || 'UNKNOWN',
@@ -520,40 +523,40 @@ export function formatFeishuDailyReport(snapshot, periodKey) {
     if (!Number.isFinite(numeric)) return '待核验'
     return `${numeric > 0 ? '+' : ''}${display(numeric, digits)}`
   }
-  const active = snapshot.economics.activeStrategy
-  const portfolio = snapshot.portfolio
-  const systemLabel = snapshot.strategy.status === 'RUNNING' ? '运行中' : '需要检查'
-  const marketLabel = ['RUNNING', 'SCANNING', 'HEALTHY'].includes(snapshot.market.status) ? '扫描正常' : '扫描降级'
-  return [
-    `【MANGA 套利经营日报｜${periodKey}】`,
-    `昨日结果：已确认净收益 ${signed(period.verifiedExecutionNetUsdg)} USDG；${signed(period.verifiedExecutionNetEth, 6)} ETH`,
-    `成交：${period.confirmedExecutions} 笔（USDG 本金 ${period.confirmedByBase.USDG} 笔，WETH 本金 ${period.confirmedByBase.WETH} 笔，Earn ETH ${period.confirmedByBase.EARN_ETH} 笔，全局跨池 ${period.confirmedByBase.GLOBAL || 0} 笔）`,
-    `失败成本：${display(period.failedGasEth, 6)} ETH（${period.failedTransactions} 笔失败交易）`,
-    `当前策略：${systemLabel}，累计净收益 ${signed(active?.verifiedExecutionNetUsdg || 0)} USDG；${signed(active?.verifiedExecutionNetEth || 0, 6)} ETH，共 ${active?.confirmedExecutions || 0} 笔`,
-    `可复投资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,
-    `当前机会：可以执行 ${snapshot.market.exactReady ?? 0} 条；接近门槛 ${snapshot.market.screenedPositive ?? 0} 条`,
-    portfolio
-      ? `资金监控：${portfolio.summary.activeObjects} 个活跃地址；${portfolio.summary.parkedObjects} 个待归集地址（${display(portfolio.summary.parkedUsdg)} USDG）`
-      : '资金监控：统一快照待核验',
-    `数据状态：${marketLabel}`,
-    '说明：收益只计入链上已确认、余额已核对的且已扣成功交易 Gas 的成交；未成交价差不算收益。',
-  ].join('\n')
-}
-
-export function assertFeishuWebhookUrl(value) {
-  const url = new URL(String(value || '').trim())
-  if (
-    url.protocol !== 'https:' ||
-    url.hostname !== 'open.feishu.cn' ||
-    !/^\/open-apis\/bot\/v2\/hook\/[A-Za-z0-9_-]{20,}$/.test(url.pathname) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  ) {
-    throw new Error('invalid Feishu custom-bot webhook')
+  const profit = (usdg, eth) => {
+    const values = []
+    if (Number(usdg) !== 0) values.push(`${signed(usdg)} USDG`)
+    if (Number(eth) !== 0) values.push(`${signed(eth, 6)} ETH`)
+    return values.length > 0 ? values.join('；') : '0（没有已确认收益）'
   }
-  return url.toString()
+  const active = snapshot.economics.activeStrategy
+  const systemLabel =
+    snapshot.strategy.status === 'RUNNING'
+      ? '运行中'
+      : snapshot.strategy.status === 'RECONCILING'
+        ? '正在自动核对，市场扫描继续'
+        : '需要检查'
+  const marketLabel = ['RUNNING', 'SCANNING', 'HEALTHY'].includes(snapshot.market.status) ? '扫描正常' : '扫描降级'
+  const actionLabel =
+    snapshot.strategy.status === 'RECONCILING'
+      ? '无，系统会在核对完成后自动恢复交易'
+      : systemLabel === '运行中' && marketLabel === '扫描正常'
+        ? '无'
+        : '请查看经营面板的系统状态'
+  const displayDate = `${Number(periodKey.slice(5, 7))}月${Number(periodKey.slice(8, 10))}日`
+  return [
+    `【套利日报｜${displayDate}】`,
+    `净收益：${profit(period.verifiedExecutionNetUsdg, period.verifiedExecutionNetEth)}`,
+    `成交：${period.confirmedExecutions} 笔已确认`,
+    period.failedTransactions > 0
+      ? `失败交易：${period.failedTransactions} 笔，损失 ${display(period.failedGasEth, 6)} ETH`
+      : '失败交易：0 笔',
+    `当前实盘累计：${profit(active?.verifiedExecutionNetUsdg || 0, active?.verifiedExecutionNetEth || 0)}（${active?.confirmedExecutions || 0} 笔）`,
+    `可用资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,
+    `运行状态：${systemLabel}；${marketLabel}`,
+    `需要你处理：${actionLabel}`,
+    '统计口径：只计算链上已确认且已扣 Gas 的结果。',
+  ].join('\n')
 }
 
 export function assertPublicBusinessSnapshot(snapshot) {

@@ -128,6 +128,10 @@ test('business labels are human-facing while preserving degraded and unknown sta
     '执行服务需要检查',
   )
   assert.equal(
+    businessHeadline({ strategy: { status: 'RECONCILING' }, market: { status: 'HEALTHY' } }, {}),
+    '市场仍在扫描，一笔交易正在核对',
+  )
+  assert.equal(
     businessHeadline({ strategy: { status: 'RUNNING' }, market: { status: 'NOT_READY' } }, {}),
     '市场数据暂时降级',
   )
@@ -164,6 +168,10 @@ test('runtime badge reports the execution process independently from market-data
   assert.deepEqual(runtimeBadge({ strategy: { status: 'STOPPED' } }), {
     status: 'STOPPED',
     label: '执行已停止',
+  })
+  assert.deepEqual(runtimeBadge({ strategy: { status: 'RECONCILING' } }), {
+    status: 'PENDING',
+    label: '交易核对中',
   })
   assert.deepEqual(runtimeBadge(null, { error: true }), {
     status: 'ERROR',

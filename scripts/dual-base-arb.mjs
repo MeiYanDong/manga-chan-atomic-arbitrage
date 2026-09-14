@@ -37,7 +37,9 @@ import {
   dualAuthorizationUsage,
   dualSpendablePrincipal,
   dualWatcherExitCode,
+  evaluateDualWalletNonce,
   evaluateDualAuthorizationBudget,
+  expectedDualWalletNonce,
   isDualOpportunityMiss,
   normalizeWethToUsdg,
   selectBestExactEvaluation,
@@ -115,6 +117,7 @@ const NATIVE_MARK_INPUT = 4_000_000_000_000_000n
 const MAX_BOARD_SNAPSHOT_BYTES = 16 * 1024 * 1024
 const STARTUP_RPC_ATTEMPTS = 5
 const STARTUP_RPC_RETRY_DELAY_MS = 1_000
+const UNKNOWN_RECONCILE_RETRY_MS = 5_000
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUNTIME_CONFIG = loadRuntimeConfig()
@@ -1434,7 +1437,7 @@ async function execute({ authorizationId = null, abortRequested = null, frozenTr
         throw new Error('dual watcher authorization changed during exact preflight')
       }
       const usage = assertDualAuthorization(liveArm, check.deployments)
-      const expectedNonce = Number(liveArm.baselineNonce) + usage.confirmedExecutions
+      const expectedNonce = expectedDualWalletNonce(liveArm, usage)
       if (check.wallet.nonceLatest !== expectedNonce) {
         throw new Error(`dual watcher nonce conflict: observed=${check.wallet.nonceLatest}, expected=${expectedNonce}`)
       }
@@ -1557,12 +1560,6 @@ async function execute({ authorizationId = null, abortRequested = null, frozenTr
     )
     if (receipt.status !== 'success') {
       const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
-      const statePath = candidate.baseAsset === 'WETH' ? WETH_STATE_PATH : USDG_STATE_PATH
-      const state = readJson(statePath)
-      if (state) {
-        state.status = 'halted_after_revert'
-        writeProtectedJson(statePath, state)
-      }
       appendAudit('mutation_reverted', {
         lane,
         kind,
@@ -1571,7 +1568,23 @@ async function execute({ authorizationId = null, abortRequested = null, frozenTr
         planHash: plan.planHash,
         gasSpentWei,
       })
-      throw new Error(`${candidate.baseAsset} execution reverted and dual signing is halted: ${hash}`)
+      const result = {
+        status: 'DUAL_BASE_EXECUTION_REVERTED_CONFIRMED',
+        evidence: 'CANONICAL_REVERT_RECEIPT',
+        hash,
+        transaction: hash,
+        baseAsset: candidate.baseAsset,
+        routeLabel: candidate.routeLabel,
+        gasSpentWei: gasSpentWei.toString(),
+      }
+      console.log(
+        stringify({
+          ...result,
+          explorer: `${EXPLORER_TX}${hash}`,
+          gasSpentEth: formatEther(gasSpentWei),
+        }),
+      )
+      return result
     }
     const walletEthAfter = await publicClient.getBalance({ address: WALLET })
     const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
@@ -1892,12 +1905,6 @@ async function reconcile() {
         planHash: plan.planHash,
         gasSpentWei,
       })
-      const statePath = plan.lane === 'weth-v1' ? WETH_STATE_PATH : USDG_STATE_PATH
-      const state = readJson(statePath)
-      if (state) {
-        state.status = 'halted_after_revert'
-        writeProtectedJson(statePath, state)
-      }
       const result = { status: 'RECONCILED_REVERTED', hash: mutation.hash, gasSpentWei }
       console.log(stringify(result))
       return result
@@ -2256,6 +2263,8 @@ function watcherUsageView(usage) {
       EARN_ETH: usage.earnConfirmed,
       GLOBAL: usage.globalConfirmed,
     },
+    revertedExecutions: usage.revertedExecutionCount,
+    consumedNonces: usage.nonceConsumptions,
     signedAttempts: usage.signedAttempts,
     exactPreflights: usage.exactPreflights,
     failedGasEth: formatEther(usage.failedGasWei),
@@ -2359,6 +2368,31 @@ function runGlobalShared(arm, signal, wakeReason) {
   )
 }
 
+function reconcileSharedMutation(arm, mutation) {
+  if (mutation.kind === 'earnonhood-execute') {
+    return runEarnOnHoodChild(
+      'reconcile',
+      {
+        EARN_SHARED_AUTHORIZATION_ID: arm.authorizationId,
+        EARN_SHARED_WATCH_PID: String(process.pid),
+      },
+      RUNTIME_CONFIG.earnWatchChildTimeoutMs,
+    )
+  }
+  if (['global-deploy', 'global-execute'].includes(mutation.kind)) {
+    return runChildScript(
+      'global-arb.mjs',
+      'reconcile',
+      {
+        GLOBAL_SHARED_AUTHORIZATION_ID: arm.authorizationId,
+        GLOBAL_SHARED_WATCH_PID: String(process.pid),
+      },
+      RUNTIME_CONFIG.globalWatchChildTimeoutMs,
+    )
+  }
+  return reconcile()
+}
+
 function globalFeedWatchPolicy() {
   return buildGlobalFeedWatchPolicy(readJson(GLOBAL_CATALOG_PATH), {
     protocolAddresses: [EARN_VAULT, EARN_ROUTER, POOL_MANAGER],
@@ -2425,6 +2459,7 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const usage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = result.status === 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED'
+  const reverted = result.status === 'GLOBAL_EXECUTION_REVERTED_CONFIRMED'
   const budgetLimited = result.status === 'NO_SIGNATURE_RPC_BUDGET_EXHAUSTED'
   nextState = {
     ...nextState,
@@ -2434,11 +2469,13 @@ async function executeGlobalWatcherWake({ arm, watchState, deployments, wakeReas
     consecutiveGlobalErrors: 0,
     lastDecision: confirmed
       ? 'GLOBAL_CONFIRMED_EXECUTION'
-      : budgetLimited
-        ? 'GLOBAL_RPC_BUDGET_LIMITED_NO_SIGNATURE'
-        : 'GLOBAL_NO_NET_OPPORTUNITY',
+      : reverted
+        ? 'GLOBAL_EXECUTION_REVERTED_CONTINUE'
+        : budgetLimited
+          ? 'GLOBAL_RPC_BUDGET_LIMITED_NO_SIGNATURE'
+          : 'GLOBAL_NO_NET_OPPORTUNITY',
     reason: budgetLimited ? result.reason : null,
-    lastTransaction: confirmed ? result.transaction : nextState.lastTransaction,
+    lastTransaction: confirmed || reverted ? result.transaction : nextState.lastTransaction,
     lastExecutionBaseAsset: confirmed ? 'GLOBAL' : nextState.lastExecutionBaseAsset,
     global: {
       ...nextState.global,
@@ -2506,15 +2543,20 @@ async function executeEarnWatcherWake({
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const earnUsage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = earnResult.status === 'CONFIRMED_NET_PROFIT'
+  const reverted = earnResult.status === 'CONFIRMED_REVERTED'
   nextState = {
     ...nextState,
     status: 'RUNNING',
     updatedAt: new Date().toISOString(),
     usage: watcherUsageView(earnUsage),
     consecutiveEarnErrors: 0,
-    lastDecision: confirmed ? 'EARN_CONFIRMED_EXECUTION' : 'EARN_NO_NET_OPPORTUNITY',
+    lastDecision: confirmed
+      ? 'EARN_CONFIRMED_EXECUTION'
+      : reverted
+        ? 'EARN_EXECUTION_REVERTED_CONTINUE'
+        : 'EARN_NO_NET_OPPORTUNITY',
     reason: null,
-    lastTransaction: confirmed ? earnResult.transaction : nextState.lastTransaction,
+    lastTransaction: confirmed || reverted ? earnResult.transaction : nextState.lastTransaction,
     lastExecutionBaseAsset: confirmed ? 'EARN_ETH' : nextState.lastExecutionBaseAsset,
     earnOnHood: {
       ...nextState.earnOnHood,
@@ -2563,8 +2605,6 @@ async function watchDual() {
       error.watchPolicyStop = true
       throw error
     }
-    const unresolved = latestUnresolved()
-    if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
     const startup = await retryReadOnly(
       async () => {
         await assertCanonicalBase()
@@ -2585,17 +2625,12 @@ async function watchDual() {
             args: [deployments.weth.executor],
           }),
         ])
-        const expectedNonce = Number(arm.baselineNonce) + usage.confirmedExecutions
+        const nonceState = evaluateDualWalletNonce(arm, usage, wallet, latestUnresolved())
         const spendableUsdg = dualSpendablePrincipal(arm, deployments.usdg.state, 'USDG')
         const spendableWeth = dualSpendablePrincipal(arm, deployments.weth.state, 'WETH')
-        if (
-          wallet.nonceLatest !== wallet.noncePending ||
-          wallet.nonceLatest !== expectedNonce ||
-          usdgPrincipal < spendableUsdg ||
-          wethPrincipal < spendableWeth
-        ) {
+        if (!nonceState.allowed || usdgPrincipal < spendableUsdg || wethPrincipal < spendableWeth) {
           throw new Error(
-            `dual watcher startup state mismatch: nonce=${wallet.nonceLatest}/${wallet.noncePending}/${expectedNonce}, USDG=${usdgPrincipal}/${spendableUsdg}, WETH=${wethPrincipal}/${spendableWeth}`,
+            `dual watcher startup state mismatch: nonce=${wallet.nonceLatest}/${wallet.noncePending}/${nonceState.expectedNonce}/${nonceState.reason || nonceState.state}, USDG=${usdgPrincipal}/${spendableUsdg}, WETH=${wethPrincipal}/${spendableWeth}`,
           )
         }
         return { deployments, usage, wallet }
@@ -2736,6 +2771,12 @@ async function watchDual() {
     let pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
     let coalescedGlobalWakes = 0
     let activeGlobalFeedPolicy = globalFeedWatchPolicy()
+    let reconciliationTask = null
+    let reconciliationHash = null
+    let reconciliationAttempts = 0
+    let reconciliationLastResult = null
+    let reconciliationNextAttemptAt = 0
+    let signingPauseStartedAt = null
     sequencerFeed = new SequencerFeedWakeClient({
       requestedSequenceNumber: startup.wallet.blockNumber,
       watchedAddresses: activeGlobalFeedPolicy.watchedAddresses,
@@ -2763,7 +2804,172 @@ async function watchDual() {
         deployments = refreshDeploymentLedgers(deployments)
         const currentUsage = assertDualAuthorization(currentArm, deployments)
         const unresolvedNow = latestUnresolved()
-        if (unresolvedNow) throw new Error(`unresolved ${unresolvedNow.kind} mutation ${unresolvedNow.hash}`)
+        if (unresolvedNow) {
+          const now = Date.now()
+          if (reconciliationHash !== unresolvedNow.hash) {
+            reconciliationHash = unresolvedNow.hash
+            reconciliationAttempts = 0
+            reconciliationLastResult = null
+            reconciliationNextAttemptAt = 0
+            signingPauseStartedAt = new Date().toISOString()
+            appendAudit('dual_watch_signing_quarantined', {
+              authorizationId: currentArm.authorizationId,
+              kind: unresolvedNow.kind,
+              hash: unresolvedNow.hash,
+              scope: 'SHARED_WALLET_NONCE_DOMAIN',
+              discoveryContinues: true,
+            })
+          }
+          if (!reconciliationTask && now >= reconciliationNextAttemptAt) {
+            reconciliationAttempts += 1
+            const attempt = reconciliationAttempts
+            const attemptedHash = unresolvedNow.hash
+            const attemptedKind = unresolvedNow.kind
+            reconciliationTask = reconcileSharedMutation(currentArm, unresolvedNow)
+              .then((result) => {
+                reconciliationLastResult = {
+                  attempt,
+                  status: result?.status || 'UNKNOWN_RESULT',
+                  completedAt: new Date().toISOString(),
+                  error: null,
+                }
+              })
+              .catch((error) => {
+                reconciliationLastResult = {
+                  attempt,
+                  status: 'RECONCILE_RETRY_SCHEDULED',
+                  completedAt: new Date().toISOString(),
+                  error: errorText(error),
+                }
+                appendAudit('dual_watch_reconcile_retry_scheduled', {
+                  authorizationId: currentArm.authorizationId,
+                  kind: attemptedKind,
+                  hash: attemptedHash,
+                  attempt,
+                  reason: errorText(error),
+                })
+              })
+              .finally(() => {
+                reconciliationNextAttemptAt = Date.now() + UNKNOWN_RECONCILE_RETRY_MS
+                reconciliationTask = null
+              })
+          }
+
+          if (Date.now() - lastEarnEventPollAt >= RUNTIME_CONFIG.earnWatchEventPollMs) {
+            lastEarnEventPollAt = Date.now()
+            try {
+              const wake = await pollEarnOnHoodWake(earnEventCursor)
+              earnEventCursor = wake.cursor
+              if (wake.event) {
+                pendingEarnWake = 'REVIEWED_POOL_SWAP_EVENT'
+                pendingEarnSignal = wake
+              }
+              watchState = {
+                ...watchState,
+                earnOnHood: {
+                  ...watchState.earnOnHood,
+                  status: 'WATCHING_SIGNING_PAUSED',
+                  publicEventCursor: String(wake.cursor),
+                  lastEventPollAt: new Date().toISOString(),
+                  skippedBlocks: String(wake.skippedBlocks || 0n),
+                  eventError: null,
+                },
+              }
+            } catch (error) {
+              watchState = {
+                ...watchState,
+                earnOnHood: {
+                  ...watchState.earnOnHood,
+                  status: 'DEGRADED_PUBLIC_EVENT_RPC',
+                  lastEventPollAt: new Date().toISOString(),
+                  eventError: errorText(error),
+                },
+              }
+            }
+          }
+
+          try {
+            const board = await screenedBoardCandidates(32)
+            if (board.snapshot?.generatedAt && Number.isFinite(Date.parse(board.snapshot.generatedAt))) {
+              if (board.snapshot.generatedAt !== lastGeneration) {
+                lastGeneration = board.snapshot.generatedAt
+                attemptedHashes = new Set()
+                watchState = {
+                  ...watchState,
+                  processedBoardGenerations: watchState.processedBoardGenerations + 1,
+                  screenedPositiveBoardGenerations:
+                    watchState.screenedPositiveBoardGenerations + (board.candidates.length > 0 ? 1 : 0),
+                  lastBoardGeneratedAt: lastGeneration,
+                  lastBoardCandidateCount: board.candidates.length,
+                }
+              }
+            }
+          } catch (error) {
+            watchState = {
+              ...watchState,
+              consecutiveBoardErrors: Number(watchState.consecutiveBoardErrors || 0) + 1,
+              lastBoardObservationError: errorText(error),
+            }
+          }
+
+          watchState = {
+            ...watchState,
+            status: 'RECONCILING_UNKNOWN',
+            updatedAt: new Date().toISOString(),
+            usage: watcherUsageView(currentUsage),
+            executionPaused: true,
+            discoveryActive: true,
+            lastDecision: 'SIGNING_PAUSED_ASYNC_RECONCILIATION',
+            reason: '一笔交易的链上结果尚未确认；自动签名暂缓，市场扫描继续。',
+            transaction: unresolvedNow.hash,
+            signingPause: {
+              scope: 'SHARED_WALLET_NONCE_DOMAIN',
+              startedAt: signingPauseStartedAt,
+              kind: unresolvedNow.kind,
+            },
+            reconciliation: {
+              status: reconciliationTask ? 'RUNNING' : 'RETRY_WAIT',
+              attempts: reconciliationAttempts,
+              lastResult: reconciliationLastResult,
+              nextAttemptAt:
+                reconciliationTask || reconciliationNextAttemptAt <= Date.now()
+                  ? null
+                  : new Date(reconciliationNextAttemptAt).toISOString(),
+            },
+            global: {
+              ...watchState.global,
+              status: 'WATCHING_SIGNING_PAUSED',
+              feed: sequencerFeed?.snapshot() || null,
+            },
+          }
+          writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+          continue
+        }
+        if (reconciliationHash) {
+          appendAudit('dual_watch_signing_resumed_after_reconcile', {
+            authorizationId: currentArm.authorizationId,
+            hash: reconciliationHash,
+            attempts: reconciliationAttempts,
+            result: reconciliationLastResult?.status || null,
+          })
+          reconciliationHash = null
+          reconciliationAttempts = 0
+          reconciliationLastResult = null
+          reconciliationNextAttemptAt = 0
+          signingPauseStartedAt = null
+          watchState = {
+            ...watchState,
+            status: 'RUNNING',
+            updatedAt: new Date().toISOString(),
+            executionPaused: false,
+            discoveryActive: true,
+            signingPause: null,
+            reconciliation: null,
+            reason: null,
+          }
+          writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+        }
         if (Date.now() >= nextGlobalPeriodicAt && !pendingGlobalWake) {
           pendingGlobalWake = 'PERIODIC_RECOVERY'
           pendingGlobalSignal = { sourceReceivedAt: new Date().toISOString() }
@@ -2957,25 +3163,30 @@ async function watchDual() {
         })
         deployments = refreshDeploymentLedgers(deployments)
         const confirmedUsage = assertDualAuthorization(currentArm, deployments)
+        const reverted = record.status === 'DUAL_BASE_EXECUTION_REVERTED_CONFIRMED'
         watchState = {
           ...watchState,
           status: 'RUNNING',
           updatedAt: new Date().toISOString(),
           usage: watcherUsageView(confirmedUsage),
           consecutiveExecutionRpcErrors: 0,
-          lastDecision: 'CONFIRMED_EXECUTION',
+          lastDecision: reverted ? 'DUAL_BASE_EXECUTION_REVERTED_CONTINUE' : 'CONFIRMED_EXECUTION',
           reason: null,
           lastTransaction: record.hash,
           lastExecutionBaseAsset: record.baseAsset,
-          lastNormalizedNetProfitUsdg: formatUnits(BigInt(record.normalizedNetProfitUsdgWei), 6),
+          lastNormalizedNetProfitUsdg: reverted
+            ? watchState.lastNormalizedNetProfitUsdg || null
+            : formatUnits(BigInt(record.normalizedNetProfitUsdgWei), 6),
         }
         writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
-        appendAudit('dual_watch_execution_confirmed', {
+        appendAudit(reverted ? 'dual_watch_execution_reverted_continue' : 'dual_watch_execution_confirmed', {
           authorizationId: currentArm.authorizationId,
           hash: record.hash,
           baseAsset: record.baseAsset,
-          normalizedNetProfitUsdgWei: record.normalizedNetProfitUsdgWei,
+          normalizedNetProfitUsdgWei: record.normalizedNetProfitUsdgWei || null,
+          gasSpentWei: record.gasSpentWei || null,
           confirmedExecutionsThisArm: confirmedUsage.confirmedExecutions,
+          revertedExecutionsThisArm: confirmedUsage.revertedExecutionCount,
         })
       } catch (error) {
         const unresolvedNow = latestUnresolved()
@@ -3003,21 +3214,32 @@ async function watchDual() {
           return watchState
         }
         if (unresolvedNow) {
+          const startedAt = watchState.signingPause?.startedAt || new Date().toISOString()
           watchState = {
             ...watchState,
-            status: 'HALTED_UNKNOWN',
+            status: 'RECONCILING_UNKNOWN',
             updatedAt: new Date().toISOString(),
             usage: currentUsage ? watcherUsageView(currentUsage) : watchState?.usage,
-            reason: errorText(error),
+            executionPaused: true,
+            discoveryActive: true,
+            lastDecision: 'SIGNING_PAUSED_ASYNC_RECONCILIATION',
+            reason: '一笔交易的链上结果尚未确认；自动签名暂缓，市场扫描继续。',
             transaction: unresolvedNow.hash,
+            signingPause: {
+              scope: 'SHARED_WALLET_NONCE_DOMAIN',
+              startedAt,
+              kind: unresolvedNow.kind,
+            },
           }
           writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
-          appendAudit('dual_watch_halted_unknown', {
+          appendAudit('dual_watch_unknown_queued_for_reconciliation', {
             authorizationId: watchState.authorizationId,
+            kind: unresolvedNow.kind,
             hash: unresolvedNow.hash,
             reason: errorText(error),
           })
-          return watchState
+          await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+          continue
         }
         if (isChildProcessDeadlineError(error) && ['EARN', 'GLOBAL'].includes(phase)) {
           const globalPhase = phase === 'GLOBAL'

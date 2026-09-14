@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Keep one supervisor alive when a signed transaction cannot yet be reconciled: pause every new signature in the
+  shared wallet/nonce domain, continue signer-free board, Earn-event and Sequencer Feed observation, and retry the
+  lane-specific reconciler in the background. A canonical revert is now a settled failed attempt rather than an
+  invariant failure; it consumes one nonce, debits the existing failed-Gas and lifetime-profit breakers, and allows
+  unrelated routes to continue when those breakers remain open. Replace the critical-alert process's heavy imports,
+  raise its cgroup ceiling from 64 to 128 MiB, and rewrite critical and daily Feishu messages as concise Chinese
+  operator outcomes without raw internal fields.
 - Publish `/api/v1/agent/daily-profit` as a server-generated, anonymous read-only projection. It preserves receipt-gated
   USDG/ETH results, deducts failed Gas exactly once, excludes the overlapping project-result layer and offchain costs,
   and adds guarded CoinGecko/Kraken USD plus Frankfurter CNY reference estimates without assuming fixed USDG parity.

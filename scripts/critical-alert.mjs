@@ -1,13 +1,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assertFeishuWebhookUrl } from '../src/business-operations.mjs'
+import { assertFeishuWebhookUrl } from '../src/feishu-webhook.mjs'
 import {
   criticalAlertTransition,
   evaluateCriticalTradingHealth,
   formatCriticalAlert,
 } from '../src/critical-alert-policy.mjs'
-import { isSecureSystemdCredential } from '../src/journal.mjs'
+import { isSecureSystemdCredential } from '../src/secure-credential.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUN_DIR = path.resolve(process.env.MANGA_RUN_DIR || path.join(ROOT, 'runs'))
