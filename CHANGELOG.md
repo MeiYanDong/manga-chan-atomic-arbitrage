@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Remove Solidity compilation from the live dual-signing process. CI/release builds now emit source- and
+  bytecode-hashed Generic and WETH artifacts beside the existing Universal artifact; runtime deployment verification,
+  simulation and receipt decoding reload those small artifacts only after recomputing their source, source-bundle,
+  bytecode and compiler-policy evidence. The explicit compile command retains a dynamic compiler import, while the
+  watcher import graph contains no `solc`; all on-chain runtime, operator, protocol, ledger and trading gates remain.
 - Keep the unified signer supervisor inside the 512 MiB production cgroup by capping each inherited Node/V8 heap at
   320 MiB, starting both the signer watcher and read-only opportunity board directly instead of retaining an npm
   wrapper, and throttling the watcher at a 448 MiB high watermark before the hard limit. This is an operational
