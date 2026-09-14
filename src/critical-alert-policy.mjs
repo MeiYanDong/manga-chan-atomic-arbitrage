@@ -13,6 +13,8 @@ const TERMINAL_STATUS_REASON = new Map([
   ['HALTED_STARTUP', '程序启动校验没有通过，自动交易未能启动'],
 ])
 
+const PAUSED_REASON_CODES = new Set(['ARMED_PROCESS_DOWN', 'RUNTIME_STATE_MISSING', ...TERMINAL_STATUS_REASON.keys()])
+
 function timestamp(value) {
   const parsed = Date.parse(String(value || ''))
   return Number.isFinite(parsed) ? parsed : null
@@ -76,7 +78,7 @@ export function evaluateCriticalTradingHealth(input = {}) {
       ageMs,
       impactLabel: '当前不会发现并执行新的套利交易。',
       automaticActionLabel: '系统已保留资金和最后一次运行记录。',
-      userActionLabel: '请检查经营面板或联系维护人员。',
+      userActionLabel: '先无需操作；若 10 分钟内未收到恢复通知，请在 Codex 中说“检查实盘”。',
     })
   }
   if (ageMs > staleMs) {
@@ -165,27 +167,34 @@ function beijingTime(now) {
 export function formatCriticalAlert(kind, health, now = new Date()) {
   if (kind === 'ACTIVATED') {
     return [
-      '【套利关键提醒已启用】',
+      '【只保留重要提醒】',
       `时间：${beijingTime(now)}`,
-      '只在自动交易停止、交易长时间无法核对或市场扫描持续故障时提醒。',
-      '没有机会、利润不足和单次网络波动不会打扰你。',
+      '会提醒：实盘停止、交易长时间无法核对、市场扫描持续故障。',
+      '不会提醒：没有机会、利润不足、单次网络波动。',
     ].join('\n')
   }
   if (kind === 'RECOVERY') {
     return [
-      '【套利程序已恢复】',
-      `时间：${beijingTime(now)}`,
-      '结果：市场扫描和自动交易均已恢复。',
-      '需要你处理：无需操作。',
+      '【实盘已恢复】',
+      `恢复时间：${beijingTime(now)}`,
+      '状态：市场扫描和自动交易均已恢复。',
+      '你需要做：无。',
     ].join('\n')
   }
-  const title = health.reasonCode === 'RECONCILIATION_STALLED' ? '【一笔交易仍在核对】' : '【套利程序需要检查】'
+  const title =
+    health.reasonCode === 'RECONCILIATION_STALLED'
+      ? '【交易核对超时】'
+      : String(health.reasonCode || '').startsWith('SUSTAINED_')
+        ? '【部分市场扫描异常】'
+        : PAUSED_REASON_CODES.has(health.reasonCode)
+          ? '【实盘已暂停】'
+          : '【实盘需要检查】'
   return [
     title,
     `时间：${beijingTime(now)}`,
-    `发生了什么：${health.reasonLabel}`,
-    `当前影响：${health.impactLabel || '自动交易能力受到影响。'}`,
-    `系统已做：${health.automaticActionLabel || '已保留现场，未盲目发送交易。'}`,
-    `需要你处理：${health.userActionLabel || '请查看经营面板。'}`,
+    `情况：${health.reasonLabel}`,
+    `影响：${health.impactLabel || '自动交易能力受到影响。'}`,
+    `系统处理：${health.automaticActionLabel || '已保留现场，未盲目发送交易。'}`,
+    `你需要做：${health.userActionLabel || '请在 Codex 中说“检查实盘”。'}`,
   ].join('\n')
 }

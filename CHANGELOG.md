@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make Feishu's headline number the actual receipt-gated result after both profitable-transaction Gas and failed-transaction
+  Gas, and replace internal operator phrasing with direct Chinese labels for impact, automatic handling and required user
+  action. Persist `STOPPED_BY_SIGNAL` immediately on SIGTERM/SIGINT so a bounded child process cannot make a controlled
+  release switch look like an unexplained live outage.
 - Keep one supervisor alive when a signed transaction cannot yet be reconciled: pause every new signature in the
   shared wallet/nonce domain, continue signer-free board, Earn-event and Sequencer Feed observation, and retry the
   lane-specific reconciler in the background. A canonical revert is now a settled failed attempt rather than an

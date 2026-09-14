@@ -2583,11 +2583,25 @@ async function executeEarnWatcherWake({
 async function watchDual() {
   const release = acquireLock(DUAL_WATCH_LOCK_PATH, 'dual-v3-watch')
   let stopRequested = false
+  let stopRecorded = false
   let watchState = null
   let startupRpcRetries = 0
   let sequencerFeed = null
+  const persistStopRequested = () => {
+    if (!watchState) return
+    watchState = { ...watchState, status: 'STOPPED_BY_SIGNAL', updatedAt: new Date().toISOString() }
+    writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+    if (!stopRecorded) {
+      appendAudit('dual_watch_stopped_signal', { authorizationId: watchState.authorizationId })
+      stopRecorded = true
+    }
+  }
   const requestStop = () => {
     stopRequested = true
+    // A bounded child may still be finishing when systemd asks us to stop.
+    // Persist the maintenance state synchronously so the health timer does not
+    // mistake an intentional release switch for an unexplained outage.
+    persistStopRequested()
   }
   process.once('SIGTERM', requestStop)
   process.once('SIGINT', requestStop)
@@ -3385,9 +3399,7 @@ async function watchDual() {
       }
       await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
     }
-    watchState = { ...watchState, status: 'STOPPED_BY_SIGNAL', updatedAt: new Date().toISOString() }
-    writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
-    appendAudit('dual_watch_stopped_signal', { authorizationId: watchState.authorizationId })
+    persistStopRequested()
     return watchState
   } catch (error) {
     const unresolved = latestUnresolved()

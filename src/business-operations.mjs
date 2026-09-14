@@ -510,6 +510,17 @@ export function buildDailyProfitSnapshot(snapshot) {
 export function formatFeishuDailyReport(snapshot, periodKey) {
   const period = snapshot.economics.lastSevenDays.find((item) => item.periodKey === periodKey)
   if (!period) throw new Error('requested report period is outside the retained daily series')
+  const ethAfterFailedGas = (value) => {
+    try {
+      return formatUnits(
+        parseUnits(String(value?.verifiedExecutionNetEth || '0'), 18) -
+          parseUnits(String(value?.failedGasEth || '0'), 18),
+        18,
+      )
+    } catch {
+      return null
+    }
+  }
   const display = (value, digits = 2) => {
     const numeric = Number(value)
     if (!Number.isFinite(numeric)) return '待核验'
@@ -523,11 +534,21 @@ export function formatFeishuDailyReport(snapshot, periodKey) {
     if (!Number.isFinite(numeric)) return '待核验'
     return `${numeric > 0 ? '+' : ''}${display(numeric, digits)}`
   }
+  const ethAmount = (value, signedValue = false) => {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return '待核验'
+    const formatted = new Intl.NumberFormat('zh-CN', {
+      minimumFractionDigits: 6,
+      maximumFractionDigits: 9,
+    }).format(numeric)
+    return `${signedValue && numeric > 0 ? '+' : ''}${formatted}`
+  }
   const profit = (usdg, eth) => {
+    if (usdg === null || eth === null) return '待核验'
     const values = []
     if (Number(usdg) !== 0) values.push(`${signed(usdg)} USDG`)
-    if (Number(eth) !== 0) values.push(`${signed(eth, 6)} ETH`)
-    return values.length > 0 ? values.join('；') : '0（没有已确认收益）'
+    if (Number(eth) !== 0) values.push(`${ethAmount(eth, true)} ETH`)
+    return values.length > 0 ? values.join('；') : '0（没有已确认净收益）'
   }
   const active = snapshot.economics.activeStrategy
   const systemLabel =
@@ -536,26 +557,28 @@ export function formatFeishuDailyReport(snapshot, periodKey) {
       : snapshot.strategy.status === 'RECONCILING'
         ? '正在自动核对，市场扫描继续'
         : '需要检查'
-  const marketLabel = ['RUNNING', 'SCANNING', 'HEALTHY'].includes(snapshot.market.status) ? '扫描正常' : '扫描降级'
+  const marketLabel = ['RUNNING', 'SCANNING', 'HEALTHY'].includes(snapshot.market.status)
+    ? '扫描正常'
+    : '部分数据源自动重试中'
   const actionLabel =
     snapshot.strategy.status === 'RECONCILING'
       ? '无，系统会在核对完成后自动恢复交易'
-      : systemLabel === '运行中' && marketLabel === '扫描正常'
+      : systemLabel === '运行中'
         ? '无'
-        : '请查看经营面板的系统状态'
+        : '请在 Codex 中说“检查实盘”'
   const displayDate = `${Number(periodKey.slice(5, 7))}月${Number(periodKey.slice(8, 10))}日`
   return [
     `【套利日报｜${displayDate}】`,
-    `净收益：${profit(period.verifiedExecutionNetUsdg, period.verifiedExecutionNetEth)}`,
-    `成交：${period.confirmedExecutions} 笔已确认`,
+    `今日净结果：${profit(period.verifiedExecutionNetUsdg, ethAfterFailedGas(period))}`,
+    `盈利成交：${period.confirmedExecutions} 笔`,
     period.failedTransactions > 0
-      ? `失败交易：${period.failedTransactions} 笔，损失 ${display(period.failedGasEth, 6)} ETH`
-      : '失败交易：0 笔',
-    `当前实盘累计：${profit(active?.verifiedExecutionNetUsdg || 0, active?.verifiedExecutionNetEth || 0)}（${active?.confirmedExecutions || 0} 笔）`,
-    `可用资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,
-    `运行状态：${systemLabel}；${marketLabel}`,
-    `需要你处理：${actionLabel}`,
-    '统计口径：只计算链上已确认且已扣 Gas 的结果。',
+      ? `失败成本：${period.failedTransactions} 笔，共 ${ethAmount(period.failedGasEth)} ETH`
+      : '失败成本：0',
+    `本轮实盘累计：${profit(active?.verifiedExecutionNetUsdg || '0', ethAfterFailedGas(active))}（${active?.confirmedExecutions || 0} 笔盈利成交）`,
+    `可用交易资金：${display(snapshot.capital.spendableUsdg)} USDG；${display(snapshot.capital.spendableWeth, 4)} WETH`,
+    `程序：${systemLabel}；${marketLabel}`,
+    `你需要做：${actionLabel}`,
+    '依据：只统计链上已确认结果，已扣成功与失败交易 Gas。',
   ].join('\n')
 }
 
