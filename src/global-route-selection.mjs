@@ -1,4 +1,4 @@
-export const GLOBAL_ROUTE_WORKSET_POLICY = 'SPECIFIC_EVENT_DEPENDENCY_THEN_PERIODIC_ROTATION_V2'
+export const GLOBAL_ROUTE_WORKSET_POLICY = 'SPECIFIC_EVENT_GLOBAL_BUDGET_THEN_PERIODIC_ROTATION_V3'
 
 function lowerAddress(value) {
   return /^0x[0-9a-f]{40}$/i.test(String(value || '')) ? String(value).toLowerCase() : null
@@ -92,4 +92,47 @@ export function selectGlobalRouteWorkset(input) {
     touchedRoutes: 0,
     routeLimit: input.maximumRoutesPerWake,
   }
+}
+
+/**
+ * Share one event-route budget across settlement assets. Each settlement gets
+ * one route per round while it has work, so USDG cannot starve WETH (or vice
+ * versa) and an unused lane yields its slots to the others. Recovery worksets
+ * keep their independently bounded rotation because they are not latency-
+ * sensitive event work.
+ *
+ * @param {Array<Record<string, any> & {routes: Array<Record<string, any>>, wakeKind: string}>} worksets
+ * @param {number} maximumEventRoutesPerWake
+ */
+export function applyGlobalEventRouteBudget(worksets, maximumEventRoutesPerWake) {
+  if (!Array.isArray(worksets) || !Number.isSafeInteger(maximumEventRoutesPerWake) || maximumEventRoutesPerWake < 1) {
+    throw new Error('global event route budget is invalid')
+  }
+  if (worksets.length === 0 || worksets.every((workset) => workset.wakeKind === 'RECOVERY')) return worksets
+  if (!worksets.every((workset) => workset.wakeKind === 'EVENT' && Array.isArray(workset.routes))) {
+    throw new Error('global event route worksets cannot mix wake kinds')
+  }
+
+  const allocated = worksets.map(() => [])
+  let selected = 0
+  let rank = 0
+  while (selected < maximumEventRoutesPerWake) {
+    let progressed = false
+    for (let lane = 0; lane < worksets.length && selected < maximumEventRoutesPerWake; lane += 1) {
+      const route = worksets[lane].routes[rank]
+      if (!route) continue
+      allocated[lane].push(route)
+      selected += 1
+      progressed = true
+    }
+    if (!progressed) break
+    rank += 1
+  }
+
+  return worksets.map((workset, lane) => ({
+    ...workset,
+    routes: allocated[lane],
+    preBudgetSelectedRoutes: workset.routes.length,
+    allocatedRouteLimit: allocated[lane].length,
+  }))
 }

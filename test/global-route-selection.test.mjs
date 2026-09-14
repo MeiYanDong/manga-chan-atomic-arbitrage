@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { selectGlobalRouteWorkset } from '../src/global-route-selection.mjs'
+import { applyGlobalEventRouteBudget, selectGlobalRouteWorkset } from '../src/global-route-selection.mjs'
 
 const WETH = '0x0000000000000000000000000000000000000001'
 const ASSET = '0x0000000000000000000000000000000000000002'
@@ -79,4 +79,46 @@ test('recovery workset retains BPT priority plus bounded broad rotation', () => 
   assert.equal(selected.routes[0].type, 'BPT')
   assert.ok(selected.routes.some((item) => item.type === 'CYCLE'))
   assert.equal(selected.routeLimit, 8)
+})
+
+test('one event budget is shared fairly across settlement assets', () => {
+  const worksets = [
+    {
+      wakeKind: 'EVENT',
+      routes: Array.from({ length: 8 }, (_, index) => route(`route-${index + 1}`, WETH, ASSET)),
+    },
+    {
+      wakeKind: 'EVENT',
+      routes: Array.from({ length: 8 }, (_, index) => route(`route-${index + 20}`, WETH, OTHER)),
+    },
+  ]
+  const selected = applyGlobalEventRouteBudget(worksets, 8)
+  assert.deepEqual(
+    selected.map((workset) => workset.routes.length),
+    [4, 4],
+  )
+  assert.deepEqual(
+    selected.map((workset) => workset.preBudgetSelectedRoutes),
+    [8, 8],
+  )
+})
+
+test('an empty event lane yields its global route slots and recovery keeps its own bounds', () => {
+  const event = applyGlobalEventRouteBudget(
+    [
+      { wakeKind: 'EVENT', routes: [] },
+      {
+        wakeKind: 'EVENT',
+        routes: Array.from({ length: 10 }, (_, index) => route(`route-${index + 1}`, WETH, OTHER)),
+      },
+    ],
+    8,
+  )
+  assert.deepEqual(
+    event.map((workset) => workset.routes.length),
+    [0, 8],
+  )
+
+  const recovery = [{ wakeKind: 'RECOVERY', routes: Array.from({ length: 12 }, (_, index) => route(`route-${index}`)) }]
+  assert.equal(applyGlobalEventRouteBudget(recovery, 8), recovery)
 })

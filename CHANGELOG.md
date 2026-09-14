@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Enforce `maximumEventRoutesPerWake` once across every settlement asset instead of once per asset. Event candidates
+  now share the eight-route budget by deterministic round-robin, so USDG and WETH each receive fair coverage and an
+  empty lane yields its slots to the other. Startup and periodic recovery keep their wider rotating workset, and no
+  execution, economic, Gas, nonce, capital or receipt boundary is changed.
 - Remove every shared protocol root from the route-specific pool set even when an adapter repeats that root in each
   pool record. In particular, Uniswap v4 PoolManager-only Feed matches are now shared context instead of exact-pool
   wakes; PoolManager plus a non-settlement asset still projects that asset into the event workset. This closes the

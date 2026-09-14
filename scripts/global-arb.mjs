@@ -36,7 +36,11 @@ import {
   GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
-import { GLOBAL_ROUTE_WORKSET_POLICY, selectGlobalRouteWorkset } from '../src/global-route-selection.mjs'
+import {
+  applyGlobalEventRouteBudget,
+  GLOBAL_ROUTE_WORKSET_POLICY,
+  selectGlobalRouteWorkset,
+} from '../src/global-route-selection.mjs'
 import { globalSettlementAssets } from '../src/global-settlement-assets.mjs'
 import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
@@ -620,7 +624,11 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
   const { earn, uniswap, graph } = await loadGlobalGraph(block.number)
   const evaluations = []
   const routeCoverage = []
-  for (const settlementToken of SETTLEMENT_TOKENS) {
+  const routeWorksets = applyGlobalEventRouteBudget(
+    SETTLEMENT_TOKENS.map((settlementToken) => selectRouteDefinitions(graph, settlementToken, block.number)),
+    GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+  )
+  for (const [settlementIndex, settlementToken] of SETTLEMENT_TOKENS.entries()) {
     const [decimals, morphoLiquidity, inventory] = await Promise.all([
       client.readContract({
         address: settlementToken,
@@ -643,7 +651,7 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
         blockNumber: block.number,
       }),
     ])
-    const selectedRoutes = selectRouteDefinitions(graph, settlementToken, block.number)
+    const selectedRoutes = routeWorksets[settlementIndex]
     routeCoverage.push({
       settlementToken,
       ...selectedRoutes,
