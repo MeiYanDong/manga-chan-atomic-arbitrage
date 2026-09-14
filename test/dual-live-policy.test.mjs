@@ -9,6 +9,8 @@ import {
   dualSpendablePrincipal,
   dualWatcherExitCode,
   evaluateDualAuthorizationBudget,
+  evaluateDualWalletNonce,
+  expectedDualWalletNonce,
   isDualOpportunityMiss,
   normalizeWethToUsdg,
   selectBestExactEvaluation,
@@ -367,6 +369,7 @@ test('usage comes from both ledgers and the append-only audit', () => {
       event: 'mutation_reverted',
       authorizationId: authorization.authorizationId,
       kind: 'weth-execute',
+      hash: '0xreverted',
       gasSpentWei: '40',
     },
     {
@@ -414,6 +417,8 @@ test('usage comes from both ledgers and the append-only audit', () => {
     earnConfirmed: 1,
     globalConfirmed: 1,
     confirmedExecutions: 5,
+    revertedExecutionCount: 1,
+    nonceConsumptions: 6,
     signedAttempts: 4,
     exactPreflights: 3,
     failedGasWei: 40n,
@@ -426,6 +431,58 @@ test('usage comes from both ledgers and the append-only audit', () => {
   assert.equal(
     evaluateDualAuthorizationBudget(authorization, { ...usage, failedGasWei: 1000n }).reason,
     'failed-gas-limit',
+  )
+})
+
+test('canonical reverts consume nonce and allow the next authorized transaction', () => {
+  const authorization = arm({ baselineNonce: 40 })
+  const usage = {
+    nonceConsumptions: 2,
+  }
+  assert.equal(expectedDualWalletNonce(authorization, usage), 42)
+  assert.deepEqual(evaluateDualWalletNonce(authorization, usage, { nonceLatest: 42, noncePending: 42 }, null), {
+    allowed: true,
+    expectedNonce: 42,
+    state: 'CONVERGED',
+    reason: null,
+  })
+})
+
+test('one unresolved transaction quarantines signing without requiring the supervisor to stop', () => {
+  const authorization = arm({ baselineNonce: 40 })
+  const usage = { nonceConsumptions: 1 }
+  const unresolved = {
+    authorizationId: authorization.authorizationId,
+    nonce: 41,
+    hash: '0xunknown',
+  }
+  for (const wallet of [
+    { nonceLatest: 41, noncePending: 41 },
+    { nonceLatest: 41, noncePending: 42 },
+    { nonceLatest: 42, noncePending: 42 },
+  ]) {
+    assert.deepEqual(evaluateDualWalletNonce(authorization, usage, wallet, unresolved), {
+      allowed: true,
+      expectedNonce: 41,
+      state: 'SIGNING_QUARANTINED',
+      reason: null,
+    })
+  }
+  assert.equal(
+    evaluateDualWalletNonce(authorization, usage, { nonceLatest: 43, noncePending: 43 }, unresolved).reason,
+    'quarantined-wallet-nonce-outside-expected-window',
+  )
+  assert.equal(
+    evaluateDualWalletNonce(
+      authorization,
+      usage,
+      { nonceLatest: 41, noncePending: 41 },
+      {
+        ...unresolved,
+        authorizationId: 'other',
+      },
+    ).reason,
+    'unresolved-mutation-not-next-authorized-nonce',
   )
 })
 

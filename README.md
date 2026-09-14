@@ -25,7 +25,7 @@ net positive. It is not a second autonomous signer. See
 [ADR 0058](docs/decisions/0058-dynamic-earn-omnipool-cycle-graph.md) and
 [ADR 0059](docs/decisions/0059-earn-onchain-factory-catalog.md).
 
-The v0.16.0 lane uses the existing typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4.
+The v0.16.1 lane uses the existing typed-only universal executor and one asset graph across Earn plus Uniswap v2/v3/v4.
 It atomically combines swaps and Earn BPT premium/discount actions, including simple two-to-four-hop cycles that stay
 inside one venue as well as cycles that cross venues. USDG and WETH are priority seeds, not an asset allowlist: any graph
 asset may become the settlement asset for a wake only after fixed-block decimals, Morpho flash liquidity or protected
@@ -42,6 +42,12 @@ authorization v11. See
 [ADR 0064](docs/decisions/0064-sequencer-wake-relevance-and-per-wake-rpc-budget.md) and
 [ADR 0070](docs/decisions/0070-same-venue-cycles-and-dynamic-settlement-admission.md) plus
 [the global live stories](docs/stories/global-cross-protocol-live.md).
+
+All protocol adapters share one wallet/nonce safety domain. A canonical reverted receipt now closes the attempt, pays
+only its recorded Gas and lets unrelated candidates continue while the existing economic breakers remain open. A
+transaction whose result is not yet known pauses every new signature from that wallet, but the supervisor keeps the
+board, Earn event reader and Sequencer Feed alive while the matching adapter reconciles in the background. See
+[ADR 0073](docs/decisions/0073-shared-signer-quarantine-and-human-alerts.md).
 
 The v0.13.1 policy keeps the balance-scaled coarse-to-fine sizing but separates cheap graph coverage from expensive
 execution truth. At most 24 routes receive three exact public quotes each; at most eight routes receive six local

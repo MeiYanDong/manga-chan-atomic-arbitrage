@@ -11,7 +11,7 @@
 - 两种结果都记录为 `CANDIDATE_REJECTED_EXACT` 并继续 watcher；
 - generic exact-profit miss 继续沿用相同语义；
 - receipt/balance effect 冲突和 executor identity 错误不能被降级为机会消失；
-- unresolved mutation 优先进入 `HALTED_UNKNOWN`，不会被 no-shot 分类覆盖。
+- unresolved mutation 优先进入共享签名域隔离和异步核账，不会被 no-shot 分类覆盖，也不会停止无签名扫描。
 
 ## Non-goals
 

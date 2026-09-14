@@ -34,6 +34,27 @@ test('critical alert policy stays silent for no-shot and isolated RPC degradatio
   }
 })
 
+test('active asynchronous reconciliation stays quiet before paging only if it stalls', () => {
+  const reconciling = runtime({
+    status: 'RECONCILING_UNKNOWN',
+    signingPause: { startedAt: '2026-09-14T15:58:00.000Z' },
+  })
+  assert.equal(
+    evaluateCriticalTradingHealth({ arm, runtime: reconciling, processAlive: true, nowMs: NOW }).reasonCode,
+    'ASYNC_RECONCILIATION_ACTIVE',
+  )
+  const stalled = evaluateCriticalTradingHealth({
+    arm,
+    runtime: reconciling,
+    processAlive: true,
+    nowMs: NOW,
+    reconciliationAlertMs: 60_000,
+  })
+  assert.equal(stalled.state, 'CRITICAL')
+  assert.equal(stalled.reasonCode, 'RECONCILIATION_STALLED')
+  assert.equal(stalled.userActionLabel, '暂时无需操作。')
+})
+
 test('critical alert policy detects an armed dead process and terminal safety states', () => {
   assert.equal(
     evaluateCriticalTradingHealth({ arm, runtime: runtime(), processAlive: false, nowMs: NOW }).reasonCode,
@@ -124,7 +145,10 @@ test('critical notifications are transition-only and recovery is emitted once', 
 test('critical alert copy is concise and excludes operational raw fields', () => {
   const health = evaluateCriticalTradingHealth({ arm, runtime: runtime(), processAlive: false, nowMs: NOW })
   const message = formatCriticalAlert('ALERT', health, new Date(NOW))
-  assert.match(message, /实盘需要处理/)
-  assert.match(message, /授权.*nonce.*未决交易/)
+  assert.match(message, /套利程序需要检查/)
+  assert.match(message, /发生了什么：自动交易程序已经停止/)
+  assert.match(message, /当前影响：当前不会发现并执行新的套利交易/)
+  assert.match(message, /需要你处理：请检查经营面板或联系维护人员/)
+  assert.doesNotMatch(message, /授权|nonce|未决交易|RPC/)
   assert.doesNotMatch(message, /0x[0-9a-f]+|webhook|RPC URL|authorizationId/i)
 })

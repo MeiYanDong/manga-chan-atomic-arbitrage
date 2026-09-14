@@ -292,14 +292,24 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
         'global_watch_exact_preflight_started',
       ].includes(record.event) && record.authorizationId === arm.authorizationId,
   ).length
-  const failedGasWei = records
-    .filter(
-      (record) =>
-        record.event === 'mutation_reverted' &&
-        record.authorizationId === arm.authorizationId &&
-        ['generic-execute', 'weth-execute', 'earnonhood-execute', 'global-execute'].includes(record.kind),
-    )
-    .reduce((total, record) => total + BigInt(record.gasSpentWei || 0), 0n)
+  const revertedByHash = new Map()
+  for (const [index, record] of records.entries()) {
+    if (
+      record.event !== 'mutation_reverted' ||
+      record.authorizationId !== arm.authorizationId ||
+      !['generic-execute', 'weth-execute', 'earnonhood-execute', 'global-execute'].includes(record.kind)
+    ) {
+      continue
+    }
+    const key = String(record.hash || record.planHash || `legacy-revert-${index}`).toLowerCase()
+    const prior = revertedByHash.get(key)
+    if (prior && BigInt(prior.gasSpentWei || 0) !== BigInt(record.gasSpentWei || 0)) {
+      throw new Error('duplicate reverted transaction has conflicting canonical Gas')
+    }
+    if (!prior) revertedByHash.set(key, record)
+  }
+  const revertedTransactions = [...revertedByHash.values()]
+  const failedGasWei = revertedTransactions.reduce((total, record) => total + BigInt(record.gasSpentWei || 0), 0n)
   const earnEffects = records.filter(
     (record) =>
       record.event === 'mutation_effect' &&
@@ -322,24 +332,23 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
     (total, record) => total + BigInt(record.realizedNetProfitWei || 0),
     0n,
   )
-  const earnFailedGasWei = records
-    .filter(
-      (record) =>
-        record.event === 'mutation_reverted' &&
-        record.authorizationId === arm.authorizationId &&
-        record.kind === 'earnonhood-execute',
-    )
+  const earnFailedGasWei = revertedTransactions
+    .filter((record) => record.kind === 'earnonhood-execute')
     .reduce((total, record) => total + BigInt(record.gasSpentWei || 0), 0n)
   const earnInitialGasSurplusWei = BigInt(arm.earnOnHood?.initialGasSurplusWei || 0)
   const earnGasSurplusWei = earnInitialGasSurplusWei + earnRealizedNetProfitWei - earnFailedGasWei
   const usdgConfirmed = usdgExecutions.length - baselineUsdg
   const wethConfirmed = wethExecutions.length - baselineWeth
+  const confirmedExecutions = usdgConfirmed + wethConfirmed + earnConfirmed + globalConfirmed
+  const revertedExecutionCount = revertedTransactions.length
   return {
     usdgConfirmed,
     wethConfirmed,
     earnConfirmed,
     globalConfirmed,
-    confirmedExecutions: usdgConfirmed + wethConfirmed + earnConfirmed + globalConfirmed,
+    confirmedExecutions,
+    revertedExecutionCount,
+    nonceConsumptions: confirmedExecutions + revertedExecutionCount,
     signedAttempts,
     exactPreflights,
     failedGasWei,
@@ -348,6 +357,60 @@ export function dualAuthorizationUsage(arm, usdgState, wethState, records) {
     earnGasSurplusWei,
     globalRealizedNetProfitUsdgWei,
   }
+}
+
+/**
+ * A canonical revert consumes a wallet nonce just like a successful receipt.
+ * Counting only profitable executions would make the next valid nonce look
+ * like external wallet interference after the first reverted transaction.
+ *
+ * @param {Record<string, any>} arm
+ * @param {{nonceConsumptions: number}} usage
+ */
+export function expectedDualWalletNonce(arm, usage) {
+  const baselineNonce = Number(arm?.baselineNonce)
+  const nonceConsumptions = Number(usage?.nonceConsumptions)
+  if (!Number.isSafeInteger(baselineNonce) || baselineNonce < 0) throw new Error('invalid authorization baseline nonce')
+  if (!Number.isSafeInteger(nonceConsumptions) || nonceConsumptions < 0) {
+    throw new Error('invalid authorization nonce consumption count')
+  }
+  return baselineNonce + nonceConsumptions
+}
+
+/**
+ * While one signed transaction is unresolved, the signer stays quarantined
+ * but the supervisor may remain alive. The two permitted states are: not yet
+ * observed (latest/pending at the planned nonce), pending, or already mined
+ * but not yet reconciled (one nonce ahead).
+ *
+ * @param {Record<string, any>} arm
+ * @param {{nonceConsumptions: number}} usage
+ * @param {{nonceLatest: number, noncePending: number}} wallet
+ * @param {Record<string, any> | null} unresolved
+ */
+export function evaluateDualWalletNonce(arm, usage, wallet, unresolved = null) {
+  const expectedNonce = expectedDualWalletNonce(arm, usage)
+  const latest = Number(wallet?.nonceLatest)
+  const pending = Number(wallet?.noncePending)
+  if (!Number.isSafeInteger(latest) || !Number.isSafeInteger(pending)) {
+    return { allowed: false, expectedNonce, reason: 'invalid-wallet-nonce-read' }
+  }
+  if (!unresolved) {
+    return latest === expectedNonce && pending === expectedNonce
+      ? { allowed: true, expectedNonce, state: 'CONVERGED', reason: null }
+      : { allowed: false, expectedNonce, reason: 'settled-wallet-nonce-mismatch' }
+  }
+  if (
+    unresolved.authorizationId !== arm.authorizationId ||
+    !Number.isSafeInteger(Number(unresolved.nonce)) ||
+    Number(unresolved.nonce) !== expectedNonce
+  ) {
+    return { allowed: false, expectedNonce, reason: 'unresolved-mutation-not-next-authorized-nonce' }
+  }
+  if (latest < expectedNonce || latest > expectedNonce + 1 || pending < latest || pending > expectedNonce + 1) {
+    return { allowed: false, expectedNonce, reason: 'quarantined-wallet-nonce-outside-expected-window' }
+  }
+  return { allowed: true, expectedNonce, state: 'SIGNING_QUARANTINED', reason: null }
 }
 
 /**

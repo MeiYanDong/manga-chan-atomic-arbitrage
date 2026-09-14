@@ -1438,6 +1438,7 @@ function assertSharedAuthorization(deployment) {
   if (
     !holder.alive ||
     holder.pid !== parentPid ||
+    process.ppid !== parentPid ||
     arm?.status !== 'ARMED' ||
     arm.authorizationId !== authorizationId ||
     revocation?.authorizationId === authorizationId ||
@@ -1587,13 +1588,30 @@ async function execute() {
       nonce: wallet.latestNonce,
     })
     if (sent.receipt.status !== 'success') {
+      const gasSpentWei = sent.receipt.gasUsed * sent.receipt.effectiveGasPrice
       appendAudit('mutation_reverted', {
         kind: plan.kind,
         authorizationId: plan.authorizationId,
         hash: sent.hash,
-        gasSpentWei: sent.receipt.gasUsed * sent.receipt.effectiveGasPrice,
+        planHash: plan.planHash,
+        gasSpentWei,
       })
-      throw new Error(`global execution reverted: ${sent.hash}`)
+      const output = {
+        status: 'GLOBAL_EXECUTION_REVERTED_CONFIRMED',
+        evidence: 'CANONICAL_REVERT_RECEIPT',
+        transaction: sent.hash,
+        explorer: `https://robinhoodchain.blockscout.com/tx/${sent.hash}`,
+        blockNumber: sent.receipt.blockNumber,
+        gasSpentWei,
+        gasSpentEth: formatEther(gasSpentWei),
+        graph: prepared.snapshot.graph,
+        wake: prepared.snapshot.wake,
+        workset: prepared.snapshot.workset,
+        timing: prepared.snapshot.timing,
+        rpc: prepared.snapshot.rpc,
+      }
+      console.log(stringify(output))
+      return output
     }
     const record = await executionStateFromReceipt(
       plan,
@@ -1707,9 +1725,21 @@ function assertRawMatchesPlan(parsed, plan) {
 async function reconcile() {
   assertLiveTransport(runtime)
   const holder = lockHolder(DUAL_LOCK_PATH)
-  if (holder.alive) throw new Error(`dual watcher is active as PID ${holder.pid}`)
+  const sharedAuthorizationId = process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null
+  const sharedParentPid = Number(process.env.GLOBAL_SHARED_WATCH_PID || 0)
+  const sharedReconciliation = Boolean(
+    sharedAuthorizationId &&
+    Number.isSafeInteger(sharedParentPid) &&
+    sharedParentPid > 0 &&
+    process.ppid === sharedParentPid &&
+    holder.alive &&
+    holder.pid === sharedParentPid,
+  )
+  if (holder.alive && !sharedReconciliation) throw new Error(`dual watcher is active as PID ${holder.pid}`)
+  if (sharedAuthorizationId && !sharedReconciliation) throw new Error('invalid shared global reconciliation identity')
   const release = acquireLock(WALLET_LOCK_PATH, 'global-v1-wallet')
   try {
+    if (sharedReconciliation) assertSharedAuthorization(await assertDeployment())
     const records = readAuditRecords()
     const unresolved = latestUnresolvedMutation(records)
     if (!unresolved || !['global-deploy', 'global-execute'].includes(unresolved.kind)) {

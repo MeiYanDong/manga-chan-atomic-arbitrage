@@ -536,12 +536,14 @@ function ActivityTable({ activities = [], limit = null, onOpen }) {
 
 function OverviewPage({ data, onOpenActivity }) {
   const business = data.business
-  const strategyUnhealthy = business && business.strategy?.status !== 'RUNNING'
+  const strategyReconciling = business?.strategy?.status === 'RECONCILING'
+  const strategyUnhealthy = business && !['RUNNING', 'RECONCILING'].includes(business.strategy?.status)
   const marketUnhealthy = business && !['RUNNING', 'SCANNING', 'HEALTHY'].includes(business.market?.status)
   return (
     <div className="page-stack">
       <PageTitle title="经营概览" note="先看真实结果、可用资金和是否存在可执行机会。" />
       {!business && <Notice>经营快照尚未生成，未知数据不会显示为零。</Notice>}
+      {strategyReconciling && <Notice>市场扫描仍在继续；新交易暂缓，核对完成后会自动恢复。</Notice>}
       {strategyUnhealthy && <Notice tone="danger">实盘执行服务需要检查，新的交易不会被发起。</Notice>}
       {!strategyUnhealthy && marketUnhealthy && (
         <Notice>市场数据暂时不完整，策略会拒绝不完整报价；这不代表实盘执行进程已经停止。</Notice>

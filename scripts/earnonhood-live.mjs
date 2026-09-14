@@ -52,6 +52,7 @@ import {
   dualAuthorizationId,
   dualAuthorizationUsage,
   evaluateDualAuthorizationBudget,
+  expectedDualWalletNonce,
   validateDualSignedAttempt,
 } from '../src/dual-live-policy.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
@@ -988,7 +989,7 @@ async function execute() {
       : null
     if (
       sharedAuthorization &&
-      latestNonce !== Number(sharedAuthorization.arm.baselineNonce) + sharedAuthorization.usage.confirmedExecutions
+      latestNonce !== expectedDualWalletNonce(sharedAuthorization.arm, sharedAuthorization.usage)
     ) {
       throw new Error('shared EarnOnHood nonce differs from the authorization ledger')
     }
@@ -1125,10 +1126,6 @@ async function execute() {
       )
       throw new Error(`EarnOnHood receipt is UNKNOWN; do not reuse nonce ${latestNonce}: ${hash}`)
     }
-    const [walletBalanceBeforeBlock, walletBalanceAfterBlock] = await Promise.all([
-      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber - 1n }),
-      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber }),
-    ])
     const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
     if (receipt.status !== 'success') {
       appendAudit(
@@ -1143,8 +1140,27 @@ async function execute() {
         },
         { mirrorShared: Boolean(sharedContext) },
       )
-      throw new Error(`EarnOnHood transaction reverted: ${hash}`)
+      const result = {
+        status: 'CONFIRMED_REVERTED',
+        evidence: 'CANONICAL_REVERT_RECEIPT',
+        transaction: hash,
+        explorer: `https://robinhoodchain.blockscout.com/tx/${hash}`,
+        blockNumber: receipt.blockNumber,
+        route: prepared.candidate.route.symbols.join(' -> '),
+        amountInEth: formatEther(prepared.candidate.amountIn),
+        gasUsed: receipt.gasUsed,
+        effectiveGasPriceWei: receipt.effectiveGasPrice,
+        gasSpentEth: formatEther(gasSpentWei),
+        dynamicMaximumPrincipalEth: prepared.report.dynamicMaximumPrincipalEth,
+        principalPolicy: prepared.report.principalPolicy,
+      }
+      console.log(stringify(result))
+      return result
     }
+    const [walletBalanceBeforeBlock, walletBalanceAfterBlock] = await Promise.all([
+      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber - 1n }),
+      executionClient.getBalance({ address: WALLET, blockNumber: receipt.blockNumber }),
+    ])
     const realizedNetWei = walletBalanceAfterBlock - walletBalanceBeforeBlock
     const receiptRoute = decodeEarnOnHoodReceiptRoute(receipt, prepared.candidate.route, prepared.candidate.amountIn)
     const inferredGrossProfitWei = receiptRoute.finalAmountOutWei - prepared.candidate.amountIn
@@ -1223,7 +1239,11 @@ async function optionalTransaction(method) {
 
 async function reconcile() {
   assertLiveTransport(runtimeConfig)
-  if (activeLock(dualWatchLockPath)) throw new Error('stop the dual watcher before EarnOnHood reconciliation')
+  const sharedContext = sharedExecutionContext()
+  if (activeLock(dualWatchLockPath) && !sharedContext) {
+    throw new Error('stop the dual watcher before manual EarnOnHood reconciliation')
+  }
+  if (sharedContext) assertSharedAuthorization(sharedContext)
   const release = acquireWalletLock()
   try {
     const sharedRecords = readJsonLines(sharedAuditPath)

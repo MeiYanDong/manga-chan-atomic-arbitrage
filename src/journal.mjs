@@ -1,6 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { keccak256, toHex } from 'viem'
+import { isSecureSystemdCredential } from './secure-credential.mjs'
+
+export { isSecureSystemdCredential } from './secure-credential.mjs'
 
 /** @param {unknown} value */
 export function stableStringify(value) {
@@ -42,25 +45,6 @@ export function persistSignedRaw(directory, hash, serializedTransaction) {
   }
   fs.chmodSync(file, 0o600)
   return file
-}
-
-/**
- * systemd exposes service credentials as immutable 0440 root:root files inside
- * the unit-specific credentials directory. That group-readable bit is safe only
- * inside the mount namespace managed by systemd, never for an ordinary file.
- *
- * @param {string} file
- * @param {{mode: number, uid: number, gid: number}} stat
- * @param {string | undefined} credentialDirectory
- */
-export function isSecureSystemdCredential(file, stat, credentialDirectory) {
-  if (!credentialDirectory) return false
-  return (
-    path.dirname(path.resolve(file)) === path.resolve(credentialDirectory) &&
-    stat.uid === 0 &&
-    stat.gid === 0 &&
-    (stat.mode & 0o777) === 0o440
-  )
 }
 
 /** @param {string} file */
