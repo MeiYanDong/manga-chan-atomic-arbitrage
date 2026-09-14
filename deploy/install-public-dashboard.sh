@@ -103,6 +103,7 @@ endpoints=(
   api/v1/system
   api/v1/business
   api/v1/profit/daily
+  api/v1/agent/daily-profit
 )
 for endpoint in "${endpoints[@]}"; do
   endpoint_ready=0

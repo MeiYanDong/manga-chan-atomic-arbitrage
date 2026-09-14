@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Publish `/api/v1/agent/daily-profit` as a server-generated, anonymous read-only projection. It preserves receipt-gated
+  USDG/ETH results, deducts failed Gas exactly once, excludes the overlapping project-result layer and offchain costs,
+  and adds guarded CoinGecko/Kraken USD plus Frankfurter CNY reference estimates without assuming fixed USDG parity.
+  Provider disagreement or missing quotes remains visibly partial, while genuine zero-profit days stay known zero.
 - Generalize the universal opportunity graph from cross-venue-only cycles to all bounded same-venue or cross-venue
   two-to-four-pool atomic cycles. Remove the offchain venue-count guard that hid the historical all-Earn
   `PLTR -> EARN -> SPCX -> PLTR` route, preserve distinct-pool/simple-cycle checks in both discovery and plan building,
