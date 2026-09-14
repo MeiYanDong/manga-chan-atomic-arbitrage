@@ -108,10 +108,11 @@ At the final runtime snapshot:
 
 ## Public business readback
 
-The public dashboard, `/api/v1/business`, `/api/v1/system`, `/api/v1/profit/daily` and `/healthz` all returned HTTP
-200 after the first full board publication. The board reported `HEALTHY`, 4,497 candidate tokens and complete retained
-source counts. The initial post-restart health request timed out while the single-process board rebuilt its first
-snapshot; the persisted schema-v5 snapshot completed before arming, and subsequent health readback returned 200.
+The public dashboard, `/api/v1/business`, `/api/v1/system` and `/api/v1/profit/daily` returned HTTP 200. `/healthz`
+also returned 200 after a full board publication, but a later probe timed out while the single-process board performed
+another computation cycle. The persisted business read model remained available and reported `HEALTHY`, 4,497
+candidate tokens and complete retained source counts. The schema-v5 execution snapshot completed before arming, but
+the uncached live-health endpoint remains intermittently unavailable during long board cycles.
 
 The receipt-gated daily account after the transaction contained 13 confirmed executions: 11 Earn and two global. It
 reported `1.664992 USDG + 0.000425481888080268 ETH` marked trading net and zero failed transactions or failed Gas. The
@@ -128,4 +129,6 @@ contract migration and is not implied by this graph-search release.
 One current exact-net-positive receipt exists for v11, so this deployment proves live coverage, safe execution gating
 and one realized outcome, not stable future profit. The next optimization target is to reduce source-to-decision
 latency and public-RPC pressure without weakening the fixed-block exact simulation, Gas floor, nonce convergence,
-revocation or receipt-gated accounting boundaries.
+revocation or receipt-gated accounting boundaries. Isolating the uncached health responder from the board's long
+single-process computation is also still open; the cached user-facing business APIs already remain available during
+those windows.
