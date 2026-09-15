@@ -65,6 +65,12 @@ partial real-time and public-log/periodic recovery-only operation. Rejected mana
 exponential retry, while both fast paths being unavailable is a visible non-paging degradation rather than a false
 healthy state. See [ADR 0095](docs/decisions/0095-truthful-low-latency-transport-degradation.md).
 
+Earn and Global event plus periodic discovery run in separate coalescing, public-only resident workers before the sole
+signer scheduler. Only a fresh complete negative can suppress duplicate reads. A positive is never execution authority:
+Earn returns to its latest route gate, while Global passes a minimal graph-bound route hint and the signer rebuilds the
+plan from the current atomic catalog before reacquiring funding, quote, Gas, net-profit, simulation, balance, nonce and
+authorization evidence. See [ADR 0099](docs/decisions/0099-resident-read-search-plane.md).
+
 All protocol adapters share one wallet/nonce safety domain. A canonical reverted receipt now closes the attempt, pays
 only its recorded Gas and lets unrelated candidates continue while the existing economic breakers remain open. A
 transaction whose result is not yet known pauses every new signature from that wallet, but the supervisor keeps the

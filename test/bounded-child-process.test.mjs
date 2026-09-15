@@ -45,3 +45,34 @@ test('bounded child retains a bounded diagnostic for an ordinary non-zero exit',
     },
   )
 })
+
+test('bounded child can deliver a size-limited structured stdin handoff', async () => {
+  const result = await runBoundedProcess(
+    process.execPath,
+    [
+      '-e',
+      "let value=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', () => process.stdout.write(value))",
+    ],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      timeoutMs: 5_000,
+      label: 'stdin handoff',
+      input: '{"candidate":"bounded"}',
+      maximumInputBytes: 64,
+    },
+  )
+  assert.equal(result.stdout, '{"candidate":"bounded"}')
+  assert.throws(
+    () =>
+      runBoundedProcess(process.execPath, ['-e', ''], {
+        cwd: process.cwd(),
+        env: process.env,
+        timeoutMs: 5_000,
+        label: 'oversize stdin handoff',
+        input: 'x'.repeat(65),
+        maximumInputBytes: 64,
+      }),
+    /input exceeds its bound/,
+  )
+})

@@ -46,6 +46,7 @@ import {
   routeExistsInCatalog,
 } from '../src/earnonhood-graph.mjs'
 import {
+  EARN_PARTIAL_CATALOG_RETENTION_POLICY,
   loadEarnOnHoodOnchainCatalog,
   refreshEarnOnHoodCachedDynamicCatalog,
 } from '../src/earnonhood-onchain-catalog.mjs'
@@ -53,6 +54,8 @@ import {
   EARN_BATCH_ROUTER as BATCH_ROUTER,
   EARN_LEGACY_REVIEWED_ROUTES,
   EARN_LEGACY_ROUTE_COMMITMENT,
+  EARN_OMNIPOOL_FACTORY,
+  EARN_REVIEWED_LEGACY_OMNIPOOLS,
   EARN_ROUTE_DISCOVERY_POLICY,
   EARN_ROUTE_COMMITMENT,
   EARN_VAULT as VAULT,
@@ -77,6 +80,7 @@ import {
 } from '../src/hot-rpc-lane.mjs'
 import { errorText, latestUnresolvedMutation } from '../src/policy.mjs'
 import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
+import { parseEarnLiveRevalidationInput } from '../src/resident-earn-search.mjs'
 
 const CHAIN_ID = 4_663
 const PUBLIC_READ_ONLY_RPC = 'https://rpc.mainnet.chain.robinhood.com'
@@ -190,6 +194,23 @@ const vaultAbi = [
     stateMutability: 'view',
     inputs: [{ name: 'pool', type: 'address' }],
     outputs: [{ name: '', type: 'uint256' }],
+  },
+]
+
+const factoryAbi = [
+  {
+    type: 'function',
+    name: 'getPools',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: 'pools', type: 'address[]' }],
+  },
+  {
+    type: 'function',
+    name: 'getVault',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: 'vault', type: 'address' }],
   },
 ]
 
@@ -460,33 +481,67 @@ function routePath(route, amountIn, minimumAmountOut) {
   }
 }
 
-function cachedEarnCatalog(blockNumber, focusPools) {
-  let snapshot
-  let generatedAt
+export function isEarnCatalogSnapshotCurrent(snapshot, blockNumber, focusPools = [], { now = Date.now() } = {}) {
+  if (typeof blockNumber !== 'bigint' || !Number.isFinite(now)) return false
   let cachedBlock
   try {
-    snapshot = readJson(globalCatalogPath)
-    generatedAt = Date.parse(String(snapshot?.generatedAt || ''))
     cachedBlock = snapshot?.blockNumber === undefined ? null : BigInt(snapshot.blockNumber)
   } catch {
-    return null
+    return false
   }
-  const ageMs = Date.now() - generatedAt
+  const generatedAt = Date.parse(String(snapshot?.generatedAt || ''))
+  const ageMs = now - generatedAt
+  const schemaVersion = Number(snapshot?.schemaVersion)
+  const pools = snapshot?.earn?.pools
+  const retention = snapshot?.earn?.readEvidence?.topologyRetention
+  const retentionCounts = [retention?.freshPools, retention?.retainedPools, retention?.expiredPools].map(Number)
+  const observedFresh = Array.isArray(pools)
+    ? pools.filter((pool) => pool.catalogObservation === 'CURRENT_FIXED_BLOCK_POOL_READ').length
+    : 0
+  const observedRetained = Array.isArray(pools) ? pools.length - observedFresh : 0
+  const validRetainedTopology =
+    schemaVersion < 3 ||
+    (retention?.policy === EARN_PARTIAL_CATALOG_RETENTION_POLICY.version &&
+      retentionCounts.every((value) => Number.isSafeInteger(value) && value >= 0) &&
+      retentionCounts[0] === observedFresh &&
+      retentionCounts[1] === observedRetained &&
+      pools.every((pool) => {
+        const verifiedAt = Date.parse(String(pool?.lastVerifiedAt || ''))
+        const verifiedAgeMs = now - verifiedAt
+        return (
+          ['CURRENT_FIXED_BLOCK_POOL_READ', 'RETAINED_AFTER_CURRENT_TRANSIENT_POOL_READ_FAILURE'].includes(
+            pool?.catalogObservation,
+          ) &&
+          Number.isFinite(verifiedAt) &&
+          verifiedAgeMs >= -60_000 &&
+          verifiedAgeMs <= EARN_PARTIAL_CATALOG_RETENTION_POLICY.maximumAgeMs
+        )
+      }))
   const fresh =
-    snapshot?.schemaVersion === 1 &&
+    [1, 2, 3, 4].includes(schemaVersion) &&
     snapshot?.earn?.source === EARN_ROUTE_DISCOVERY_POLICY.catalogSource &&
-    Array.isArray(snapshot?.earn?.pools) &&
-    snapshot.earn.pools.length > 0 &&
-    snapshot.earn.pools.length <= EARN_ROUTE_DISCOVERY_POLICY.maximumCatalogPools &&
+    Array.isArray(pools) &&
+    pools.length > 0 &&
+    pools.length <= EARN_ROUTE_DISCOVERY_POLICY.maximumCatalogPools &&
+    validRetainedTopology &&
     Number.isFinite(generatedAt) &&
     ageMs >= 0 &&
     ageMs <= 6 * 60 * 60 * 1_000 &&
     cachedBlock !== null &&
     cachedBlock <= blockNumber
-  if (!fresh) return null
+  if (!fresh) return false
   const cachedPools = new Set((snapshot.earn.pools || []).map((pool) => String(pool?.address || '').toLowerCase()))
-  if ((focusPools || []).some((pool) => !cachedPools.has(getAddress(pool).toLowerCase()))) return null
-  return snapshot.earn
+  return !(focusPools || []).some((pool) => !cachedPools.has(getAddress(pool).toLowerCase()))
+}
+
+function cachedEarnCatalog(blockNumber, focusPools) {
+  let snapshot
+  try {
+    snapshot = readJson(globalCatalogPath)
+  } catch {
+    return null
+  }
+  return isEarnCatalogSnapshotCurrent(snapshot, blockNumber, focusPools) ? snapshot.earn : null
 }
 
 function routeBookFromCandidateHint(candidateHint) {
@@ -527,6 +582,12 @@ async function loadDynamicRouteBook(client, blockNumber, { candidateHint = null,
 }
 
 function routeBookEvidence(routeBook) {
+  const expiredPools = Number(routeBook?.readEvidence?.topologyRetention?.expiredPools || 0)
+  const transientRejectedPools = (routeBook.rejected || []).filter(
+    (pool) =>
+      ['NETWORK', 'THROTTLED', 'STATE_NOT_READY'].includes(pool?.rpcClass) ||
+      /^PUBLIC_RPC_(?:NETWORK|THROTTLED|STATE_NOT_READY)$/.test(String(pool?.reason || '')),
+  ).length
   return {
     catalogSource: routeBook.source,
     catalogBlockNumber: routeBook.blockNumber,
@@ -535,6 +596,54 @@ function routeBookEvidence(routeBook) {
     eligiblePoolCount: routeBook.pools.length,
     rejectedCatalogPoolCount: routeBook.rejected.length,
     catalogRefreshMode: routeBook.refreshMode || 'FULL_CANONICAL_FACTORY_REFRESH',
+    catalogEvidenceCoverage: expiredPools > 0 || transientRejectedPools > 0 ? 'PARTIAL' : 'COMPLETE',
+    transientRejectedPoolCount: transientRejectedPools,
+    expiredCatalogPoolCount: Number.isSafeInteger(expiredPools) && expiredPools >= 0 ? expiredPools : null,
+  }
+}
+
+function normalizedCandidateHint(candidateHint) {
+  if (!candidateHint || typeof candidateHint !== 'object') throw new Error('Earn candidate hint is absent')
+  const decimal = (value, label) => {
+    const normalized = String(value ?? '')
+    if (!/^\d+$/.test(normalized)) throw new Error(`${label} is not a decimal integer`)
+    return BigInt(normalized)
+  }
+  return {
+    ...candidateHint,
+    route: assertEarnRouteShape(candidateHint.route),
+    amountInWei: decimal(candidateHint.amountInWei, 'Earn candidate amount'),
+    lowerBoundWei: decimal(candidateHint.lowerBoundWei, 'Earn candidate lower bound'),
+    upperBoundWei: decimal(candidateHint.upperBoundWei, 'Earn candidate upper bound'),
+    publicBlockNumber: decimal(candidateHint.publicBlockNumber, 'Earn candidate public block'),
+  }
+}
+
+async function assertCandidateHintCatalogMembership(client, candidateHint, blockNumber) {
+  const route = assertEarnRouteShape(candidateHint.route)
+  const [factoryCode, factoryVault, factoryPools] = await Promise.all([
+    client.getCode({ address: EARN_OMNIPOOL_FACTORY, blockNumber }),
+    client.readContract({
+      address: EARN_OMNIPOOL_FACTORY,
+      abi: factoryAbi,
+      functionName: 'getVault',
+      blockNumber,
+    }),
+    client.readContract({
+      address: EARN_OMNIPOOL_FACTORY,
+      abi: factoryAbi,
+      functionName: 'getPools',
+      blockNumber,
+    }),
+  ])
+  if (!factoryCode || factoryCode === '0x' || factoryVault.toLowerCase() !== VAULT.toLowerCase()) {
+    throw new Error('Earn candidate canonical factory identity mismatch')
+  }
+  const admittedPools = new Set(
+    [...factoryPools, ...EARN_REVIEWED_LEGACY_OMNIPOOLS].map((address) => getAddress(address).toLowerCase()),
+  )
+  if (route.steps.some((step) => !admittedPools.has(step.pool.toLowerCase()))) {
+    throw new Error('Earn candidate route is outside the current canonical factory membership')
   }
 }
 
@@ -779,9 +888,17 @@ async function prepareOnClient(
   const block = await client.getBlock()
   const blockNumber = block.number
   const managedExact = rpcRole === 'MANAGED_RPC_EXACT'
+  const normalizedHint = candidateHint ? normalizedCandidateHint(candidateHint) : null
   const [routeBook, , walletState] = await Promise.all([
-    loadDynamicRouteBook(client, blockNumber, { candidateHint, focusPools }),
-    managedExact ? assertCoreProtocolIdentity(client, blockNumber) : Promise.resolve(),
+    loadDynamicRouteBook(client, blockNumber, { candidateHint: normalizedHint, focusPools }),
+    managedExact
+      ? Promise.all([
+          assertCoreProtocolIdentity(client, blockNumber),
+          normalizedHint
+            ? assertCandidateHintCatalogMembership(client, normalizedHint, blockNumber)
+            : Promise.resolve(),
+        ])
+      : Promise.resolve(),
     Promise.all([
       client.getBalance({ address: WALLET, blockNumber }),
       client.getTransactionCount({ address: WALLET, blockTag: 'latest' }),
@@ -847,14 +964,16 @@ async function prepareOnClient(
     }
   }
   const eligibleRouteBook = { ...routeBook, routes: eligibleRoutes }
-  const optimizer = await optimizeEarnOnHoodQuotes(
-    client,
-    sizing,
-    blockNumber,
-    eligibleRouteBook,
-    gasPrice > (fees.maxFeePerGas || 0n) ? gasPrice : fees.maxFeePerGas || gasPrice,
-    candidateHint,
-    focusPools,
+  const optimizer = /** @type {any} */ (
+    await optimizeEarnOnHoodQuotes(
+      client,
+      sizing,
+      blockNumber,
+      eligibleRouteBook,
+      gasPrice > (fees.maxFeePerGas || 0n) ? gasPrice : fees.maxFeePerGas || gasPrice,
+      normalizedHint,
+      focusPools,
+    )
   )
   const { quotes } = optimizer
   const allPositiveGross = quotes.filter((quote) => !quote.error && quote.amountOut > quote.amountIn)
@@ -876,7 +995,7 @@ async function prepareOnClient(
         pools: best.route.steps.map((step) => step.pool),
         bestAmountInEth: formatEther(best.amountIn),
         bestAmountOutEth: formatEther(best.amountOut),
-        bestGrossEth: formatEther(best.amountOut - best.amountIn),
+        bestGrossEth: formatEther(BigInt(best.amountOut) - BigInt(best.amountIn)),
         dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
         principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
         lifetimeEarnGasSurplusEth: formatEther(gasSolvency.earnGasSurplusWei ?? gasSolvency.surplusWei),
@@ -895,10 +1014,10 @@ async function prepareOnClient(
   const observedFeePerGas = [gasPrice, fees.maxFeePerGas || 0n].reduce((left, right) => (left > right ? left : right))
   const minimumNetProfitWei = parseEther(runtimeConfig.earnLiveMinNetWeth)
   const minimumQuoteHeadroomWei = parseEther(runtimeConfig.earnLiveMinHeadroomWeth)
-  const evaluations = []
+  const evaluations = /** @type {any[]} */ ([])
   const gasCandidates = selectEarnOnHoodGasCandidates(
     positiveGross,
-    candidateHint ? 1 : focusPools.length > 0 ? 2 : EARN_ROUTE_DISCOVERY_POLICY.maximumGasCandidates,
+    normalizedHint ? 1 : focusPools.length > 0 ? 2 : EARN_ROUTE_DISCOVERY_POLICY.maximumGasCandidates,
     { observedFeePerGasWei: observedFeePerGas },
   )
   const identityChecks = await mapWithConcurrency(gasCandidates, 4, async (candidate) => {
@@ -1011,7 +1130,7 @@ async function prepareOnClient(
         route: best.candidate.route.symbols.join(' -> '),
         bestAmountInEth: formatEther(best.candidate.amountIn),
         bestAmountOutEth: formatEther(best.candidate.amountOut),
-        bestGrossEth: formatEther(best.candidate.amountOut - best.candidate.amountIn),
+        bestGrossEth: formatEther(BigInt(best.candidate.amountOut) - BigInt(best.candidate.amountIn)),
         bestQuotedNetAtGasCapEth: best.bounds ? formatEther(best.bounds.quotedNetAtGasCapWei) : null,
         dynamicMaximumPrincipalEth: formatEther(sizing.spendableWei),
         principalPolicy: 'AVAILABLE_WALLET_BALANCE_MINUS_GAS_AND_RESERVE_NO_FIXED_CAP',
@@ -1109,7 +1228,37 @@ async function prepareOnClient(
   }
 }
 
-async function preflight({ print = true } = {}) {
+export async function earnReadOnlySearch({ earnGasSurplusWei, focusPools = [], excludedRouteIds = [] }) {
+  if (process.env.EARN_SEARCH_READ_ONLY !== '1' || runtimeConfig.rpcUrl) {
+    throw new Error('resident Earn search requires the public-only read boundary')
+  }
+  const gasSurplus = BigInt(String(earnGasSurplusWei))
+  if (gasSurplus < 0n) throw new Error('resident Earn search gas surplus must be non-negative')
+  const screened = /** @type {any} */ (
+    await prepareOnClient(
+      discoveryClient,
+      { earnGasSurplusWei: gasSurplus, surplusWei: gasSurplus },
+      'PUBLIC_RPC_SCREEN',
+      {
+        focusPools: focusPools.map((value) => getAddress(value)),
+        excludedRouteIds: new Set(excludedRouteIds.map(String)),
+      },
+    )
+  )
+  screened.report.rpc = {
+    discoveryPolicy: 'OFFICIAL_PUBLIC_ONLY_RESIDENT_SEARCH',
+    managedFallback: false,
+  }
+  return {
+    status: screened.report.status,
+    evidenceCoverage: screened.report.catalogEvidenceCoverage || 'PARTIAL',
+    report: screened.report,
+    candidateHint: screened.candidateHint || null,
+    searchedAt: new Date().toISOString(),
+  }
+}
+
+async function preflight({ print = true, candidateHint = null, publicScreenReport = null } = {}) {
   const sharedContext = sharedExecutionContext()
   const watcherPid = activeLock(dualWatchLockPath)
   const gasSolvency = currentGasSolvency(sharedContext)
@@ -1120,33 +1269,46 @@ async function preflight({ print = true } = {}) {
   const auditRecords = readJsonLines(sharedContext ? sharedAuditPath : auditPath)
   const routeQuarantine = earnOnHoodRouteQuarantine(auditRecords)
   const excludedRouteIds = new Set(routeQuarantine.map((entry) => entry.routeId))
+  /** @type {any} */
   let screened
-  try {
-    screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN', {
-      focusPools,
-      excludedRouteIds,
-    })
-  } catch (error) {
-    if (!/managed RPC fallback (?:per-wake|daily) logical-call budget exhausted/i.test(errorText(error))) throw error
-    const report = {
-      status: 'NO_SHOT_RPC_BUDGET_EXHAUSTED',
-      evidence: 'BOUNDED_READ_FAILURE_BEFORE_SIGNER_LOAD_OR_MUTATION',
-      reasons: ['MANAGED_RPC_FALLBACK_BUDGET_EXHAUSTED'],
-      error: errorText(error),
-      rpc: managedFallbackEvidence(),
+  if (candidateHint) {
+    if (publicScreenReport?.status !== 'SHOT_READY') {
+      throw new Error('resident Earn candidate lacks a positive public-screen report')
     }
-    appendAudit('preflight', report)
-    if (print) console.log(stringify(report))
-    return { report }
+    screened = {
+      report: publicScreenReport,
+      candidateHint: normalizedCandidateHint(candidateHint),
+    }
+  } else {
+    try {
+      screened = await prepareOnClient(discoveryClient, gasSolvency, 'PUBLIC_RPC_SCREEN', {
+        focusPools,
+        excludedRouteIds,
+      })
+    } catch (error) {
+      if (!/managed RPC fallback (?:per-wake|daily) logical-call budget exhausted/i.test(errorText(error))) throw error
+      const report = {
+        status: 'NO_SHOT_RPC_BUDGET_EXHAUSTED',
+        evidence: 'BOUNDED_READ_FAILURE_BEFORE_SIGNER_LOAD_OR_MUTATION',
+        reasons: ['MANAGED_RPC_FALLBACK_BUDGET_EXHAUSTED'],
+        error: errorText(error),
+        rpc: managedFallbackEvidence(),
+      }
+      appendAudit('preflight', report)
+      if (print) console.log(stringify(report))
+      return { report }
+    }
+    screened.report.rpc = managedFallbackEvidence()
   }
-  screened.report.rpc = managedFallbackEvidence()
   if (screened.report.status !== 'SHOT_READY') {
     appendAudit('preflight', screened.report)
     if (print) console.log(stringify(screened.report))
     return screened
   }
   assertLiveTransport(runtimeConfig)
-  if (sharedContext) assertSharedAuthorization(sharedContext, { maximumGasCostWei: screened.bounds.maximumGasCostWei })
+  if (sharedContext && screened.bounds) {
+    assertSharedAuthorization(sharedContext, { maximumGasCostWei: screened.bounds.maximumGasCostWei })
+  }
   if (sharedContext) {
     appendAudit(
       'earn_watch_exact_preflight_started',
@@ -1154,8 +1316,9 @@ async function preflight({ print = true } = {}) {
         authorizationId: sharedContext.authorizationId,
         publicScreenBlockNumber: screened.report.blockNumber,
         route: screened.report.route,
-        amountInWei: screened.candidate.amountIn,
-        quotedNetAtGasCapWei: screened.bounds.quotedNetAtGasCapWei,
+        amountInWei: screened.candidate?.amountIn || screened.candidateHint.amountInWei,
+        quotedNetAtGasCapWei: screened.bounds?.quotedNetAtGasCapWei || null,
+        preflightSource: candidateHint ? 'RESIDENT_SIGNER_FREE_SEARCH_HINT' : 'INLINE_PUBLIC_SCREEN',
         sourceReceivedAt: process.env.EARN_WAKE_RECEIVED_AT || null,
         sourceBlockNumber: process.env.EARN_WAKE_BLOCK_NUMBER || null,
         sourceTransactionHash: process.env.EARN_WAKE_TRANSACTION_HASH || null,
@@ -1164,11 +1327,16 @@ async function preflight({ print = true } = {}) {
     )
   }
   const exactGasSolvency = currentGasSolvency(sharedContext)
-  const prepared = await prepareOnClient(executionClient, exactGasSolvency, 'MANAGED_RPC_EXACT', {
-    candidateHint: screened.candidateHint,
-    excludedRouteIds,
-  })
+  const prepared = /** @type {any} */ (
+    await prepareOnClient(executionClient, exactGasSolvency, 'MANAGED_RPC_EXACT', {
+      candidateHint: screened.candidateHint,
+      excludedRouteIds,
+    })
+  )
   prepared.report.rpc = managedFallbackEvidence()
+  if (sharedContext && prepared.report.status === 'SHOT_READY') {
+    assertSharedAuthorization(sharedContext, { maximumGasCostWei: prepared.bounds.maximumGasCostWei })
+  }
   if (!sharedContext && watcherPid) {
     prepared.report.status = 'NO_SHOT'
     prepared.report.reasons = [...prepared.report.reasons, `DUAL_WATCHER_ACTIVE_PID_${watcherPid}`]
@@ -1178,7 +1346,7 @@ async function preflight({ print = true } = {}) {
   return prepared
 }
 
-async function execute() {
+async function execute({ candidateHint = null, publicScreenReport = null } = {}) {
   if (process.env.EARN_LIVE_ARM !== '1') throw new Error('execution requires EARN_LIVE_ARM=1')
   const sharedContext = sharedExecutionContext()
   const release = acquireWalletLock()
@@ -1186,7 +1354,7 @@ async function execute() {
     if (activeLock(dualWatchLockPath) && !sharedContext)
       throw new Error('dual watcher is active; disarm and stop it before EarnOnHood execution')
     if (sharedContext) assertSharedAuthorization(sharedContext)
-    const prepared = await preflight({ print: false })
+    const prepared = await preflight({ print: false, candidateHint, publicScreenReport })
     if (prepared.report.status !== 'SHOT_READY') {
       appendAudit('execution_skipped', { reasons: prepared.report.reasons })
       console.log(stringify({ ...prepared.report, status: 'NO_SHOT_NO_SIGNATURE_NO_BROADCAST' }))
@@ -1359,7 +1527,7 @@ async function execute() {
       )
       throw new Error(`EarnOnHood receipt is UNKNOWN; do not reuse nonce ${latestNonce}: ${hash}`)
     }
-    const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
+    const gasSpentWei = BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice)
     if (receipt.status !== 'success') {
       appendAudit(
         'mutation_reverted',
@@ -1523,7 +1691,9 @@ async function reconcile() {
       throw new Error('persisted EarnOnHood raw transaction hash mismatch')
     }
     const parsed = parseTransaction(serializedTransaction)
-    const sender = await recoverTransactionAddress({ serializedTransaction })
+    const sender = await recoverTransactionAddress({
+      serializedTransaction: /** @type {any} */ (serializedTransaction),
+    })
     if (
       sender.toLowerCase() !== WALLET.toLowerCase() ||
       Number(parsed.chainId) !== Number(plan.chainId) ||
@@ -1564,7 +1734,7 @@ async function reconcile() {
       console.log(stringify(result))
       return result
     }
-    const gasSpentWei = receipt.gasUsed * receipt.effectiveGasPrice
+    const gasSpentWei = BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice)
     const mirrorShared = Boolean(unresolved.authorizationId)
     if (receipt.status !== 'success') {
       appendAudit(
@@ -1654,7 +1824,10 @@ if (path.resolve(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
   try {
     if (command === 'preflight') await preflight()
     else if (command === 'execute') await execute()
-    else if (command === 'reconcile') await reconcile()
+    else if (command === 'execute-candidate') {
+      const handoff = parseEarnLiveRevalidationInput(fs.readFileSync(0, 'utf8'))
+      await execute({ candidateHint: handoff.candidateHint, publicScreenReport: handoff.publicScreenReport })
+    } else if (command === 'reconcile') await reconcile()
     else throw new Error(`unknown command: ${command}`)
   } catch (error) {
     console.error(stringify({ status: 'FAILED_CLOSED', error: errorText(error) }))

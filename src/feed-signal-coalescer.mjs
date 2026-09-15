@@ -188,6 +188,7 @@ export function mergePendingMarketSignals(current, next, options = {}) {
     outOfOrderFrame: Boolean(left.outOfOrderFrame || right.outOfOrderFrame),
     sequenceGap: Boolean(left.sequenceGap || right.sequenceGap),
     requiresLegacyGlobalSearch: Boolean(left.requiresLegacyGlobalSearch || right.requiresLegacyGlobalSearch),
+    requiresLegacyEarnSearch: Boolean(left.requiresLegacyEarnSearch || right.requiresLegacyEarnSearch),
     coalescedWakeCount: Number(options.coalescedWakeCount ?? right.coalescedWakeCount ?? 0),
   }
 }

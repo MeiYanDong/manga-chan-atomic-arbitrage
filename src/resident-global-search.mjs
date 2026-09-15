@@ -11,6 +11,8 @@ import {
 
 export const GLOBAL_SEARCH_WORKER_POLICY = 'RESIDENT_SIGNER_FREE_EVENT_SEARCH_V1'
 export const GLOBAL_SEARCH_PROTOCOL_VERSION = 1
+export const GLOBAL_SEARCH_NEGATIVE_MAX_AGE_MS = 15_000
+export const GLOBAL_SEARCH_POSITIVE_MAX_AGE_MS = 60_000
 export const GLOBAL_CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1_000
 export const GLOBAL_CATALOG_REFRESH_INTERVAL_MS = 15 * 60 * 1_000
 export const GLOBAL_CATALOG_CRITICAL_READ_POLICY = Object.freeze({
@@ -69,6 +71,22 @@ export function assertGlobalCatalogMaintenanceBoundary(environment = process.env
 const MAXIMUM_LINE_BYTES = 1_000_000
 const RESTART_DELAY_MS = 1_000
 const MAXIMUM_CATALOG_CLOCK_SKEW_MS = 60_000
+const ADDRESS = /^0x[0-9a-f]{40}$/i
+const HASH = /^0x[0-9a-f]{64}$/i
+const SAFE_ROUTE_ID = /^[A-Za-z0-9_-]{1,160}$/
+const SAFE_OPPORTUNITY_KIND = /^[A-Z0-9_]{1,120}$/
+const SAFE_ENVIRONMENT_KEYS = new Set([
+  'PATH',
+  'LANG',
+  'LC_ALL',
+  'TZ',
+  'MANGA_RUN_DIR',
+  'MANGA_GLOBAL_UNIVERSE_PATH',
+  'MANGA_GENERIC_MIN_NET_USDG',
+  'GLOBAL_EXTRA_SETTLEMENT_ASSETS',
+  'GLOBAL_MAX_ROUTES_PER_WAKE',
+  'GLOBAL_QUOTE_CONCURRENCY',
+])
 
 function safeError(error) {
   return redactSensitiveText(error instanceof Error ? error.message : String(error)).slice(0, 240)
@@ -250,14 +268,9 @@ function sanitizeSignal(signal) {
 }
 
 export function buildGlobalSearchWorkerEnvironment(environment = process.env) {
-  const output = { ...environment }
-  for (const key of Object.keys(output)) {
-    if (
-      /(?:PRIVATE|SECRET|CREDENTIAL|PASSWORD|KEYCHAIN|WEBHOOK|AUTHORIZATION)/i.test(key) ||
-      ['MANGA_CONFIG_FILE', 'GLOBAL_LIVE_ARM', 'EARN_LIVE_ARM'].includes(key)
-    ) {
-      delete output[key]
-    }
+  const output = {}
+  for (const [key, value] of Object.entries(environment || {})) {
+    if (SAFE_ENVIRONMENT_KEYS.has(key) && value !== undefined) output[key] = value
   }
   // Keep this worker on the official public reader. Paid/exact transport and
   // its durable budget stay inside the existing signer child.
@@ -331,27 +344,201 @@ export function parseGlobalSearchResult(line) {
   return parsed
 }
 
-export function classifyGlobalSearchHandoff(result, { requiresLegacySearch = false } = {}) {
+function decimalString(value, label) {
+  const normalized = typeof value === 'bigint' ? value.toString() : String(value ?? '')
+  if (!/^\d{1,80}$/.test(normalized)) throw new Error(`${label} must be a bounded non-negative decimal integer`)
+  return normalized
+}
+
+function boundedEvidenceString(value, label, maximum = 240) {
+  const normalized = String(value || '')
+  if (!normalized || normalized.length > maximum || /[\r\n]|(?:https?|wss?):\/\//i.test(normalized)) {
+    throw new Error(`${label} is invalid`)
+  }
+  return normalized
+}
+
+export function normalizeGlobalCandidateHint(value) {
+  if (!value || typeof value !== 'object' || value.schemaVersion !== GLOBAL_SEARCH_PROTOCOL_VERSION) {
+    throw new Error('global candidate hint schema is invalid')
+  }
+  const generatedAt = String(value.generatedAt || '')
+  if (!Number.isFinite(Date.parse(generatedAt))) throw new Error('global candidate hint timestamp is invalid')
+  const graphCommitment = String(value.graphCommitment || '').toLowerCase()
+  const settlementToken = String(value.settlementToken || '').toLowerCase()
+  const templateId = String(value.templateId || '')
+  const opportunityKind = String(value.opportunityKind || '')
+  const fundingMode = String(value.fundingMode || '')
+  const routeType = String(value.routeType || '')
+  const edgeIds = Array.isArray(value.edgeIds) ? value.edgeIds.map((item) => String(item).toLowerCase()) : null
+  if (!HASH.test(graphCommitment)) throw new Error('global candidate graph commitment is invalid')
+  if (!ADDRESS.test(settlementToken)) throw new Error('global candidate settlement token is invalid')
+  if (!SAFE_ROUTE_ID.test(templateId)) throw new Error('global candidate route id is invalid')
+  if (!SAFE_OPPORTUNITY_KIND.test(opportunityKind)) throw new Error('global candidate kind is invalid')
+  if (!['BPT', 'CYCLE'].includes(routeType) || !edgeIds) throw new Error('global candidate route type is invalid')
+  if (
+    (routeType === 'BPT' && edgeIds.length !== 0) ||
+    (routeType === 'CYCLE' && (edgeIds.length < 2 || edgeIds.length > 5)) ||
+    edgeIds.some((item) => !HASH.test(item)) ||
+    new Set(edgeIds).size !== edgeIds.length
+  ) {
+    throw new Error('global candidate edge evidence is invalid')
+  }
+  if (!['MORPHO_FLASH', 'EXECUTOR_INVENTORY'].includes(fundingMode)) {
+    throw new Error('global candidate funding mode is invalid')
+  }
+  return {
+    schemaVersion: GLOBAL_SEARCH_PROTOCOL_VERSION,
+    generatedAt,
+    graphCommitment,
+    catalogVersion: boundedEvidenceString(value.catalogVersion, 'global candidate catalog version'),
+    stateBlockNumber: decimalString(value.stateBlockNumber, 'global candidate state block'),
+    templateId,
+    opportunityKind,
+    routeType,
+    edgeIds,
+    settlementToken,
+    principal: decimalString(value.principal, 'global candidate principal'),
+    fundingMode,
+  }
+}
+
+export function buildGlobalCandidateHint(prepared) {
+  const selected = prepared?.selected
+  const snapshot = prepared?.snapshot
+  if (!selected || snapshot?.status !== 'EXACT_NET_POSITIVE') return null
+  return normalizeGlobalCandidateHint({
+    schemaVersion: GLOBAL_SEARCH_PROTOCOL_VERSION,
+    generatedAt: snapshot.generatedAt,
+    graphCommitment: snapshot.graph?.commitment,
+    catalogVersion: snapshot.lifecycle?.catalogVersion,
+    stateBlockNumber: snapshot.lifecycle?.state?.blockNumber,
+    templateId: selected.templateId,
+    opportunityKind: selected.opportunityKind,
+    routeType: selected.route?.type,
+    edgeIds: selected.route?.type === 'CYCLE' ? selected.route.cycle?.edges?.map((edge) => edge.id) : [],
+    settlementToken: selected.settlementToken,
+    principal: selected.principal,
+    fundingMode: selected.fundingMode,
+  })
+}
+
+export function classifyGlobalSearchHandoff(
+  result,
+  {
+    requiresLegacySearch = false,
+    now = Date.now(),
+    maximumNegativeAgeMs = GLOBAL_SEARCH_NEGATIVE_MAX_AGE_MS,
+    maximumPositiveAgeMs = GLOBAL_SEARCH_POSITIVE_MAX_AGE_MS,
+  } = {},
+) {
   const snapshot = result?.snapshot
-  if (requiresLegacySearch || !snapshot || typeof snapshot !== 'object' || typeof snapshot.status !== 'string') {
-    return { mode: 'LEGACY_PREFLIGHT', snapshot: null }
+  const completedAt = Date.parse(String(result?.completedAt || ''))
+  const ageMs = now - completedAt
+  if (
+    requiresLegacySearch ||
+    !snapshot ||
+    typeof snapshot !== 'object' ||
+    typeof snapshot.status !== 'string' ||
+    !Number.isFinite(completedAt) ||
+    ageMs < 0
+  ) {
+    return { mode: 'LEGACY_PREFLIGHT', snapshot: null, ageMs: null }
   }
-  if (snapshot.status === 'EXACT_NET_POSITIVE') {
-    return { mode: 'LIVE_REVALIDATION', snapshot }
+  if (
+    snapshot.status === 'EXACT_NET_POSITIVE' &&
+    snapshot.evidenceCoverage === 'COMPLETE' &&
+    ageMs <= maximumPositiveAgeMs
+  ) {
+    try {
+      const candidateHint = normalizeGlobalCandidateHint(result.candidateHint)
+      if (
+        candidateHint.generatedAt !== snapshot.generatedAt ||
+        candidateHint.graphCommitment !== String(snapshot.graph?.commitment || '').toLowerCase() ||
+        candidateHint.catalogVersion !== snapshot.lifecycle?.catalogVersion ||
+        candidateHint.stateBlockNumber !== String(snapshot.lifecycle?.state?.blockNumber || '')
+      ) {
+        throw new Error('global candidate hint does not match its search snapshot')
+      }
+      return { mode: 'LIVE_REVALIDATION', snapshot, candidateHint, ageMs }
+    } catch {
+      return { mode: 'LEGACY_PREFLIGHT', snapshot, candidateHint: null, ageMs }
+    }
   }
-  if (snapshot.status === 'NO_EXACT_NET_OPPORTUNITY' && snapshot.evidenceCoverage === 'COMPLETE') {
-    return { mode: 'REUSE_READ_ONLY_RESULT', snapshot }
+  if (
+    snapshot.status === 'NO_EXACT_NET_OPPORTUNITY' &&
+    snapshot.evidenceCoverage === 'COMPLETE' &&
+    ageMs <= maximumNegativeAgeMs
+  ) {
+    return { mode: 'REUSE_READ_ONLY_RESULT', snapshot, ageMs }
   }
-  return { mode: 'LEGACY_PREFLIGHT', snapshot }
+  return { mode: 'LEGACY_PREFLIGHT', snapshot, ageMs }
+}
+
+export function encodeGlobalLiveRevalidationInput(result) {
+  const handoff = classifyGlobalSearchHandoff(result)
+  if (handoff.mode !== 'LIVE_REVALIDATION') throw new Error('global live revalidation requires a fresh positive hint')
+  const value = JSON.stringify({
+    schemaVersion: GLOBAL_SEARCH_PROTOCOL_VERSION,
+    type: 'GLOBAL_LIVE_REVALIDATION',
+    completedAt: result.completedAt,
+    snapshot: handoff.snapshot,
+    candidateHint: handoff.candidateHint,
+  })
+  if (Buffer.byteLength(value) > MAXIMUM_LINE_BYTES) throw new Error('global live revalidation input exceeds its bound')
+  return value
+}
+
+export function parseGlobalLiveRevalidationInput(value, { now = Date.now() } = {}) {
+  if (Buffer.byteLength(String(value)) > MAXIMUM_LINE_BYTES) {
+    throw new Error('global live revalidation input exceeds its bound')
+  }
+  const parsed = JSON.parse(String(value))
+  if (parsed?.schemaVersion !== GLOBAL_SEARCH_PROTOCOL_VERSION || parsed?.type !== 'GLOBAL_LIVE_REVALIDATION') {
+    throw new Error('global live revalidation envelope is invalid')
+  }
+  const handoff = classifyGlobalSearchHandoff(
+    {
+      completedAt: parsed.completedAt,
+      snapshot: parsed.snapshot,
+      candidateHint: parsed.candidateHint,
+    },
+    { now },
+  )
+  if (handoff.mode !== 'LIVE_REVALIDATION') throw new Error('global live revalidation evidence is stale or invalid')
+  return {
+    schemaVersion: GLOBAL_SEARCH_PROTOCOL_VERSION,
+    type: 'GLOBAL_LIVE_REVALIDATION',
+    completedAt: parsed.completedAt,
+    snapshot: handoff.snapshot,
+    candidateHint: handoff.candidateHint,
+  }
 }
 
 export class ResidentGlobalSearchClient {
   /**
    * @param {{scriptPath: string, cwd: string, environment?: NodeJS.ProcessEnv,
    * timeoutMs: number, onResult: (value: any) => void, onFailure: (value: any) => void,
-   * spawnProcess?: (...args: any[]) => any}} options
+   * spawnProcess?: (...args: any[]) => any, environmentBuilder?: (environment: NodeJS.ProcessEnv) => NodeJS.ProcessEnv,
+   * signalSanitizer?: (signal: any) => any, requestEncoder?: (requestId: string, signal: any) => string,
+   * resultParser?: (line: string) => any, workerPolicy?: string, requestPrefix?: string, workerLabel?: string}} options
    */
-  constructor({ scriptPath, cwd, environment, timeoutMs, onResult, onFailure, spawnProcess = spawn }) {
+  constructor({
+    scriptPath,
+    cwd,
+    environment,
+    timeoutMs,
+    onResult,
+    onFailure,
+    spawnProcess = spawn,
+    environmentBuilder = buildGlobalSearchWorkerEnvironment,
+    signalSanitizer = sanitizeSignal,
+    requestEncoder = encodeGlobalSearchRequest,
+    resultParser = parseGlobalSearchResult,
+    workerPolicy = GLOBAL_SEARCH_WORKER_POLICY,
+    requestPrefix = 'global-search',
+    workerLabel = 'global search worker',
+  }) {
     if (!scriptPath || !cwd) throw new Error('global search worker paths are required')
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 180_000) {
       throw new Error('global search worker timeout is invalid')
@@ -361,11 +548,28 @@ export class ResidentGlobalSearchClient {
     }
     this.scriptPath = scriptPath
     this.cwd = cwd
-    this.environment = buildGlobalSearchWorkerEnvironment(environment)
+    if (
+      typeof environmentBuilder !== 'function' ||
+      typeof signalSanitizer !== 'function' ||
+      typeof requestEncoder !== 'function' ||
+      typeof resultParser !== 'function'
+    ) {
+      throw new Error('resident search worker protocol functions are required')
+    }
+    if (!validRequestId(`${requestPrefix}-1`) || typeof workerPolicy !== 'string' || !workerPolicy) {
+      throw new Error('resident search worker identity is invalid')
+    }
+    this.environment = environmentBuilder(environment)
     this.timeoutMs = timeoutMs
     this.onResult = onResult
     this.onFailure = onFailure
     this.spawnProcess = spawnProcess
+    this.signalSanitizer = signalSanitizer
+    this.requestEncoder = requestEncoder
+    this.resultParser = resultParser
+    this.workerPolicy = workerPolicy
+    this.requestPrefix = requestPrefix
+    this.workerLabel = workerLabel
     this.child = null
     this.inFlight = null
     this.pendingSignal = null
@@ -415,7 +619,7 @@ export class ResidentGlobalSearchClient {
     child.once('error', (error) => this.#workerFailed(error, generation))
     child.once('close', (code, signal) => {
       if (this.stopped || generation !== this.generation) return
-      this.#workerFailed(new Error(`global search worker exited (${code ?? signal ?? 'unknown'})`), generation)
+      this.#workerFailed(new Error(`${this.workerLabel} exited (${code ?? signal ?? 'unknown'})`), generation)
     })
     if (this.pendingSignal && !this.inFlight) {
       const pending = this.pendingSignal
@@ -429,16 +633,18 @@ export class ResidentGlobalSearchClient {
     if (this.stopped) return false
     let normalized
     try {
-      normalized = sanitizeSignal(signal)
+      normalized = this.signalSanitizer(signal)
     } catch (error) {
       this.lastError = safeError(error)
       return false
     }
     if (this.inFlight || !this.child) {
       if (this.pendingSignal) this.coalesced += 1
-      this.pendingSignal = mergePendingMarketSignals(this.pendingSignal, normalized, {
-        coalescedWakeCount: Number(this.pendingSignal?.coalescedWakeCount || 0) + (this.pendingSignal ? 1 : 0),
-      })
+      this.pendingSignal = this.signalSanitizer(
+        mergePendingMarketSignals(this.pendingSignal, normalized, {
+          coalescedWakeCount: Number(this.pendingSignal?.coalescedWakeCount || 0) + (this.pendingSignal ? 1 : 0),
+        }),
+      )
       if (!this.child && !this.start()) return false
       return true
     }
@@ -459,7 +665,7 @@ export class ResidentGlobalSearchClient {
 
   snapshot() {
     return {
-      policy: GLOBAL_SEARCH_WORKER_POLICY,
+      policy: this.workerPolicy,
       status: this.state,
       pid: this.child?.pid || null,
       startedAt: this.startedAt,
@@ -474,14 +680,14 @@ export class ResidentGlobalSearchClient {
   }
 
   #dispatch(signal) {
-    if (!this.child?.stdin?.writable || this.inFlight) throw new Error('global search worker is not writable')
-    const requestId = `global-search-${Date.now()}-${++this.sequence}`
-    const line = encodeGlobalSearchRequest(requestId, signal)
+    if (!this.child?.stdin?.writable || this.inFlight) throw new Error(`${this.workerLabel} is not writable`)
+    const requestId = `${this.requestPrefix}-${Date.now()}-${++this.sequence}`
+    const line = this.requestEncoder(requestId, signal)
     this.inFlight = { requestId, signal, startedAt: Date.now() }
     this.child.stdin.write(`${line}\n`)
     this.deadline = setTimeout(() => {
       if (this.inFlight?.requestId !== requestId) return
-      this.#workerFailed(new Error(`global search worker exceeded ${this.timeoutMs} ms`), this.generation)
+      this.#workerFailed(new Error(`${this.workerLabel} exceeded ${this.timeoutMs} ms`), this.generation)
     }, this.timeoutMs)
   }
 
@@ -489,7 +695,7 @@ export class ResidentGlobalSearchClient {
     if (generation !== this.generation || this.stopped) return
     this.lineBuffer += chunk
     if (Buffer.byteLength(this.lineBuffer) > MAXIMUM_LINE_BYTES) {
-      this.#workerFailed(new Error('global search worker output exceeds its bound'), generation)
+      this.#workerFailed(new Error(`${this.workerLabel} output exceeds its bound`), generation)
       return
     }
     let newline
@@ -499,13 +705,13 @@ export class ResidentGlobalSearchClient {
       if (!line) continue
       let response
       try {
-        response = parseGlobalSearchResult(line)
+        response = this.resultParser(line)
       } catch (error) {
         this.#workerFailed(error, generation)
         return
       }
       if (!this.inFlight || response.requestId !== this.inFlight.requestId) {
-        this.#workerFailed(new Error('global search worker response does not match the in-flight request'), generation)
+        this.#workerFailed(new Error(`${this.workerLabel} response does not match the in-flight request`), generation)
         return
       }
       if (this.deadline) clearTimeout(this.deadline)

@@ -19,6 +19,7 @@ import {
   parseTransaction,
   parseUnits,
   recoverTransactionAddress,
+  toHex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
@@ -73,7 +74,7 @@ import {
   selectSettlementFundingCandidates,
 } from '../src/global-settlement-assets.mjs'
 import { loadEarnOnHoodOnchainCatalog, mergeEarnOnHoodPartialCatalog } from '../src/earnonhood-onchain-catalog.mjs'
-import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
+import { assertPrivateFile, buildMutationPlan, persistSignedRaw, stableStringify } from '../src/journal.mjs'
 import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
 import {
   DailyHotRpcBudget,
@@ -103,6 +104,7 @@ import {
   assertGlobalCatalogMaintenanceBoundary,
   classifyGlobalCatalogAccess,
   GLOBAL_CATALOG_CRITICAL_READ_POLICY,
+  parseGlobalLiveRevalidationInput,
   readGlobalCatalogCritical,
 } from '../src/resident-global-search.mjs'
 import {
@@ -608,6 +610,10 @@ async function loadGlobalGraph() {
   return value
 }
 
+function globalCatalogVersion({ earn, uniswap, universe }) {
+  return `EARN:${earn.blockNumber || 'UNKNOWN'}|UNISWAP:${uniswap.blockNumber || 'UNKNOWN'}|UNIVERSE:${universe.topologyHash || 'BASE_ONLY'}`
+}
+
 async function catalogRefresh() {
   assertGlobalCatalogMaintenanceBoundary()
   const release = acquireLock(GLOBAL_CATALOG_LOCK_PATH, 'global-catalog-maintenance')
@@ -996,12 +1002,152 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
   }
 }
 
+function reconstructGlobalCandidateFromHint(hint, graphState) {
+  const settlementToken = getAddress(hint.settlementToken)
+  const principal = BigInt(hint.principal)
+  if (principal <= 0n) throw new Error('global candidate principal must be positive')
+  if (graphState.graph.commitment.toLowerCase() !== hint.graphCommitment.toLowerCase()) {
+    throw new Error('global candidate graph commitment changed before exact revalidation')
+  }
+  if (globalCatalogVersion(graphState) !== hint.catalogVersion) {
+    throw new Error('global candidate catalog version changed before exact revalidation')
+  }
+  let route
+  if (hint.routeType === 'BPT') {
+    const template = buildEarnBptArbitrageTemplates(graphState.graph, settlementToken).find(
+      (item) => item.id === hint.templateId && item.kind === hint.opportunityKind,
+    )
+    if (template) {
+      route = {
+        type: 'BPT',
+        id: template.id,
+        opportunityKind: template.kind,
+        settlementToken,
+        pool: template.pool,
+        template,
+      }
+    }
+  } else {
+    const edgesById = new Map(graphState.graph.edges.map((edge) => [edge.id.toLowerCase(), edge]))
+    const edges = hint.edgeIds.map((edgeId) => edgesById.get(edgeId.toLowerCase()))
+    if (edges.every(Boolean)) {
+      const expectedId = `GLOBAL_SWAP_CYCLE_${keccak256(toHex(stableStringify(edges.map((edge) => edge.id)))).slice(2, 18)}`
+      const expectedKind = `${new Set(edges.map((edge) => edge.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${edges.length}_HOP_ATOMIC_SWAP_CYCLE`
+      if (expectedId === hint.templateId && expectedKind === hint.opportunityKind) {
+        route = {
+          type: 'CYCLE',
+          id: expectedId,
+          opportunityKind: expectedKind,
+          settlementToken,
+          pool: null,
+          cycle: { id: expectedId, settlementToken, edges },
+        }
+      }
+    }
+  }
+  if (!route) throw new Error('global candidate route is absent from the current committed graph')
+  const pool = route.pool
+    ? graphState.earn.pools.find((item) => item.address.toLowerCase() === route.pool.toLowerCase())
+    : null
+  if (route.type === 'BPT' && !pool) throw new Error('global candidate Earn pool is absent from the current catalog')
+  const plan =
+    route.type === 'BPT'
+      ? buildBptExecutionPlan(route.template, {
+          principal,
+          minimumProfit: 1n,
+          deadline: 1n,
+          allocations:
+            route.opportunityKind === 'BPT_PREMIUM_BUY_AND_ADD' ? weightedAllocations(principal, pool) : undefined,
+        })
+      : buildCycleExecutionPlan(route.cycle, { principal, minimumProfit: 1n, deadline: 1n })
+  return {
+    route,
+    templateId: route.id,
+    opportunityKind: route.opportunityKind,
+    pool: route.pool,
+    settlementToken,
+    principal,
+    fundingMode: hint.fundingMode,
+    fundingAvailable: 0n,
+    decimals: null,
+    plan,
+    quoteDelta: 0n,
+    status: 'HANDOFF_RECONSTRUCTED',
+    outcome: EvaluationOutcome.PROFITABLE,
+    stage: 'COMMITTED_GRAPH_RECONSTRUCTION',
+  }
+}
+
+function lifecycleFromGlobalHandoff(handoff) {
+  const preflightStartedAt = new Date().toISOString()
+  const routeDependencies = wakeAddressSet()
+  const feedSequenceNumber = /^\d+$/.test(String(process.env.GLOBAL_WAKE_SEQUENCE_NUMBER || ''))
+    ? process.env.GLOBAL_WAKE_SEQUENCE_NUMBER
+    : null
+  const feedLastSequenceNumber = /^\d+$/.test(String(process.env.GLOBAL_WAKE_LAST_SEQUENCE_NUMBER || ''))
+    ? process.env.GLOBAL_WAKE_LAST_SEQUENCE_NUMBER
+    : feedSequenceNumber
+  const identity = globalWakeLifecycleIdentity({
+    feedSequenceNumber,
+    feedLastSequenceNumber,
+    routeDependencyCount: routeDependencies.size,
+    configuredWakeSource: process.env.GLOBAL_WAKE_SOURCE,
+    claimedAt: process.env.GLOBAL_WAKE_CLAIMED_AT,
+    preflightStartedAt,
+  })
+  return new EventLifecycle({
+    eventId: identity.eventId,
+    source: identity.source,
+    observedAt: process.env.GLOBAL_WAKE_RECEIVED_AT || null,
+    enqueuedAt: process.env.GLOBAL_WAKE_ENQUEUED_AT || null,
+    dequeuedAt: process.env.GLOBAL_WAKE_CLAIMED_AT || null,
+    firstSequenceNumber: identity.firstSequenceNumber,
+    lastSequenceNumber: identity.lastSequenceNumber,
+  })
+    .pinState({ number: handoff.candidateHint.stateBlockNumber })
+    .setVersions({
+      catalogVersion: handoff.candidateHint.catalogVersion,
+      graphVersion: handoff.candidateHint.graphCommitment,
+    })
+    .mark('RESIDENT_SEARCH_HANDOFF_ACCEPTED', {
+      readOnlyEventId: handoff.snapshot.lifecycle?.eventId || null,
+      searchCompletedAt: handoff.completedAt,
+    })
+}
+
+async function globalCandidatePreflight(handoff) {
+  const rpcEvidence = new RpcEvidence()
+  const lifecycle = lifecycleFromGlobalHandoff(handoff)
+  lifecycle.mark('PREFLIGHT_STARTED')
+  const deployment = await withRpcEvidence(rpcEvidence, 'DEPLOYMENT_VERIFY', () => assertDeployment())
+  const graphState = await withRpcEvidence(rpcEvidence, 'COMMITTED_CATALOG_GRAPH', () => loadGlobalGraph())
+  const selected = reconstructGlobalCandidateFromHint(handoff.candidateHint, graphState)
+  lifecycle.mark('COMMITTED_ROUTE_RECONSTRUCTED', {
+    templateId: selected.templateId,
+    fundingMode: selected.fundingMode,
+  })
+  const snapshot = {
+    ...handoff.snapshot,
+    generatedAt: new Date().toISOString(),
+    evidence: 'RESIDENT_READ_ONLY_SEARCH_THEN_COMMITTED_GRAPH_RECONSTRUCTION_AND_LIVE_EXACT_REVALIDATION',
+    lifecycle: lifecycle.snapshot(),
+    searchHandoff: {
+      policy: 'MINIMAL_CANDIDATE_HINT_REBUILD_PLAN_V1',
+      searchCompletedAt: handoff.completedAt,
+      readOnlyEventId: handoff.snapshot.lifecycle?.eventId || null,
+      graphCommitment: handoff.candidateHint.graphCommitment,
+      templateId: handoff.candidateHint.templateId,
+    },
+  }
+  return { snapshot, selected, deployment, graph: graphState.graph, lifecycle, rpcEvidence }
+}
+
 async function discoverExactCandidates({ client = discoveryClient, deployment, block, lifecycle, rpcEvidence }) {
   const { earn, uniswap, graph, universe } = await withRpcEvidence(rpcEvidence, 'CATALOG_GRAPH', () =>
     loadGlobalGraph(),
   )
   lifecycle.setVersions({
-    catalogVersion: `EARN:${earn.blockNumber || 'UNKNOWN'}|UNISWAP:${uniswap.blockNumber || 'UNKNOWN'}|UNIVERSE:${universe.topologyHash || 'BASE_ONLY'}`,
+    catalogVersion: globalCatalogVersion({ earn, uniswap, universe }),
     graphVersion: graph.commitment,
   })
   lifecycle.mark('CATALOG_GRAPH_READY', {
@@ -1276,6 +1422,35 @@ async function exactNetEvaluation(candidate, deployment, block, gasPrice, graph)
     normalizedNetUsdg: await normalizedUsdg(candidate.settlementToken, netSettlement, block.number, graph),
     functionName,
   }
+}
+
+async function refreshExactCandidateFunding(candidate, deployment, block) {
+  const fundingHolder = candidate.fundingMode === 'MORPHO_FLASH' ? MORPHO : deployment.executor
+  executionFunctionName(candidate.fundingMode)
+  const [decimals, fundingAvailable] = await Promise.all([
+    executionClient.readContract({
+      address: candidate.settlementToken,
+      abi: erc20Abi,
+      functionName: 'decimals',
+      blockNumber: block.number,
+    }),
+    executionClient.readContract({
+      address: candidate.settlementToken,
+      abi: erc20Abi,
+      functionName: 'balanceOf',
+      args: [fundingHolder],
+      blockNumber: block.number,
+    }),
+  ])
+  const normalizedDecimals = Number(decimals)
+  const normalizedAvailable = BigInt(fundingAvailable)
+  if (!Number.isSafeInteger(normalizedDecimals) || normalizedDecimals < 0 || normalizedDecimals > 36) {
+    throw new Error('global candidate settlement decimals are invalid at final state')
+  }
+  if (normalizedAvailable < candidate.principal) {
+    throw new Error('global candidate principal exceeds current atomic funding')
+  }
+  return { ...candidate, decimals: normalizedDecimals, fundingAvailable: normalizedAvailable }
 }
 
 export function resetGlobalPreflightWakeState() {
@@ -2007,17 +2182,17 @@ function assertSharedAuthorization(deployment) {
   return { arm, authorizationId, parentPid }
 }
 
-async function execute() {
+async function execute({ candidateHandoff = null } = {}) {
   assertLiveTransport(runtime)
   const release = acquireLock(WALLET_LOCK_PATH, 'global-v1-wallet')
   try {
     const unresolved = latestUnresolvedMutation(readAuditRecords())
     if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
-    const deployment = await assertDeployment()
-    const shared = assertSharedAuthorization(deployment)
     let prepared
     try {
-      prepared = await globalPreflight({ print: false })
+      prepared = candidateHandoff
+        ? await globalCandidatePreflight(candidateHandoff)
+        : await globalPreflight({ print: false })
     } catch (error) {
       if (/managed RPC fallback (?:per-wake|daily) logical-call budget exhausted/i.test(errorText(error))) {
         const failureEvidence =
@@ -2050,6 +2225,8 @@ async function execute() {
       console.log(stringify(output))
       return output
     }
+    const deployment = prepared.deployment
+    const shared = assertSharedAuthorization(deployment)
     const wallet = await withRpcEvidence(prepared.rpcEvidence, 'SIGNER_PREFLIGHT', () => walletSnapshot())
     prepared.lifecycle.mark('SIGNER_PREFLIGHT_COMPLETE', {
       blockNumber: wallet.block.number,
@@ -2067,6 +2244,28 @@ async function execute() {
         'COMPLETE',
       )
       throw new Error('wallet has a pending nonce')
+    }
+    try {
+      prepared.selected = await withRpcEvidence(prepared.rpcEvidence, 'FINAL_FUNDING', () =>
+        refreshExactCandidateFunding(prepared.selected, deployment, wallet.block),
+      )
+      prepared.lifecycle.mark('FINAL_FUNDING_CONFIRMED', {
+        blockNumber: wallet.block.number,
+        fundingMode: prepared.selected.fundingMode,
+      })
+    } catch (error) {
+      const outcome = classifyEvaluationFailure(error)
+      prepared.lifecycle.mark('FINAL_FUNDING_REJECTED', {
+        decisionClassification: outcome,
+        reason: errorText(error),
+      })
+      persistGlobalLifecycle(
+        prepared,
+        'FINAL_VALIDATION_REJECTED_NO_SIGNATURE',
+        outcome,
+        ['RPC_ERROR', 'STATE_UNAVAILABLE'].includes(outcome) ? 'UNAVAILABLE' : 'COMPLETE',
+      )
+      throw error
     }
     const latestQuote = await withRpcEvidence(prepared.rpcEvidence, 'FINAL_QUOTE', () =>
       quotePlan(
@@ -2483,7 +2682,10 @@ if (isMain) {
   else if (command === 'deploy') await deploy()
   else if (command === 'preflight') await globalPreflight()
   else if (command === 'execute') await execute()
-  else if (command === 'status') await status()
+  else if (command === 'execute-candidate') {
+    const handoff = parseGlobalLiveRevalidationInput(fs.readFileSync(0, 'utf8'))
+    await execute({ candidateHandoff: handoff })
+  } else if (command === 'status') await status()
   else if (command === 'reconcile') await reconcile()
   else if (command === 'catalog-refresh') await catalogRefresh()
   else throw new Error(`unknown global command ${command}`)
