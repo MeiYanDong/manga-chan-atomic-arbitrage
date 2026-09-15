@@ -53,3 +53,9 @@ still bounded by the six-minute maintenance service deadline and never runs insi
 Stop the live watcher, reconcile the shared nonce lane and restore the preceding immutable release. Schema-v3 readers
 remain compatible with the v0.17.7 snapshot. Rebuild the catalog through the restored signer-free maintenance unit;
 never hand-edit or downgrade a schema-v4 snapshot.
+
+## Production follow-up
+
+v0.17.8 confirmed the topology improvement but two normal production refreshes remained transport-partial under the
+shared-host public-RPC load. [ADR 0092](0092-paced-transient-retry-for-public-multicall.md) adds fixed pacing and typed
+aggregate retry without changing this ADR's identity, fixed-block or signer-free boundaries.

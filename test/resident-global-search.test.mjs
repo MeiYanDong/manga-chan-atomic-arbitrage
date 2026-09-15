@@ -123,15 +123,36 @@ test('catalog access keeps every search path on the last atomic maintenance snap
       readEvidence: {
         ...schema3.uniswap.readEvidence,
         bulkRead: {
-          policy: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
+          policy: 'CANONICAL_MULTICALL3_FIXED_BLOCK_PACED_RETRY_V2',
           multicallCodeHash: '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891',
+          maximumAttempts: 3,
+          minimumRequestIntervalMs: 250,
+          retryBaseDelayMs: 750,
           rpcRequests: 2,
+          retries: 0,
+          transientFailures: 0,
           subcalls: 15,
         },
       },
     },
   }
   assert.equal(classifyGlobalCatalogAccess(schema4, { now }), 'CACHE')
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...schema4,
+        uniswap: {
+          ...schema4.uniswap,
+          readEvidence: {
+            ...schema4.uniswap.readEvidence,
+            bulkRead: { ...schema4.uniswap.readEvidence.bulkRead, retries: 3 },
+          },
+        },
+      },
+      { now },
+    ),
+    'UNAVAILABLE',
+  )
   assert.equal(
     classifyGlobalCatalogAccess(
       {
@@ -323,7 +344,7 @@ test('catalog access keeps every search path on the last atomic maintenance snap
   )
   assert.equal(classifyGlobalCatalogAccess(null, { now }), 'UNAVAILABLE')
   assert.deepEqual(GLOBAL_CATALOG_MAINTENANCE_POLICY, {
-    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V5',
+    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V6',
     refreshIntervalMs: 15 * 60 * 1_000,
     maximumAgeMs: 6 * 60 * 60 * 1_000,
     writer: 'DEDICATED_SYSTEMD_ONESHOT',
@@ -332,7 +353,7 @@ test('catalog access keeps every search path on the last atomic maintenance snap
     partialRefresh: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
     earnPartialRefresh: 'FAILED_TRANSIENT_POOL_READ_LAST_VERIFIED_V1',
     criticalRead: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
-    bulkRead: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
+    bulkRead: 'CANONICAL_MULTICALL3_FIXED_BLOCK_PACED_RETRY_V2',
   })
   assert.deepEqual(GLOBAL_CATALOG_CRITICAL_READ_POLICY, {
     version: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
@@ -341,10 +362,13 @@ test('catalog access keeps every search path on the last atomic maintenance snap
     transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
   })
   assert.deepEqual(GLOBAL_CATALOG_BULK_READ_POLICY, {
-    version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
+    version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_PACED_RETRY_V2',
     transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
     maximumSubcallsPerRequest: 12,
     concurrency: 1,
+    maximumAttempts: 3,
+    minimumRequestIntervalMs: 250,
+    retryBaseDelayMs: 750,
     runtimeCodeHash: '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891',
   })
 })

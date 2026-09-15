@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Pace canonical Multicall3 catalog requests by at least 250 ms and retry only aggregate failures classified as
+  `NETWORK`, `THROTTLED` or `STATE_NOT_READY`, at most three attempts with exponential backoff. Persist and validate
+  the fixed retry policy, actual request count, retry count and transient-failure count. Production v0.17.8 proved the
+  need: its first refresh found 29 V2 and 84 V3 pools but left 132 V3 transport failures; a normal second refresh
+  retained the 29 V2 pools and raised V3 coverage to 94, yet public throttling affected 179 V2 and 233 V3 queries.
+  Business/invariant failures still do not retry, the maintenance unit remains signer-free and public-only, and no
+  transaction, Gas, capital, profit or receipt boundary changes.
 - Replace the signer-free Global catalog's hundreds of bursty V2/V3 JSON-RPC reads with sequential, fixed-block calls
   to the code-hash-verified canonical Multicall3 contract. Each request contains at most 12 factory or pool-state
   subcalls; schema v4 validates the code identity, aggregate request count, logical subcall count and existing partial
