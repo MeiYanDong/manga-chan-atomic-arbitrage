@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Begin Global event search immediately in a resident, credential-stripped read-only worker instead of waiting behind
+  the serial Earn/signer scheduler. Busy events retain the full pool/asset/sequence union; worker failure falls back to
+  the prior bounded child, complete-evidence negative results may avoid duplicate reads, and every positive remains
+  only a hint that the sole signer must revalidate at a latest block. The worker is public-RPC-only so it cannot race
+  the signer's durable paid-RPC budget. Cache only catalog-derived topology and stream the complete bounded
+  event traversal while materializing Top-8 dependent routes, reducing representative USDG/WETH traversal time about
+  4.3x without changing capital, Gas, profit, nonce, authorization, simulation, broadcast or receipt gates.
 - Serve the sanitized operating snapshot for `/api/v1/business` directly from Nginx after an atomic, world-readable
   publication by the signer-free business reporter. Portfolio, capital and receipt evidence no longer wait behind the
   4,714-candidate market scanner's Node event loop; timestamps remain in the payload, and this adds no signer, RPC,

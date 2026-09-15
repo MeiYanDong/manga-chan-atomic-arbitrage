@@ -43,11 +43,19 @@
 9. v0.16.10/v0.16.11 将安全审计读取改为增量缓存，并兼容流式跳过唯一已知的旧版超大诊断行；
 10. 本次候选版本修复高频 Feed 信号合并的指数级字符串回流，并在网络解码前增加 8 MiB 帧上限。
 
+本次 P1 增量已经实现并有本地差分测试、但尚待生产 release 读回的部分：
+
+1. Global Feed 事件可立即进入常驻、credential-stripped 的只读 worker，与串行 Earn/signer 调度并行；
+2. catalog identity 相同时复用 canonical topology graph，动态状态仍逐请求固定区块读取；
+3. 事件循环遍历保持完整有界计数和旧排序，但只物化依赖相关 Top-8；正值仍回到唯一 signer 完整重验；
+4. worker 崩溃、超时、坏响应或超大输出只回退该信号到旧 Global child。
+
 仍未完成、不得宣称已经生效的目标：
 
-1. 所有协议的完整池状态仍未成为一个常驻、版本化、可重放的 canonical state 服务；
+1. 所有协议的完整池动态状态仍未成为一个独立、版本化、可重放的 canonical state 服务；
 2. V3 ticks、V4 hook 状态和所有 Earn 动态量还没有完整增量镜像，部分精确真值仍按候选临时读取；
-3. 图维护、粗筛、精确求解和 signer 尚未全部拆为可独立扩缩容的常驻 worker；
+3. 常驻 worker 仍属于 signer service 的受限 child；图维护、粗筛、精确求解和 signer 尚未全部拆为独立
+   OS 身份与可独立扩缩容的服务；
 4. Feed 到提交的阿里云生产路径仍受官方 Sequencer Feed 的 403/限流约束，不能把本地握手成功当生产成功；
 5. BNB、Base 与 Robinhood 的统一 schema 已有读模型，但跨链资金和签名仍是独立执行域；
 6. 没有回执的候选、竞争者成交或 shadow 正值都不能计入自身收益。

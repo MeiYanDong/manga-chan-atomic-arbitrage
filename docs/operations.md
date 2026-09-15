@@ -197,6 +197,13 @@ If deployment or execution becomes UNKNOWN, leave the watcher stopped and run `n
 `dual:reconcile`). Reconciliation may replay only the exact persisted raw transaction. Never deploy a second universal
 executor while the first deployment mutation is unresolved.
 
+The Global event lane starts one credential-stripped resident search child before the serial signer scheduler. Its
+environment has no signing authorization, managed endpoint or live arm; it uses only the official public reader and
+keeps at most one request in flight. A complete negative result can suppress an identical queued read, but a positive
+result is only a hint and always returns through the existing latest-block signer gates. The worker never writes or
+refreshes `global-catalog.json`: a missing, malformed or six-hour-stale catalog returns that wake to the bounded legacy
+child, which remains the sole catalog writer. Worker crash, timeout or protocol failure degrades that request only.
+
 ## Rollback
 
 1. disarm and stop the watcher;

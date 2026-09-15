@@ -43,11 +43,13 @@ import {
   GLOBAL_ATOMIC_ROUTE_POLICY,
   GLOBAL_GRAPH_POLICY,
   GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
+  selectAffectedAtomicSwapCycles,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
 import {
   applyGlobalEventRouteBudget,
   applyGlobalRecoveryRouteBudget,
+  globalRouteAddresses,
   GLOBAL_ROUTE_WORKSET_POLICY,
   selectGlobalRouteWorkset,
 } from '../src/global-route-selection.mjs'
@@ -85,6 +87,7 @@ import {
 } from '../src/policy.mjs'
 import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 import { RpcEvidence, instrumentRpcTransport, withRpcEvidence } from '../src/rpc-evidence.mjs'
+import { classifyGlobalCatalogAccess } from '../src/resident-global-search.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import {
   loadUniversalContractArtifact,
@@ -131,6 +134,7 @@ const chain = defineChain({
 })
 let managedFallbackBudget = null
 let managedFallbackWakeBudget = null
+let residentGraphCache = null
 
 function currentManagedFallbackBudget() {
   if (!managedFallbackBudget) {
@@ -457,30 +461,40 @@ async function refreshGlobalCatalog(blockNumber) {
     hubs: SETTLEMENT_SEEDS,
     additionalV4Pools: Array.isArray(sourceCatalog?.pools) ? sourceCatalog.pools : [],
   })
+  const generatedAt = new Date().toISOString()
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
     schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     blockNumber: BigInt(blockNumber).toString(),
     earn: { ...earn, rejected: earn.rejected.slice(0, 128) },
     uniswap: { ...uniswap, rejected: uniswap.rejected.slice(0, 128) },
   })
-  return { earn, uniswap }
+  return { earn, uniswap, generatedAt }
 }
 
 async function loadGlobalGraph(blockNumber) {
   const cached = readJson(GLOBAL_CATALOG_PATH)
-  const fresh =
-    cached?.schemaVersion === 1 &&
-    Number.isFinite(Date.parse(cached.generatedAt)) &&
-    Date.now() - Date.parse(cached.generatedAt) <= 6 * 60 * 60 * 1_000
-  const { earn, uniswap } = fresh ? cached : await refreshGlobalCatalog(blockNumber)
+  const catalogAccess = classifyGlobalCatalogAccess(cached, {
+    readOnly: process.env.GLOBAL_SEARCH_READONLY_CATALOG === '1',
+  })
+  if (catalogAccess === 'UNAVAILABLE') {
+    const error = new Error('resident global search catalog is missing or stale; legacy refresh required')
+    error.rpcClass = RpcErrorClass.STATE_NOT_READY
+    throw error
+  }
+  const source = catalogAccess === 'CACHE' ? cached : await refreshGlobalCatalog(blockNumber)
+  const { earn, uniswap } = source
+  const catalogIdentity = `${source.generatedAt || 'UNKNOWN'}:${source.blockNumber || earn.blockNumber || 'UNKNOWN'}:${uniswap.blockNumber || 'UNKNOWN'}`
+  if (residentGraphCache?.catalogIdentity === catalogIdentity) return residentGraphCache.value
   const graph = buildUnifiedLiquidityGraph({
     earnPools: earn.pools,
     v2Pools: uniswap.v2Pools,
     v3Pools: uniswap.v3Pools,
     v4Pools: uniswap.v4Pools,
   })
-  return { earn, uniswap, graph }
+  const value = { earn, uniswap, graph }
+  residentGraphCache = { catalogIdentity, value }
+  return value
 }
 
 async function catalogRefresh() {
@@ -770,18 +784,45 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
         : [...template.buyComponents.flat(), ...template.sellBpt],
   }))
   let maximumCycleHops = 4
-  let cycles
+  const eventWakeAddressSet = wakeAddressSet()
+  const eventWakeAddresses = [...eventWakeAddressSet]
+  let cycleSelection
+  const selectCycles = () => {
+    if (eventWakeAddresses.length > 0) {
+      return selectAffectedAtomicSwapCycles(graph, settlementToken, {
+        wakeAddresses: eventWakeAddresses,
+        maximumHops: maximumCycleHops,
+        maximumCycles: 20_000,
+        maximumSelected: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
+      })
+    }
+    const cycles = enumerateAtomicSwapCycles(graph, settlementToken, {
+      maximumHops: maximumCycleHops,
+      maximumCycles: 20_000,
+    })
+    return {
+      cycles,
+      selected: cycles.map((cycle) => ({
+        cycle,
+        opportunityKind: `${new Set(cycle.edges.map((edge) => edge.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${cycle.edges.length}_HOP_ATOMIC_SWAP_CYCLE`,
+      })),
+      totalCycles: cycles.length,
+      touchedCycles: 0,
+      visitedEdges: null,
+      coverage: 'COMPLETE_MATERIALIZED_RECOVERY_TRAVERSAL',
+    }
+  }
   try {
-    cycles = enumerateAtomicSwapCycles(graph, settlementToken, { maximumHops: maximumCycleHops, maximumCycles: 20_000 })
+    cycleSelection = selectCycles()
   } catch (error) {
     if (!/cycle enumeration bound exceeded/i.test(errorText(error))) throw error
     maximumCycleHops = 3
-    cycles = enumerateAtomicSwapCycles(graph, settlementToken, { maximumHops: maximumCycleHops, maximumCycles: 20_000 })
+    cycleSelection = selectCycles()
   }
-  const swaps = cycles.map((cycle) => ({
+  const swaps = cycleSelection.selected.map(({ cycle, opportunityKind }) => ({
     type: 'CYCLE',
     id: cycle.id,
-    opportunityKind: `${new Set(cycle.edges.map((edge) => edge.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${cycle.edges.length}_HOP_ATOMIC_SWAP_CYCLE`,
+    opportunityKind,
     settlementToken,
     pool: null,
     cycle,
@@ -797,9 +838,21 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
   })
   return {
     ...selected,
+    totalRoutes: bpt.length + cycleSelection.totalCycles,
+    touchedRoutes:
+      eventWakeAddresses.length > 0
+        ? bpt.filter((route) =>
+            [...globalRouteAddresses(route)].some((address) => eventWakeAddressSet.has(address.toLowerCase())),
+          ).length + cycleSelection.touchedCycles
+        : selected.touchedRoutes,
     bptRoutes: bpt.length,
-    cycleRoutes: swaps.length,
+    cycleRoutes: cycleSelection.totalCycles,
     maximumCycleHops,
+    traversal: {
+      coverage: cycleSelection.coverage,
+      visitedEdges: cycleSelection.visitedEdges,
+      retainedCycleRoutes: swaps.length,
+    },
   }
 }
 
@@ -1067,7 +1120,11 @@ async function exactNetEvaluation(candidate, deployment, block, gasPrice, graph)
   }
 }
 
-async function globalPreflight({ print = true } = {}) {
+export function resetGlobalPreflightWakeState() {
+  managedFallbackWakeBudget = null
+}
+
+export async function globalPreflight({ print = true, persist = true } = {}) {
   const preflightStartedAtMs = Date.now()
   const preflightStartedAt = new Date(preflightStartedAtMs).toISOString()
   const feedSequenceNumber = /^\d+$/.test(String(process.env.GLOBAL_WAKE_SEQUENCE_NUMBER || ''))
@@ -1273,11 +1330,13 @@ async function globalPreflight({ print = true } = {}) {
           }
         : null,
     }
-    writeProtectedJson(GLOBAL_SNAPSHOT_PATH, snapshot)
-    appendAudit('global_preflight', {
-      authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
-      ...snapshot,
-    })
+    if (persist) {
+      writeProtectedJson(GLOBAL_SNAPSHOT_PATH, snapshot)
+      appendAudit('global_preflight', {
+        authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
+        ...snapshot,
+      })
+    }
     if (print) console.log(stringify(snapshot))
     return { snapshot, selected, deployment, graph: discovery.graph, lifecycle, rpcEvidence }
   } catch (error) {
@@ -1325,11 +1384,13 @@ async function globalPreflight({ print = true } = {}) {
         calls: rpcEvidence.snapshot(),
       },
     }
-    writeProtectedJson(GLOBAL_SNAPSHOT_PATH, failureSnapshot)
-    appendAudit('global_preflight_failed', {
-      authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
-      ...failureSnapshot,
-    })
+    if (persist) {
+      writeProtectedJson(GLOBAL_SNAPSHOT_PATH, failureSnapshot)
+      appendAudit('global_preflight_failed', {
+        authorizationId: process.env.GLOBAL_SHARED_AUTHORIZATION_ID || null,
+        ...failureSnapshot,
+      })
+    }
     if (error && typeof error === 'object') error.globalPreflightEvidence = failureSnapshot
     throw error
   }
@@ -2213,15 +2274,18 @@ async function reconcile() {
   }
 }
 
-const command = process.argv[2] || 'status'
-if (command === 'compile') {
-  const { compileUniversalContract } = await import('./universal-contract-compile.mjs')
-  console.log(stringify(compileUniversalContract()))
-} else if (command === 'deploy-preflight') await deployPreflight()
-else if (command === 'deploy') await deploy()
-else if (command === 'preflight') await globalPreflight()
-else if (command === 'execute') await execute()
-else if (command === 'status') await status()
-else if (command === 'reconcile') await reconcile()
-else if (command === 'catalog-refresh') await catalogRefresh()
-else throw new Error(`unknown global command ${command}`)
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (isMain) {
+  const command = process.argv[2] || 'status'
+  if (command === 'compile') {
+    const { compileUniversalContract } = await import('./universal-contract-compile.mjs')
+    console.log(stringify(compileUniversalContract()))
+  } else if (command === 'deploy-preflight') await deployPreflight()
+  else if (command === 'deploy') await deploy()
+  else if (command === 'preflight') await globalPreflight()
+  else if (command === 'execute') await execute()
+  else if (command === 'status') await status()
+  else if (command === 'reconcile') await reconcile()
+  else if (command === 'catalog-refresh') await catalogRefresh()
+  else throw new Error(`unknown global command ${command}`)
+}
