@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Treat low-latency transport as an observed capability instead of a configured claim. Rejected managed-WSS
+  handshakes now retry after 30/60/120/240/480/900 seconds under a 15-minute ceiling rather than generating a fixed
+  30-second reconnect storm. When both managed Earn WSS and the Sequencer Feed are unavailable, critical health is
+  truthfully `DEGRADED` while public-log, periodic and board recovery continue; this state never pages Feishu by
+  itself. The public business model exposes only connected-path counts, recovery intervals and the next retry time,
+  never provider URLs, status codes or native errors. This changes no signer, principal, Gas, profit, nonce,
+  submission or receipt boundary.
 - Bound Global settlement admission by logical RPC calls instead of outer candidate count. Funding probes now run at
   two candidates times three fixed-block reads, valuation paths run at most eight calls concurrently, and only typed
   transient failures receive one bounded retry. The public snapshot exposes policy and retry counts without endpoints,

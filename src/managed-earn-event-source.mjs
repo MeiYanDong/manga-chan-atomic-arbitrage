@@ -1,5 +1,34 @@
 const DEFAULT_MAXIMUM_DEDUPE_KEYS = 4_096
 
+export const MANAGED_EARN_RECONNECT_POLICY = Object.freeze({
+  version: 'BOUNDED_EXPONENTIAL_MANAGED_WSS_RETRY_V1',
+  baseDelayMs: 30_000,
+  maximumDelayMs: 15 * 60_000,
+})
+
+/**
+ * A rejected provider handshake is not an Earn market signal. Back it off
+ * independently so one unavailable WSS endpoint cannot create a permanent
+ * 30-second reconnect storm inside the signer process.
+ *
+ * @param {number} consecutiveFailures
+ * @param {{baseDelayMs: number, maximumDelayMs: number}} [policy]
+ */
+export function managedEarnReconnectDelayMs(consecutiveFailures, policy = MANAGED_EARN_RECONNECT_POLICY) {
+  if (!Number.isSafeInteger(consecutiveFailures) || consecutiveFailures < 1) {
+    throw new Error('managed Earn reconnect failures must be a positive safe integer')
+  }
+  if (
+    !Number.isSafeInteger(policy?.baseDelayMs) ||
+    policy.baseDelayMs <= 0 ||
+    !Number.isSafeInteger(policy?.maximumDelayMs) ||
+    policy.maximumDelayMs < policy.baseDelayMs
+  ) {
+    throw new Error('managed Earn reconnect policy is invalid')
+  }
+  return Math.min(policy.maximumDelayMs, policy.baseDelayMs * 2 ** Math.min(consecutiveFailures - 1, 16))
+}
+
 function positiveInteger(value, label, maximum) {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
     throw new RangeError(`${label} must be an integer from 1 to ${maximum}`)

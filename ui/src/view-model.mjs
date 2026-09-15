@@ -169,6 +169,8 @@ export function toneForStatus(status) {
       'PARKED',
       'STALE',
       'LIMITED',
+      'PARTIAL_REALTIME',
+      'FALLBACK_ONLY',
     ].includes(status)
   ) {
     return 'proxy'
@@ -312,6 +314,10 @@ export function humanStatus(status) {
     HALTED: '已熔断',
     ARMED: '已授权',
     CONNECTED: '已连接',
+    FULL_REALTIME: '实时入口已连接',
+    PARTIAL_REALTIME: '部分实时入口可用',
+    FALLBACK_ONLY: '回补扫描运行中',
+    STARTING: '正在建立连接',
     CONFIRMED: '已确认',
     REVERTED: '已回滚',
     CURRENT: '正常',

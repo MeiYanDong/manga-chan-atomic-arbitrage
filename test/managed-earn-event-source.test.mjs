@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { ManagedEarnEventSource } from '../src/managed-earn-event-source.mjs'
+import {
+  MANAGED_EARN_RECONNECT_POLICY,
+  ManagedEarnEventSource,
+  managedEarnReconnectDelayMs,
+} from '../src/managed-earn-event-source.mjs'
 
 function log(blockNumber, transactionHash, logIndex, pool) {
   return { blockNumber, blockHash: `0x${blockNumber.toString(16)}`, transactionHash, logIndex, args: { pool } }
@@ -85,4 +89,14 @@ test('records bounded source errors without stopping the subscription', async ()
   subscription.onError(new Error('secret provider body'))
   assert.equal(source.snapshot().status, 'DEGRADED')
   assert.equal(source.snapshot().lastError, 'bounded transport failure')
+})
+
+test('backs rejected managed WSS handshakes off exponentially under a hard ceiling', () => {
+  assert.equal(managedEarnReconnectDelayMs(1), 30_000)
+  assert.equal(managedEarnReconnectDelayMs(2), 60_000)
+  assert.equal(managedEarnReconnectDelayMs(3), 120_000)
+  assert.equal(managedEarnReconnectDelayMs(6), MANAGED_EARN_RECONNECT_POLICY.maximumDelayMs)
+  assert.equal(managedEarnReconnectDelayMs(100), MANAGED_EARN_RECONNECT_POLICY.maximumDelayMs)
+  assert.throws(() => managedEarnReconnectDelayMs(0), /positive safe integer/)
+  assert.throws(() => managedEarnReconnectDelayMs(1, { baseDelayMs: 1_000, maximumDelayMs: 999 }), /policy is invalid/)
 })

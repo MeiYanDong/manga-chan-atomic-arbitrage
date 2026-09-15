@@ -12,6 +12,7 @@ import {
   dailyReportSchedule,
   deriveDeliveryState,
   formatFeishuDailyReport,
+  publicRealtimeDiscovery,
   publicRuntimeStatus,
   readPublicBusinessSnapshot,
   shanghaiDateKey,
@@ -194,6 +195,40 @@ test('an in-flight exact execution remains a healthy live process in read models
   assert.equal(publicRuntimeStatus({ status: 'HALTED_UNKNOWN' }, true), 'HALTED')
   assert.equal(publicRuntimeStatus({ status: 'RECONCILING_UNKNOWN' }, true), 'RECONCILING')
   assert.equal(publicRuntimeStatus({ status: 'RUNNING' }, false), 'STOPPED')
+})
+
+test('public real-time status exposes only useful connection and recovery facts', () => {
+  const result = publicRealtimeDiscovery(
+    {
+      earnOnHood: {
+        eventSource: { status: 'DEGRADED', subscriptionActive: false, lastError: 'secret provider failure' },
+        eventSourceRetry: { nextRetryAt: '2026-09-08T03:02:00.000Z' },
+      },
+      global: {
+        feed: {
+          connected: false,
+          lastStatus: 'REJECTED',
+          lastHttpStatus: 403,
+          feedUrl: 'wss://secret.invalid',
+          nextReconnectAt: '2026-09-08T04:00:00.000Z',
+        },
+      },
+    },
+    {
+      earnOnHood: { eventPollMs: 60_000 },
+      global: { periodicMs: 300_000 },
+    },
+  )
+  assert.deepEqual(result, {
+    status: 'FALLBACK_ONLY',
+    connectedLowLatencyPaths: 0,
+    totalLowLatencyPaths: 2,
+    fallbackStatus: 'ACTIVE',
+    earnFallbackMaximumDelaySeconds: 60,
+    globalFallbackMaximumDelaySeconds: 300,
+    nextAutomaticRetryAt: '2026-09-08T03:02:00.000Z',
+  })
+  assert.doesNotMatch(JSON.stringify(result), /secret|wss|403|provider/i)
 })
 
 test('builds receipt-gated business results and compounds only authorized profit', () => {

@@ -100,7 +100,11 @@ import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/j
 import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
 import { ProtectedStrategyScheduler } from '../src/protected-strategy-scheduler.mjs'
 import { classifyGlobalSearchHandoff, ResidentGlobalSearchClient } from '../src/resident-global-search.mjs'
-import { ManagedEarnEventSource } from '../src/managed-earn-event-source.mjs'
+import {
+  MANAGED_EARN_RECONNECT_POLICY,
+  ManagedEarnEventSource,
+  managedEarnReconnectDelayMs,
+} from '../src/managed-earn-event-source.mjs'
 import { SequencerFeedWakeClient } from '../src/sequencer-feed.mjs'
 import { loadUniversalContractArtifact } from '../src/universal-contract-artifact.mjs'
 import {
@@ -2994,7 +2998,8 @@ async function watchDual() {
     let attemptedHashes = new Set()
     let earnEventCursor = startup.wallet.blockNumber
     let lastEarnEventPollAt = 0
-    let lastManagedEarnStartAttemptAt = 0
+    let managedEarnStartFailures = 0
+    let managedEarnNextRetryAt = 0
     const readyGlobalSearchResults = new Map()
     const enqueueEarnMarketWake = (wakeReason, signal) => {
       strategyScheduler.enqueueEvent('EARN', {
@@ -3087,19 +3092,59 @@ async function watchDual() {
         writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
       },
     })
-    lastManagedEarnStartAttemptAt = Date.now()
+    const recordManagedEarnRetry = (error) => {
+      managedEarnStartFailures += 1
+      const retryAfterMs = managedEarnReconnectDelayMs(managedEarnStartFailures)
+      managedEarnNextRetryAt = Date.now() + retryAfterMs
+      watchState = {
+        ...watchState,
+        updatedAt: new Date().toISOString(),
+        earnOnHood: {
+          ...watchState.earnOnHood,
+          eventSourceRetry: {
+            policy: MANAGED_EARN_RECONNECT_POLICY.version,
+            consecutiveFailures: managedEarnStartFailures,
+            retryAfterMs,
+            nextRetryAt: new Date(managedEarnNextRetryAt).toISOString(),
+          },
+        },
+      }
+      writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+      appendAudit('earn_managed_wss_degraded', {
+        authorizationId: arm.authorizationId,
+        reason: errorText(error),
+        reconnectPolicy: MANAGED_EARN_RECONNECT_POLICY.version,
+        consecutiveFailures: managedEarnStartFailures,
+        retryAfterMs,
+      })
+    }
+    const recordManagedEarnRecovered = () => {
+      managedEarnStartFailures = 0
+      managedEarnNextRetryAt = 0
+      watchState = {
+        ...watchState,
+        updatedAt: new Date().toISOString(),
+        earnOnHood: {
+          ...watchState.earnOnHood,
+          eventSourceRetry: {
+            policy: MANAGED_EARN_RECONNECT_POLICY.version,
+            consecutiveFailures: 0,
+            retryAfterMs: null,
+            nextRetryAt: null,
+          },
+        },
+      }
+      writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+    }
     try {
       await managedEarnEventSource.start()
+      recordManagedEarnRecovered()
       appendAudit('earn_managed_wss_subscribed', {
         authorizationId: arm.authorizationId,
         policy: EARN_EVENT_SOURCE_POLICY,
       })
     } catch (error) {
-      appendAudit('earn_managed_wss_degraded', {
-        authorizationId: arm.authorizationId,
-        reason: errorText(error),
-        retryAfterMs: 30_000,
-      })
+      recordManagedEarnRetry(error)
     }
     let reconciliationTask = null
     let reconciliationHash = null
@@ -3324,21 +3369,17 @@ async function watchDual() {
         if (
           managedEarnEventSource?.snapshot().status === 'DEGRADED' &&
           !managedEarnEventSource.snapshot().subscriptionActive &&
-          Date.now() - lastManagedEarnStartAttemptAt >= 30_000
+          Date.now() >= managedEarnNextRetryAt
         ) {
-          lastManagedEarnStartAttemptAt = Date.now()
           try {
             await managedEarnEventSource.start()
+            recordManagedEarnRecovered()
             appendAudit('earn_managed_wss_recovered', {
               authorizationId: currentArm.authorizationId,
               policy: EARN_EVENT_SOURCE_POLICY,
             })
           } catch (error) {
-            appendAudit('earn_managed_wss_degraded', {
-              authorizationId: currentArm.authorizationId,
-              reason: errorText(error),
-              retryAfterMs: 30_000,
-            })
+            recordManagedEarnRetry(error)
           }
         }
         if (Date.now() - lastEarnEventPollAt >= RUNTIME_CONFIG.earnWatchEventPollMs) {

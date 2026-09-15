@@ -126,6 +126,41 @@ test('isolated market adapter failures stay degraded and do not page', () => {
   assert.equal(boardDegraded.reasonCode, 'PARTIAL_MARKET_COVERAGE')
 })
 
+test('two unavailable low-latency inputs are truthful degradation while recovery lanes stay quiet', () => {
+  const degraded = evaluateCriticalTradingHealth({
+    arm,
+    runtime: runtime({
+      earnOnHood: {
+        eventSource: { status: 'DEGRADED', subscriptionActive: false },
+      },
+      global: {
+        feed: { connected: false, lastStatus: 'REJECTED' },
+      },
+    }),
+    processAlive: true,
+    nowMs: NOW,
+  })
+  assert.equal(degraded.state, 'DEGRADED')
+  assert.equal(degraded.reasonCode, 'LOW_LATENCY_INPUTS_UNAVAILABLE')
+  assert.match(degraded.impactLabel, /回补/)
+  assert.equal(criticalAlertTransition(null, degraded), 'NONE')
+
+  const oneFastPath = evaluateCriticalTradingHealth({
+    arm,
+    runtime: runtime({
+      earnOnHood: {
+        eventSource: { status: 'SUBSCRIBED', subscriptionActive: true },
+      },
+      global: {
+        feed: { connected: false, lastStatus: 'REJECTED' },
+      },
+    }),
+    processAlive: true,
+    nowMs: NOW,
+  })
+  assert.equal(oneFastPath.state, 'HEALTHY')
+})
+
 test('critical alert policy pages only when execution is unusable or every market adapter is down', () => {
   const executionCritical = evaluateCriticalTradingHealth({
     arm,
