@@ -17,6 +17,13 @@ if [[ ! -f ${archive} || ! ${release_sha} =~ ^[0-9a-f]{40}$ ]]; then
   exit 1
 fi
 
+# A release is immutable application code shared by multiple isolated service
+# identities. Do not inherit a restrictive operator umask (for example 0077),
+# otherwise npm can create dependencies that manga-board cannot traverse. The
+# installer still assigns explicit restrictive modes to config, credentials and
+# mutable runtime directories below.
+umask 0022
+
 service_user=manga-chan-arb
 service_group=manga-chan-arb
 board_user=manga-board

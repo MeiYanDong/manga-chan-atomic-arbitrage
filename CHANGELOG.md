@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Make immutable release permissions independent from the invoking operator's `umask`. The installer now establishes
+  `0022` before extracting the archive or running npm, so isolated read-only service identities can traverse the
+  application and its dependencies even when the bootstrap caller starts under `0077`. Secrets, configuration and
+  mutable runtime directories retain explicit restrictive modes. This fixes the production-observed v0.17.12 board
+  and census import failure without changing signer, principal, Gas, profit, nonce, submission or receipt policy.
 - Treat low-latency transport as an observed capability instead of a configured claim. Rejected managed-WSS
   handshakes now retry after 30/60/120/240/480/900 seconds under a 15-minute ceiling rather than generating a fixed
   30-second reconnect storm. When both managed Earn WSS and the Sequencer Feed are unavailable, critical health is
