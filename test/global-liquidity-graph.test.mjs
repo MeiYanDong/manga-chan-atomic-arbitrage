@@ -10,6 +10,7 @@ import {
   fundingCapability,
   selectAffectedAtomicSwapCycles,
   selectBoundedManagedCandidates,
+  selectRecoveryAtomicSwapCycles,
 } from '../src/global-liquidity-graph.mjs'
 import { buildGlobalWakeFromEarnEvent } from '../src/feed-signal-coalescer.mjs'
 import { loadRobinhoodHubUniswapCatalog } from '../src/robinhood-uniswap-catalog.mjs'
@@ -165,6 +166,77 @@ test('dependency-aware event traversal keeps only its bounded best materialized 
         maximumCycles: 128,
       }),
     /requires at least one wake dependency/,
+  )
+})
+
+test('recovery traversal counts the complete universe but retains only a deterministic rotating reservoir', () => {
+  const tokens = Array.from({ length: 6 }, (_, index) => `0x${String(index + 1).padStart(40, '0')}`)
+  const v2Pools = []
+  let poolIndex = 0x100
+  for (let left = 0; left < tokens.length; left += 1) {
+    for (let right = left + 1; right < tokens.length; right += 1) {
+      v2Pools.push({
+        address: `0x${String(poolIndex).padStart(40, '0')}`,
+        token0: tokens[left],
+        token1: tokens[right],
+      })
+      poolIndex += 1
+    }
+  }
+  const graph = buildUnifiedLiquidityGraph({ v2Pools })
+  const complete = enumerateAtomicSwapCycles(graph, tokens[0], { maximumHops: 4, maximumCycles: 512 })
+  const first = selectRecoveryAtomicSwapCycles(graph, tokens[0], {
+    maximumHops: 4,
+    maximumCycles: 512,
+    maximumSelected: 5,
+    rotationSeed: 100n,
+  })
+  const repeat = selectRecoveryAtomicSwapCycles(graph, tokens[0], {
+    maximumHops: 4,
+    maximumCycles: 512,
+    maximumSelected: 5,
+    rotationSeed: 100n,
+  })
+  const rotated = selectRecoveryAtomicSwapCycles(graph, tokens[0], {
+    maximumHops: 4,
+    maximumCycles: 512,
+    maximumSelected: 5,
+    rotationSeed: 101n,
+  })
+
+  const completeIds = new Set(complete.map((cycle) => cycle.id))
+  assert.equal(first.totalCycles, complete.length)
+  assert.equal(first.cycles.length, 5)
+  assert.ok(first.materializedCycles >= first.cycles.length)
+  assert.ok(first.materializedCycles < first.totalCycles)
+  assert.ok(first.cycles.every((cycle) => completeIds.has(cycle.id)))
+  assert.deepEqual(first.cycles, repeat.cycles)
+  assert.notDeepEqual(
+    first.cycles.map((cycle) => cycle.id),
+    rotated.cycles.map((cycle) => cycle.id),
+  )
+  assert.equal(first.selectionPolicy, 'DETERMINISTIC_STREAMING_RESERVOIR_V1')
+  assert.equal(first.coverage, 'COMPLETE_BOUNDED_TOPOLOGY_TRAVERSAL')
+  assert.ok(first.visitedEdges > first.totalCycles)
+  assert.throws(
+    () =>
+      selectRecoveryAtomicSwapCycles(graph, tokens[0], {
+        maximumHops: 4,
+        maximumCycles: 512,
+        maximumSelected: 5,
+        rotationSeed: -1,
+      }),
+    /rotation seed is invalid/,
+  )
+  assert.throws(
+    () =>
+      selectRecoveryAtomicSwapCycles(graph, tokens[0], {
+        maximumHops: 4,
+        maximumCycles: 10,
+        maximumSelected: 5,
+        rotationSeed: 100n,
+      }),
+    /cycle enumeration bound exceeded/,
   )
 })
 

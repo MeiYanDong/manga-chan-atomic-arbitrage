@@ -319,33 +319,9 @@ export function enumerateAtomicSwapCycles(graph, settlementToken, options = {}) 
   const maximumCycles = finiteInteger(options.maximumCycles ?? GLOBAL_GRAPH_POLICY.maximumCycles, 'maximum cycles', 1)
   if (maximumHops > GLOBAL_GRAPH_POLICY.maximumCycleHops) throw new Error('cycle hop bound exceeded')
   const cycles = []
-  const walk = (current, path, usedPools, usedTokens) => {
-    if (path.length >= maximumHops) return
-    for (const edge of graph.adjacency.get(key(current)) || []) {
-      const edgePoolIdentity = `${edge.venue}:${edge.poolId || key(edge.pool)}`
-      if (!edge.executable || usedPools.has(edgePoolIdentity)) continue
-      const nextPath = [...path, edge]
-      if (key(edge.tokenOut) === key(settlement)) {
-        if (nextPath.length >= 2) {
-          cycles.push({
-            id: `GLOBAL_SWAP_CYCLE_${keccak256(toHex(stableStringify(nextPath.map((item) => item.id)))).slice(2, 18)}`,
-            settlementToken: settlement,
-            edges: nextPath,
-          })
-          if (cycles.length > maximumCycles) throw new Error('global cycle enumeration bound exceeded')
-        }
-        continue
-      }
-      if (usedTokens.has(key(edge.tokenOut))) continue
-      walk(
-        edge.tokenOut,
-        nextPath,
-        new Set([...usedPools, edgePoolIdentity]),
-        new Set([...usedTokens, key(edge.tokenOut)]),
-      )
-    }
-  }
-  walk(settlement, [], new Set(), new Set([key(settlement)]))
+  traverseAtomicSwapCycles(graph, settlement, { maximumHops, maximumCycles }, (path) => {
+    cycles.push(materializeCycle(settlement, path))
+  })
   return cycles.sort((left, right) => left.id.localeCompare(right.id))
 }
 
@@ -377,6 +353,118 @@ function materializeCycle(settlement, path) {
     id: `GLOBAL_SWAP_CYCLE_${keccak256(toHex(stableStringify(path.map((item) => item.id)))).slice(2, 18)}`,
     settlementToken: settlement,
     edges: [...path],
+  }
+}
+
+/**
+ * Traverse bounded simple-token/simple-pool cycles without allocating a new
+ * path and two new Sets for every explored edge. Visitors must copy the path
+ * if they retain it beyond the callback.
+ */
+function traverseAtomicSwapCycles(graph, settlement, options, visit) {
+  const path = []
+  const usedPools = new Set()
+  const usedTokens = new Set([key(settlement)])
+  let totalCycles = 0
+  let visitedEdges = 0
+
+  const walk = (current) => {
+    if (path.length >= options.maximumHops) return
+    for (const edge of graph.adjacency.get(key(current)) || []) {
+      visitedEdges += 1
+      const edgePoolIdentity = `${edge.venue}:${edge.poolId || key(edge.pool)}`
+      if (!edge.executable || usedPools.has(edgePoolIdentity)) continue
+
+      path.push(edge)
+      usedPools.add(edgePoolIdentity)
+      const outputKey = key(edge.tokenOut)
+      if (outputKey === key(settlement)) {
+        if (path.length >= 2) {
+          totalCycles += 1
+          if (totalCycles > options.maximumCycles) throw new Error('global cycle enumeration bound exceeded')
+          visit(path, totalCycles)
+        }
+      } else if (!usedTokens.has(outputKey)) {
+        usedTokens.add(outputKey)
+        walk(edge.tokenOut)
+        usedTokens.delete(outputKey)
+      }
+      usedPools.delete(edgePoolIdentity)
+      path.pop()
+    }
+  }
+
+  walk(settlement)
+  return { totalCycles, visitedEdges }
+}
+
+function normalizedRotationSeed(value) {
+  try {
+    const seed = BigInt(value ?? 0)
+    if (seed < 0n) throw new Error('negative')
+    return seed
+  } catch {
+    throw new Error('cycle rotation seed is invalid')
+  }
+}
+
+function deterministicCycleRandom(settlement, rotationSeed) {
+  const tokenSalt = Number(BigInt(key(settlement)) & 0xffff_ffffn)
+  let state = (Number(normalizedRotationSeed(rotationSeed) & 0xffff_ffffn) ^ tokenSalt ^ 0x9e37_79b9) >>> 0
+  return () => {
+    state = (state + 0x6d2b_79f5) >>> 0
+    let mixed = state
+    mixed = Math.imul(mixed ^ (mixed >>> 15), mixed | 1)
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61)
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296
+  }
+}
+
+/**
+ * Count the complete bounded recovery universe while materializing only a
+ * deterministic reservoir. Different block seeds rotate coverage without
+ * changing hop bounds or presenting the retained workset as the full graph.
+ */
+export function selectRecoveryAtomicSwapCycles(graph, settlementToken, options = {}) {
+  const settlement = address(settlementToken, 'settlement token')
+  const maximumHops = finiteInteger(
+    options.maximumHops ?? GLOBAL_GRAPH_POLICY.maximumCycleHops,
+    'maximum cycle hops',
+    2,
+  )
+  const maximumCycles = finiteInteger(options.maximumCycles ?? GLOBAL_GRAPH_POLICY.maximumCycles, 'maximum cycles', 1)
+  const maximumSelected = finiteInteger(options.maximumSelected ?? 32, 'maximum selected cycles', 1)
+  if (maximumHops > GLOBAL_GRAPH_POLICY.maximumCycleHops) throw new Error('cycle hop bound exceeded')
+  if (maximumSelected > 256) throw new Error('selected cycle bound exceeded')
+
+  const random = deterministicCycleRandom(settlement, options.rotationSeed)
+  const cycles = []
+  let materializedCycles = 0
+  const materializeSelected = (path) => {
+    materializedCycles += 1
+    return materializeCycle(settlement, path)
+  }
+  const traversal = traverseAtomicSwapCycles(graph, settlement, { maximumHops, maximumCycles }, (path, totalCycles) => {
+    if (cycles.length < maximumSelected) {
+      cycles.push(materializeSelected(path))
+      return
+    }
+    const replacement = Math.floor(random() * totalCycles)
+    if (replacement < maximumSelected) cycles[replacement] = materializeSelected(path)
+  })
+  cycles.sort((left, right) => left.id.localeCompare(right.id))
+  return {
+    cycles,
+    totalCycles: traversal.totalCycles,
+    materializedCycles,
+    touchedCycles: 0,
+    visitedEdges: traversal.visitedEdges,
+    maximumHops,
+    maximumCycles,
+    maximumSelected,
+    rotationSeed: normalizedRotationSeed(options.rotationSeed).toString(),
+    selectionPolicy: 'DETERMINISTIC_STREAMING_RESERVOIR_V1',
+    coverage: 'COMPLETE_BOUNDED_TOPOLOGY_TRAVERSAL',
   }
 }
 
@@ -413,46 +501,23 @@ export function selectAffectedAtomicSwapCycles(graph, settlementToken, options =
 
   let totalCycles = 0
   let touchedCycles = 0
-  let visitedEdges = 0
   const selected = []
-  const walk = (current, path, usedPools, usedTokens) => {
-    if (path.length >= maximumHops) return
-    for (const edge of graph.adjacency.get(key(current)) || []) {
-      visitedEdges += 1
-      const edgePoolIdentity = `${edge.venue}:${edge.poolId || key(edge.pool)}`
-      if (!edge.executable || usedPools.has(edgePoolIdentity)) continue
-      const nextPath = [...path, edge]
-      if (key(edge.tokenOut) === key(settlement)) {
-        if (nextPath.length >= 2) {
-          totalCycles += 1
-          if (totalCycles > maximumCycles) throw new Error('global cycle enumeration bound exceeded')
-          const matchedDependencies = matchedCycleDependencies(nextPath, wakeAddresses)
-          if (matchedDependencies.size > 0) {
-            touchedCycles += 1
-            const cycle = materializeCycle(settlement, nextPath)
-            const opportunityKind = `${new Set(nextPath.map((item) => item.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${nextPath.length}_HOP_ATOMIC_SWAP_CYCLE`
-            selected.push({
-              cycle,
-              opportunityKind,
-              matchedDependencyCount: matchedDependencies.size,
-              matchedDependencies: [...matchedDependencies].sort(),
-            })
-            selected.sort(affectedCycleOrder)
-            if (selected.length > maximumSelected) selected.pop()
-          }
-        }
-        continue
-      }
-      if (usedTokens.has(key(edge.tokenOut))) continue
-      walk(
-        edge.tokenOut,
-        nextPath,
-        new Set([...usedPools, edgePoolIdentity]),
-        new Set([...usedTokens, key(edge.tokenOut)]),
-      )
-    }
-  }
-  walk(settlement, [], new Set(), new Set([key(settlement)]))
+  const traversal = traverseAtomicSwapCycles(graph, settlement, { maximumHops, maximumCycles }, (path) => {
+    totalCycles += 1
+    const matchedDependencies = matchedCycleDependencies(path, wakeAddresses)
+    if (matchedDependencies.size === 0) return
+    touchedCycles += 1
+    const cycle = materializeCycle(settlement, path)
+    const opportunityKind = `${new Set(path.map((item) => item.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${path.length}_HOP_ATOMIC_SWAP_CYCLE`
+    selected.push({
+      cycle,
+      opportunityKind,
+      matchedDependencyCount: matchedDependencies.size,
+      matchedDependencies: [...matchedDependencies].sort(),
+    })
+    selected.sort(affectedCycleOrder)
+    if (selected.length > maximumSelected) selected.pop()
+  })
   return {
     cycles: selected.map((item) => item.cycle),
     selected: selected.map((item) => ({
@@ -463,7 +528,7 @@ export function selectAffectedAtomicSwapCycles(graph, settlementToken, options =
     })),
     totalCycles,
     touchedCycles,
-    visitedEdges,
+    visitedEdges: traversal.visitedEdges,
     maximumHops,
     maximumCycles,
     maximumSelected,

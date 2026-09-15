@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Stream the complete bounded Global recovery traversal into a deterministic block-rotated reservoir instead of
+  materializing, hashing and sorting every discovered cycle. The runtime still counts the full topology and preserves
+  four-hop coverage, but each settlement asset retains at most the authorized per-wake route budget before quoting.
+  Event traversal now reuses the same allocation-light backtracking core. Add a checksum-pinned release bootstrap that
+  runs the candidate archive's installer, so a new release can install systemd units unknown to the preceding release.
+  Neither change grants signing authority, raises RPC/Gas/capital limits or converts partial evidence into no-profit.
 - Remove broad Global factory discovery from every latency-critical search and signing process. A dedicated
   credential-free systemd one-shot now refreshes the atomic base-catalog snapshot from the official public RPC every
   15 minutes, under its own lock, six-minute deadline and shared-host resource bounds. Live and resident search paths

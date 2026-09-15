@@ -39,12 +39,12 @@ import {
 import {
   buildEarnBptArbitrageTemplates,
   buildUnifiedLiquidityGraph,
-  enumerateAtomicSwapCycles,
   GLOBAL_ATOMIC_ROUTE_POLICY,
   GLOBAL_GRAPH_POLICY,
   GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
   selectAffectedAtomicSwapCycles,
   selectBoundedManagedCandidates,
+  selectRecoveryAtomicSwapCycles,
 } from '../src/global-liquidity-graph.mjs'
 import {
   applyGlobalEventRouteBudget,
@@ -858,20 +858,18 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
         maximumSelected: GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
       })
     }
-    const cycles = enumerateAtomicSwapCycles(graph, settlementToken, {
+    const recovery = selectRecoveryAtomicSwapCycles(graph, settlementToken, {
       maximumHops: maximumCycleHops,
       maximumCycles: 20_000,
+      maximumSelected: runtime.globalMaxRoutesPerWake,
+      rotationSeed: blockNumber,
     })
     return {
-      cycles,
-      selected: cycles.map((cycle) => ({
+      ...recovery,
+      selected: recovery.cycles.map((cycle) => ({
         cycle,
         opportunityKind: `${new Set(cycle.edges.map((edge) => edge.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${cycle.edges.length}_HOP_ATOMIC_SWAP_CYCLE`,
       })),
-      totalCycles: cycles.length,
-      touchedCycles: 0,
-      visitedEdges: null,
-      coverage: 'COMPLETE_MATERIALIZED_RECOVERY_TRAVERSAL',
     }
   }
   try {
@@ -913,7 +911,9 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
     maximumCycleHops,
     traversal: {
       coverage: cycleSelection.coverage,
+      selectionPolicy: cycleSelection.selectionPolicy || 'EVENT_DEPENDENCY_PRIORITY',
       visitedEdges: cycleSelection.visitedEdges,
+      materializedCycleRoutes: cycleSelection.materializedCycles ?? swaps.length,
       retainedCycleRoutes: swaps.length,
     },
   }
