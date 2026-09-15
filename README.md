@@ -41,7 +41,8 @@ the official public endpoint first; a transport/rate-limit fallback has a persis
 Feed wakes require one protocol/pool address or two distinct graph assets, evaluate at most eight related routes without
 filling unrelated work, and have separate 32-call event and 8-call recovery fallback ceilings committed by
 authorization v13. The signer-free catalog compresses broad V2/V3 reads through code-hash-verified canonical
-Multicall3 calls at one fixed block, with at most 12 sequential subcalls per request. Other public discovery can retry
+Multicall3 calls at one fixed block, with at most 12 sequential subcalls per request, at least 250 ms between request
+starts and no more than three attempts for a transport-transient aggregate. Other public discovery can retry
 only a batch response's omitted logical call as a direct request to that same public endpoint. Recently verified V2/V3
 and Earn topology may survive an exact transient read failure for at most six hours; it remains visibly partial and
 never substitutes for current execution state. See
@@ -53,6 +54,7 @@ never substitutes for current execution state. See
 [ADR 0089](docs/decisions/0089-streaming-global-recovery-workset.md) plus
 [ADR 0090](docs/decisions/0090-retain-verified-topology-across-partial-catalog-refresh.md) and
 [ADR 0091](docs/decisions/0091-canonical-multicall-global-catalog.md) plus
+[ADR 0092](docs/decisions/0092-paced-transient-retry-for-public-multicall.md) and
 [the global live stories](docs/stories/global-cross-protocol-live.md). The bounded audit reader and managed Earn event
 recovery are defined by [ADR 0080](docs/decisions/0080-bounded-audit-runtime-and-managed-earn-events.md).
 

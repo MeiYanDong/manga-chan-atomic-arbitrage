@@ -15,9 +15,12 @@ export const ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY = Object.freeze({
   maximumAgeMs: 6 * 60 * 60 * 1_000,
 })
 export const ROBINHOOD_CATALOG_MULTICALL_POLICY = Object.freeze({
-  version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
+  version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_PACED_RETRY_V2',
   maximumSubcallsPerRequest: 12,
   concurrency: 1,
+  maximumAttempts: 3,
+  minimumRequestIntervalMs: 250,
+  retryBaseDelayMs: 750,
   runtimeCodeHash: MULTICALL3_RUNTIME_CODE_HASH,
 })
 
@@ -132,33 +135,77 @@ function rpcFailure(error) {
   return { error: `PUBLIC_RPC_${rpcClass}`, rpcClass }
 }
 
-async function boundedFixedBlockMulticall(client, contracts, blockNumber) {
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function multicallRuntimePolicy(options) {
+  const policy = {
+    maximumAttempts: ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumAttempts,
+    minimumRequestIntervalMs: ROBINHOOD_CATALOG_MULTICALL_POLICY.minimumRequestIntervalMs,
+    retryBaseDelayMs: ROBINHOOD_CATALOG_MULTICALL_POLICY.retryBaseDelayMs,
+    sleep: options.multicallSleep || sleep,
+    lastRequestStartedAt: 0,
+  }
+  if (!Number.isSafeInteger(policy.maximumAttempts) || policy.maximumAttempts < 1) {
+    throw new Error('Multicall maximum attempts must be a positive safe integer')
+  }
+  for (const value of [policy.minimumRequestIntervalMs, policy.retryBaseDelayMs]) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error('Multicall timing must use non-negative safe integers')
+    }
+  }
+  if (typeof policy.sleep !== 'function') throw new Error('Multicall sleep must be a function')
+  return policy
+}
+
+async function boundedFixedBlockMulticall(client, contracts, blockNumber, options) {
   const results = []
   let requests = 0
+  let retries = 0
+  let transientFailures = 0
   for (
     let offset = 0;
     offset < contracts.length;
     offset += ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest
   ) {
     const chunk = contracts.slice(offset, offset + ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest)
-    requests += 1
-    try {
-      const chunkResults = await client.multicall({
-        contracts: chunk,
-        multicallAddress: MULTICALL3,
-        allowFailure: true,
-        batchSize: 0,
-        blockNumber,
-      })
-      if (!Array.isArray(chunkResults) || chunkResults.length !== chunk.length) {
-        throw new Error('canonical Multicall3 result count mismatch')
+    let resolved = null
+    for (let attempt = 1; attempt <= options.maximumAttempts; attempt += 1) {
+      const pacingDelay = Math.max(0, options.lastRequestStartedAt + options.minimumRequestIntervalMs - Date.now())
+      if (pacingDelay > 0) await options.sleep(pacingDelay)
+      options.lastRequestStartedAt = Date.now()
+      requests += 1
+      try {
+        const chunkResults = await client.multicall({
+          contracts: chunk,
+          multicallAddress: MULTICALL3,
+          allowFailure: true,
+          batchSize: 0,
+          blockNumber,
+        })
+        if (!Array.isArray(chunkResults) || chunkResults.length !== chunk.length) {
+          throw new Error('canonical Multicall3 result count mismatch')
+        }
+        resolved = chunkResults
+        break
+      } catch (error) {
+        const transient = [RpcErrorClass.NETWORK, RpcErrorClass.THROTTLED, RpcErrorClass.STATE_NOT_READY].includes(
+          classifyRpcError(error),
+        )
+        if (transient) transientFailures += 1
+        if (!transient || attempt === options.maximumAttempts) {
+          resolved = chunk.map(() => ({ status: 'failure', error }))
+          break
+        }
+        retries += 1
+        const retryDelay = options.retryBaseDelayMs * 2 ** (attempt - 1)
+        if (retryDelay > 0) await options.sleep(retryDelay)
       }
-      results.push(...chunkResults)
-    } catch (error) {
-      results.push(...chunk.map(() => ({ status: 'failure', error })))
     }
+    results.push(...resolved)
   }
-  return { results, requests }
+  return { results, requests, retries, transientFailures }
 }
 
 async function verifiedMulticallCodeHash(client, blockNumber, options) {
@@ -319,6 +366,7 @@ export function mergeRobinhoodPartialCatalog(current, previous, options = {}) {
  * paid-RPC fanout of querying every possible pair.
  */
 export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blockNumber, options = {}) {
+  const bulkReadPolicy = multicallRuntimePolicy(options)
   const hubs = uniqueAddresses(options.hubs || [ROBINHOOD_USDG, ROBINHOOD_WETH])
   const assets = uniqueAddresses([...assetAddresses, ...hubs])
   const pairs = []
@@ -343,6 +391,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
       args: [pair.token0, pair.token1],
     })),
     blockNumber,
+    bulkReadPolicy,
   )
   const v2Results = new Array(pairs.length)
   const v2Candidates = []
@@ -372,6 +421,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
       functionName: 'getReserves',
     })),
     blockNumber,
+    bulkReadPolicy,
   )
   for (let index = 0; index < v2Candidates.length; index += 1) {
     const candidate = v2Candidates[index]
@@ -427,6 +477,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
       args: [query.token0, query.token1, query.fee],
     })),
     blockNumber,
+    bulkReadPolicy,
   )
   const v3Results = new Array(v3Queries.length)
   const v3Candidates = []
@@ -456,6 +507,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
       functionName: 'liquidity',
     })),
     blockNumber,
+    bulkReadPolicy,
   )
   for (let index = 0; index < v3Candidates.length; index += 1) {
     const candidate = v3Candidates[index]
@@ -556,7 +608,16 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
       bulkRead: {
         policy: ROBINHOOD_CATALOG_MULTICALL_POLICY.version,
         multicallCodeHash,
+        maximumAttempts: bulkReadPolicy.maximumAttempts,
+        minimumRequestIntervalMs: bulkReadPolicy.minimumRequestIntervalMs,
+        retryBaseDelayMs: bulkReadPolicy.retryBaseDelayMs,
         rpcRequests: v2FactoryRead.requests + v2StateRead.requests + v3FactoryRead.requests + v3StateRead.requests,
+        retries: v2FactoryRead.retries + v2StateRead.retries + v3FactoryRead.retries + v3StateRead.retries,
+        transientFailures:
+          v2FactoryRead.transientFailures +
+          v2StateRead.transientFailures +
+          v3FactoryRead.transientFailures +
+          v3StateRead.transientFailures,
         subcalls: pairs.length + v2Candidates.length + v3Queries.length + v3Candidates.length,
       },
     },

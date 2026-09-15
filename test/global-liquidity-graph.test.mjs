@@ -28,6 +28,7 @@ const EARN_POOL = '0x0000000000000000000000000000000000000005'
 const V3_A = '0x0000000000000000000000000000000000000011'
 const V3_B = '0x0000000000000000000000000000000000000012'
 const V4 = '0x0000000000000000000000000000000000000013'
+const NO_WAIT_MULTICALL = Object.freeze({ multicallSleep: async () => {} })
 
 function fixture() {
   return buildUnifiedLiquidityGraph({
@@ -322,6 +323,7 @@ test('catalog quarantines factory entries that have no executable liquidity', as
     },
   }
   const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    ...NO_WAIT_MULTICALL,
     expectedMulticallCodeHash: null,
   })
   assert.equal(catalog.v2Pools.length, 0)
@@ -336,7 +338,12 @@ test('catalog quarantines factory entries that have no executable liquidity', as
     bulkRead: {
       policy: ROBINHOOD_CATALOG_MULTICALL_POLICY.version,
       multicallCodeHash: null,
+      maximumAttempts: 3,
+      minimumRequestIntervalMs: 250,
+      retryBaseDelayMs: 750,
       rpcRequests: 4,
+      retries: 0,
+      transientFailures: 0,
       subcalls: 30,
     },
   })
@@ -367,6 +374,7 @@ test('catalog discovers active V2/V3 pools through bounded canonical Multicall r
     },
   }
   const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    ...NO_WAIT_MULTICALL,
     hubs: [USDG, WETH],
     expectedMulticallCodeHash: null,
   })
@@ -379,7 +387,12 @@ test('catalog discovers active V2/V3 pools through bounded canonical Multicall r
   assert.deepEqual(catalog.readEvidence.bulkRead, {
     policy: ROBINHOOD_CATALOG_MULTICALL_POLICY.version,
     multicallCodeHash: null,
+    maximumAttempts: 3,
+    minimumRequestIntervalMs: 250,
+    retryBaseDelayMs: 750,
     rpcRequests: 4,
+    retries: 0,
+    transientFailures: 0,
     subcalls: 17,
   })
   assert.equal(rpcRequests, 4)
@@ -404,6 +417,7 @@ test('catalog rejects an untrusted prior Multicall identity before making a requ
 
 test('catalog exposes typed incomplete evidence without retaining endpoints, request bodies, or calldata', async () => {
   const credentializedEndpoint = `${'https'}://${['reader', 'secret'].join(':')}@example.invalid/rpc`
+  const sleeps = []
   const client = {
     async multicall() {
       const error = new Error(`http request failed at ${credentializedEndpoint}; Request body: {"data":"0xdeadbeef"}`)
@@ -412,6 +426,7 @@ test('catalog exposes typed incomplete evidence without retaining endpoints, req
     },
   }
   const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    multicallSleep: async (milliseconds) => sleeps.push(milliseconds),
     expectedMulticallCodeHash: null,
   })
 
@@ -419,10 +434,57 @@ test('catalog exposes typed incomplete evidence without retaining endpoints, req
   assert.equal(catalog.readEvidence.complete, false)
   assert.equal(catalog.readEvidence.v2TransportErrors, 3)
   assert.equal(catalog.readEvidence.v3TransportErrors, 12)
+  assert.equal(catalog.readEvidence.bulkRead.rpcRequests, 6)
+  assert.equal(catalog.readEvidence.bulkRead.retries, 4)
+  assert.equal(catalog.readEvidence.bulkRead.transientFailures, 6)
+  assert.ok(sleeps.includes(250))
+  assert.ok(sleeps.includes(750))
+  assert.ok(sleeps.includes(1_500))
   assert.ok(catalog.rejected.every((item) => item.error === 'PUBLIC_RPC_NETWORK'))
   assert.ok(
     catalog.rejected.every((item) => !/secret|Request body|deadbeef|example\.invalid/i.test(JSON.stringify(item))),
   )
+})
+
+test('catalog retries only transient aggregate failures and records the recovered request', async () => {
+  const zero = '0x0000000000000000000000000000000000000000'
+  let requests = 0
+  const client = {
+    async multicall({ contracts }) {
+      requests += 1
+      if (requests === 1) throw new Error('429 Too Many Requests')
+      return contracts.map(() => ({ status: 'success', result: zero }))
+    },
+  }
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    ...NO_WAIT_MULTICALL,
+    expectedMulticallCodeHash: null,
+  })
+
+  assert.equal(catalog.readEvidence.complete, true)
+  assert.equal(catalog.readEvidence.bulkRead.rpcRequests, 3)
+  assert.equal(catalog.readEvidence.bulkRead.retries, 1)
+  assert.equal(catalog.readEvidence.bulkRead.transientFailures, 1)
+})
+
+test('catalog does not retry an aggregate invariant failure', async () => {
+  let requests = 0
+  const client = {
+    async multicall() {
+      requests += 1
+      throw new Error('canonical contract invariant mismatch')
+    },
+  }
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    ...NO_WAIT_MULTICALL,
+    expectedMulticallCodeHash: null,
+  })
+
+  assert.equal(requests, 2)
+  assert.equal(catalog.readEvidence.complete, false)
+  assert.equal(catalog.readEvidence.bulkRead.retries, 0)
+  assert.equal(catalog.readEvidence.bulkRead.transientFailures, 0)
+  assert.ok(catalog.rejected.every((item) => item.rpcClass === 'INVARIANT'))
 })
 
 test('partial catalog refresh retains only exact transiently failed queries inside the evidence lifetime', () => {

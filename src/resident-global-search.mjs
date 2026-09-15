@@ -24,10 +24,13 @@ export const GLOBAL_CATALOG_BULK_READ_POLICY = Object.freeze({
   transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
   maximumSubcallsPerRequest: ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest,
   concurrency: ROBINHOOD_CATALOG_MULTICALL_POLICY.concurrency,
+  maximumAttempts: ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumAttempts,
+  minimumRequestIntervalMs: ROBINHOOD_CATALOG_MULTICALL_POLICY.minimumRequestIntervalMs,
+  retryBaseDelayMs: ROBINHOOD_CATALOG_MULTICALL_POLICY.retryBaseDelayMs,
   runtimeCodeHash: ROBINHOOD_CATALOG_MULTICALL_POLICY.runtimeCodeHash,
 })
 export const GLOBAL_CATALOG_MAINTENANCE_POLICY = Object.freeze({
-  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V5',
+  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V6',
   refreshIntervalMs: GLOBAL_CATALOG_REFRESH_INTERVAL_MS,
   maximumAgeMs: GLOBAL_CATALOG_MAX_AGE_MS,
   writer: 'DEDICATED_SYSTEMD_ONESHOT',
@@ -112,18 +115,33 @@ function validEarnCatalogReadEvidence(catalog, now) {
 function validCatalogBulkReadEvidence(catalog, requestedPairs, requestedV3FeeQueries) {
   const evidence = catalog?.uniswap?.readEvidence?.bulkRead
   const rpcRequests = Number(evidence?.rpcRequests)
+  const retries = Number(evidence?.retries)
+  const transientFailures = Number(evidence?.transientFailures)
   const subcalls = Number(evidence?.subcalls)
   const maximum = ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest
   const minimumRequests = Math.ceil(requestedPairs / maximum) + Math.ceil(requestedV3FeeQueries / maximum)
-  const maximumRequests = minimumRequests * 2
+  const baseRequests = rpcRequests - retries
+  const maximumBaseRequests = minimumRequests * 2
+  const maximumRequests = maximumBaseRequests * ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumAttempts
   const minimumSubcalls = requestedPairs + requestedV3FeeQueries
   const maximumSubcalls = minimumSubcalls * 2
   return (
     evidence?.policy === ROBINHOOD_CATALOG_MULTICALL_POLICY.version &&
     evidence?.multicallCodeHash === ROBINHOOD_CATALOG_MULTICALL_POLICY.runtimeCodeHash &&
+    evidence?.maximumAttempts === ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumAttempts &&
+    evidence?.minimumRequestIntervalMs === ROBINHOOD_CATALOG_MULTICALL_POLICY.minimumRequestIntervalMs &&
+    evidence?.retryBaseDelayMs === ROBINHOOD_CATALOG_MULTICALL_POLICY.retryBaseDelayMs &&
     Number.isSafeInteger(rpcRequests) &&
     rpcRequests >= minimumRequests &&
     rpcRequests <= maximumRequests &&
+    Number.isSafeInteger(retries) &&
+    retries >= 0 &&
+    baseRequests >= minimumRequests &&
+    baseRequests <= maximumBaseRequests &&
+    retries <= baseRequests * (ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumAttempts - 1) &&
+    Number.isSafeInteger(transientFailures) &&
+    transientFailures >= retries &&
+    transientFailures <= rpcRequests &&
     Number.isSafeInteger(subcalls) &&
     subcalls >= minimumSubcalls &&
     subcalls <= maximumSubcalls
