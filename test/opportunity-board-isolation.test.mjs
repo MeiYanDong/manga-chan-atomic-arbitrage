@@ -546,10 +546,21 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(installer, /manga-critical-health\.timer/)
 
   const dualSource = fs.readFileSync(path.join(root, 'scripts', 'dual-base-arb.mjs'), 'utf8')
+  const dualArmSource = dualSource.slice(
+    dualSource.indexOf('async function armDualWatcher()'),
+    dualSource.indexOf('async function disarmDualWatcher()'),
+  )
   const dualWatchSource = dualSource.slice(
     dualSource.indexOf('async function watchDual()'),
     dualSource.indexOf('async function dualWatchStatus()'),
   )
+  const armRetry = dualArmSource.indexOf('await retryReadOnly(')
+  const armSignerLoad = dualArmSource.indexOf('loadAccount()')
+  assert.ok(armRetry >= 0, 'dual arm must retry one coherent read-only baseline on transient RPC state gaps')
+  assert.ok(armSignerLoad > armRetry, 'dual arm must not load the signer before its read-only baseline converges')
+  assert.match(dualArmSource, /shouldRetry: isTransientRpcError/)
+  assert.match(dualArmSource, /dual_arm_rpc_retry/)
+  assert.match(dualArmSource, /walletReadback\.nonceLatest !== walletReadback\.noncePending/)
   assert.match(dualWatchSource, /const requestStop = \(\) => \{[\s\S]*persistStopRequested\(\)/)
   const unresolvedGuard = dualWatchSource.indexOf('if (unresolvedNow)')
   const childDeadlineRecovery = dualWatchSource.indexOf('if (isChildProcessDeadlineError(error)')
