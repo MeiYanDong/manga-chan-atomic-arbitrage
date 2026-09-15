@@ -9,7 +9,9 @@ import {
 } from '../src/earnonhood-graph.mjs'
 import {
   buildEarnOnHoodCatalogFromOnchain,
+  EARN_PARTIAL_CATALOG_RETENTION_POLICY,
   loadEarnOnHoodOnchainCatalog,
+  mergeEarnOnHoodPartialCatalog,
   refreshEarnOnHoodCachedDynamicCatalog,
 } from '../src/earnonhood-onchain-catalog.mjs'
 import {
@@ -262,6 +264,77 @@ test('onchain catalog quarantines a paused pool and rejects inconsistent weighte
   assert.equal(catalog.rejected.length, 2)
   assert.ok(catalog.rejected.some((record) => /paused/.test(record.reason)))
   assert.ok(catalog.rejected.some((record) => /sum to one/.test(record.reason)))
+})
+
+test('Earn partial refresh retains only exact transient pool-state failures inside the evidence lifetime', () => {
+  const address = '0x0000000000000000000000000000000000000011'
+  const priorPool = pool(address, 'WETH PONS', [token(EARN_WETH, 'WETH'), token(PONS, 'PONS')])
+  const previous = {
+    source: EARN_ROUTE_DISCOVERY_POLICY.catalogSource,
+    blockNumber: '100',
+    pools: [priorPool],
+  }
+  const current = {
+    source: EARN_ROUTE_DISCOVERY_POLICY.catalogSource,
+    blockNumber: '200',
+    pools: [],
+    rejected: [{ address, reason: 'temporary', rpcClass: 'NETWORK', phase: 'POOL_STATE' }],
+  }
+  const merged = mergeEarnOnHoodPartialCatalog(current, previous, {
+    generatedAt: '2026-09-15T00:05:00.000Z',
+    previousGeneratedAt: '2026-09-15T00:00:00.000Z',
+  })
+
+  assert.equal(merged.pools.length, 1)
+  assert.equal(merged.pools[0].lastVerifiedAt, '2026-09-15T00:00:00.000Z')
+  assert.equal(merged.pools[0].catalogObservation, 'RETAINED_AFTER_CURRENT_TRANSIENT_POOL_READ_FAILURE')
+  assert.deepEqual(merged.readEvidence.topologyRetention, {
+    policy: EARN_PARTIAL_CATALOG_RETENTION_POLICY.version,
+    previousCatalogBlock: '100',
+    freshPools: 0,
+    retainedPools: 1,
+    expiredPools: 0,
+  })
+
+  const deterministic = mergeEarnOnHoodPartialCatalog(
+    {
+      ...current,
+      rejected: [{ address, reason: 'invalid state', rpcClass: 'INVARIANT', phase: 'POOL_STATE' }],
+    },
+    previous,
+    { generatedAt: '2026-09-15T00:05:00.000Z', previousGeneratedAt: '2026-09-15T00:00:00.000Z' },
+  )
+  assert.equal(deterministic.pools.length, 0)
+
+  const expired = mergeEarnOnHoodPartialCatalog(current, previous, {
+    generatedAt: '2026-09-15T06:00:00.001Z',
+    previousGeneratedAt: '2026-09-15T00:00:00.000Z',
+  })
+  assert.equal(expired.pools.length, 0)
+  assert.equal(expired.readEvidence.topologyRetention.expiredPools, 1)
+
+  const fresh = mergeEarnOnHoodPartialCatalog({ ...current, pools: [{ ...priorPool, tvlUsd: 2_000 }] }, previous, {
+    generatedAt: '2026-09-15T00:05:00.000Z',
+    previousGeneratedAt: '2026-09-15T00:00:00.000Z',
+  })
+  assert.equal(fresh.pools.length, 1)
+  assert.equal(fresh.pools[0].tvlUsd, 2_000)
+  assert.equal(fresh.pools[0].catalogObservation, 'CURRENT_FIXED_BLOCK_POOL_READ')
+})
+
+test('onchain Earn rejection preserves typed pool-state failure evidence for reconciliation', () => {
+  const address = '0x0000000000000000000000000000000000000011'
+  const catalog = buildEarnOnHoodCatalogFromOnchain({
+    blockNumber: 123n,
+    records: [{ address, error: 'temporary read failure', rpcClass: 'THROTTLED', phase: 'POOL_STATE' }],
+  })
+  assert.deepEqual(catalog.rejected[0], {
+    address,
+    name: 'UNKNOWN',
+    reason: 'temporary read failure',
+    rpcClass: 'THROTTLED',
+    phase: 'POOL_STATE',
+  })
 })
 
 test('event hot path refreshes only mutable pool state from a canonical protected catalog', async () => {

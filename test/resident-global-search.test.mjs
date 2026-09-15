@@ -5,6 +5,7 @@ import { PassThrough, Writable } from 'node:stream'
 import test from 'node:test'
 
 import {
+  GLOBAL_CATALOG_BULK_READ_POLICY,
   GLOBAL_CATALOG_CRITICAL_READ_POLICY,
   GLOBAL_CATALOG_MAINTENANCE_POLICY,
   assertGlobalCatalogMaintenanceBoundary,
@@ -97,6 +98,76 @@ test('catalog access keeps every search path on the last atomic maintenance snap
     },
   }
   assert.equal(classifyGlobalCatalogAccess(retained, { now }), 'CACHE')
+  const schema3 = {
+    ...retained,
+    schemaVersion: 3,
+    earn: {
+      pools: [],
+      readEvidence: {
+        topologyRetention: {
+          policy: 'FAILED_TRANSIENT_POOL_READ_LAST_VERIFIED_V1',
+          previousCatalogBlock: '123',
+          freshPools: 0,
+          retainedPools: 0,
+          expiredPools: 0,
+        },
+      },
+    },
+  }
+  assert.equal(classifyGlobalCatalogAccess(schema3, { now }), 'CACHE')
+  const schema3WithRetainedEarn = {
+    ...schema3,
+    earn: {
+      pools: [
+        {
+          address: POOL_A,
+          tokens: [{ address: POOL_B }, { address: POOL_C }],
+          lastVerifiedAt: '2026-09-14T23:59:00.000Z',
+          catalogObservation: 'RETAINED_AFTER_CURRENT_TRANSIENT_POOL_READ_FAILURE',
+        },
+      ],
+      readEvidence: {
+        topologyRetention: {
+          ...schema3.earn.readEvidence.topologyRetention,
+          retainedPools: 1,
+        },
+      },
+    },
+  }
+  assert.equal(classifyGlobalCatalogAccess(schema3WithRetainedEarn, { now }), 'CACHE')
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...schema3WithRetainedEarn,
+        earn: {
+          ...schema3WithRetainedEarn.earn,
+          pools: [
+            {
+              ...schema3WithRetainedEarn.earn.pools[0],
+              lastVerifiedAt: '2026-09-14T17:59:59.999Z',
+            },
+          ],
+        },
+      },
+      { now },
+    ),
+    'UNAVAILABLE',
+  )
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...schema3,
+        earn: {
+          ...schema3.earn,
+          readEvidence: {
+            topologyRetention: { ...schema3.earn.readEvidence.topologyRetention, retainedPools: 1 },
+          },
+        },
+      },
+      { now },
+    ),
+    'UNAVAILABLE',
+  )
   assert.equal(
     classifyGlobalCatalogAccess(
       {
@@ -219,20 +290,27 @@ test('catalog access keeps every search path on the last atomic maintenance snap
   )
   assert.equal(classifyGlobalCatalogAccess(null, { now }), 'UNAVAILABLE')
   assert.deepEqual(GLOBAL_CATALOG_MAINTENANCE_POLICY, {
-    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V3',
+    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V4',
     refreshIntervalMs: 15 * 60 * 1_000,
     maximumAgeMs: 6 * 60 * 60 * 1_000,
     writer: 'DEDICATED_SYSTEMD_ONESHOT',
     readPath: 'ATOMIC_CACHE_ONLY',
     rpc: 'OFFICIAL_PUBLIC_ONLY',
     partialRefresh: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
+    earnPartialRefresh: 'FAILED_TRANSIENT_POOL_READ_LAST_VERIFIED_V1',
     criticalRead: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
+    bulkRead: 'PUBLIC_BATCH_MISSING_ITEM_DIRECT_RETRY_V1',
   })
   assert.deepEqual(GLOBAL_CATALOG_CRITICAL_READ_POLICY, {
     version: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
     attempts: 3,
     delayMs: 1_000,
     transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
+  })
+  assert.deepEqual(GLOBAL_CATALOG_BULK_READ_POLICY, {
+    version: 'PUBLIC_BATCH_MISSING_ITEM_DIRECT_RETRY_V1',
+    primary: 'OFFICIAL_PUBLIC_BATCHED',
+    retry: 'FAILED_LOGICAL_CALL_OFFICIAL_PUBLIC_DIRECT',
   })
 })
 

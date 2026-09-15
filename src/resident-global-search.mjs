@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 
 import { retryReadOnly } from './event-driven-shadow.mjs'
+import { EARN_PARTIAL_CATALOG_RETENTION_POLICY } from './earnonhood-onchain-catalog.mjs'
 import { mergePendingMarketSignals } from './feed-signal-coalescer.mjs'
 import { isTransientRpcError, redactSensitiveText } from './policy.mjs'
 import { ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY } from './robinhood-uniswap-catalog.mjs'
@@ -15,15 +16,22 @@ export const GLOBAL_CATALOG_CRITICAL_READ_POLICY = Object.freeze({
   delayMs: 1_000,
   transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
 })
+export const GLOBAL_CATALOG_BULK_READ_POLICY = Object.freeze({
+  version: 'PUBLIC_BATCH_MISSING_ITEM_DIRECT_RETRY_V1',
+  primary: 'OFFICIAL_PUBLIC_BATCHED',
+  retry: 'FAILED_LOGICAL_CALL_OFFICIAL_PUBLIC_DIRECT',
+})
 export const GLOBAL_CATALOG_MAINTENANCE_POLICY = Object.freeze({
-  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V3',
+  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V4',
   refreshIntervalMs: GLOBAL_CATALOG_REFRESH_INTERVAL_MS,
   maximumAgeMs: GLOBAL_CATALOG_MAX_AGE_MS,
   writer: 'DEDICATED_SYSTEMD_ONESHOT',
   readPath: 'ATOMIC_CACHE_ONLY',
   rpc: 'OFFICIAL_PUBLIC_ONLY',
   partialRefresh: ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.version,
+  earnPartialRefresh: EARN_PARTIAL_CATALOG_RETENTION_POLICY.version,
   criticalRead: GLOBAL_CATALOG_CRITICAL_READ_POLICY.version,
+  bulkRead: GLOBAL_CATALOG_BULK_READ_POLICY.version,
 })
 
 /**
@@ -62,6 +70,40 @@ function validRequestId(value) {
   return /^[A-Za-z0-9:_-]{1,160}$/.test(String(value || ''))
 }
 
+function validPoolObservation(pool, observations, maximumAgeMs, now) {
+  const verifiedAt = Date.parse(String(pool?.lastVerifiedAt || ''))
+  const age = now - verifiedAt
+  return (
+    observations.includes(pool?.catalogObservation) &&
+    Number.isFinite(verifiedAt) &&
+    age >= -MAXIMUM_CATALOG_CLOCK_SKEW_MS &&
+    age <= maximumAgeMs
+  )
+}
+
+function validEarnCatalogReadEvidence(catalog, now) {
+  const pools = catalog?.earn?.pools
+  const retention = catalog?.earn?.readEvidence?.topologyRetention
+  if (!Array.isArray(pools)) return false
+  const counts = [retention?.freshPools, retention?.retainedPools, retention?.expiredPools].map(Number)
+  const observedFresh = pools.filter((pool) => pool.catalogObservation === 'CURRENT_FIXED_BLOCK_POOL_READ').length
+  const observedRetained = pools.length - observedFresh
+  return (
+    retention?.policy === EARN_PARTIAL_CATALOG_RETENTION_POLICY.version &&
+    counts.every((value) => Number.isSafeInteger(value) && value >= 0) &&
+    counts[0] === observedFresh &&
+    counts[1] === observedRetained &&
+    pools.every((pool) =>
+      validPoolObservation(
+        pool,
+        ['CURRENT_FIXED_BLOCK_POOL_READ', 'RETAINED_AFTER_CURRENT_TRANSIENT_POOL_READ_FAILURE'],
+        EARN_PARTIAL_CATALOG_RETENTION_POLICY.maximumAgeMs,
+        now,
+      ),
+    )
+  )
+}
+
 function validCatalogReadEvidence(catalog, now) {
   const evidence = catalog?.uniswap?.readEvidence
   const requestedPairs = Number(evidence?.requestedPairs)
@@ -80,7 +122,7 @@ function validCatalogReadEvidence(catalog, now) {
   const complete = v2TransportErrors + v3TransportErrors === 0
   if (evidence?.complete !== complete || evidence?.status !== (complete ? 'COMPLETE' : 'PARTIAL')) return false
   if (catalog?.schemaVersion === 1) return true
-  if (catalog?.schemaVersion !== 2) return false
+  if (![2, 3].includes(catalog?.schemaVersion)) return false
   const retention = evidence.topologyRetention
   const counts = [
     retention?.freshV2Pools,
@@ -93,23 +135,19 @@ function validCatalogReadEvidence(catalog, now) {
   const v2Pools = catalog.uniswap.v2Pools
   const v3Pools = catalog.uniswap.v3Pools
   const observedPools = [...v2Pools, ...v3Pools]
-  const validPoolEvidence = observedPools.every((pool) => {
-    const verifiedAt = Date.parse(String(pool?.lastVerifiedAt || ''))
-    const age = now - verifiedAt
-    return (
-      ['CURRENT_FIXED_BLOCK_READ', 'RETAINED_AFTER_CURRENT_TRANSIENT_QUERY_FAILURE'].includes(
-        pool?.catalogObservation,
-      ) &&
-      Number.isFinite(verifiedAt) &&
-      age >= -MAXIMUM_CATALOG_CLOCK_SKEW_MS &&
-      age <= ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.maximumAgeMs
-    )
-  })
+  const validPoolEvidence = observedPools.every((pool) =>
+    validPoolObservation(
+      pool,
+      ['CURRENT_FIXED_BLOCK_READ', 'RETAINED_AFTER_CURRENT_TRANSIENT_QUERY_FAILURE'],
+      ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.maximumAgeMs,
+      now,
+    ),
+  )
   const observedFreshV2 = v2Pools.filter((pool) => pool.catalogObservation === 'CURRENT_FIXED_BLOCK_READ').length
   const observedFreshV3 = v3Pools.filter((pool) => pool.catalogObservation === 'CURRENT_FIXED_BLOCK_READ').length
   const observedRetainedV2 = v2Pools.length - observedFreshV2
   const observedRetainedV3 = v3Pools.length - observedFreshV3
-  return (
+  const validUniswapEvidence =
     retention?.policy === ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.version &&
     counts.every((value) => Number.isSafeInteger(value) && value >= 0) &&
     counts[0] === observedFreshV2 &&
@@ -117,14 +155,14 @@ function validCatalogReadEvidence(catalog, now) {
     counts[2] === observedRetainedV2 &&
     counts[3] === observedRetainedV3 &&
     validPoolEvidence
-  )
+  return validUniswapEvidence && (catalog.schemaVersion === 2 || validEarnCatalogReadEvidence(catalog, now))
 }
 
 export function classifyGlobalCatalogAccess(catalog, { now = Date.now() } = {}) {
   const generatedAt = Date.parse(catalog?.generatedAt)
   const age = now - generatedAt
   const current =
-    [1, 2].includes(catalog?.schemaVersion) &&
+    [1, 2, 3].includes(catalog?.schemaVersion) &&
     Array.isArray(catalog?.earn?.pools) &&
     Array.isArray(catalog?.uniswap?.v2Pools) &&
     Array.isArray(catalog?.uniswap?.v3Pools) &&

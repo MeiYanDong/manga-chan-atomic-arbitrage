@@ -783,7 +783,8 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     globalCatalogRefresh.indexOf('mergeRobinhoodPartialCatalog') < globalCatalogRefresh.indexOf('writeProtectedJson'),
     'partial catalog topology must be merged before the atomic publication boundary',
   )
-  assert.match(globalCatalogRefresh, /schemaVersion: 2/)
+  assert.match(globalCatalogRefresh, /schemaVersion: 3/)
+  assert.match(globalCatalogRefresh, /mergeEarnOnHoodPartialCatalog\(earnRead\.value, previous\?\.earn/)
   assert.match(globalCatalogRefresh, /loadEarnOnHoodOnchainCatalog\(catalogPublicClient, blockNumber\)/)
   assert.match(globalCatalogRefresh, /maintenanceReadEvidence/)
   const catalogPublicClientStart = globalSource.indexOf('const catalogPublicClient = createPublicClient')
@@ -797,6 +798,7 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     globalSource.indexOf('function executionFunctionName'),
   )
   assert.match(catalogCommand, /catalogCriticalRead\('CHAIN_HEAD', \(\) => catalogPublicClient\.getBlock\(\)\)/)
+  assert.match(globalSource, /RPC_URL === PUBLIC_RPC[\s\S]*publicBatchWithDirectRetryTransport\(PUBLIC_RPC/)
   const globalGraphLoadStart = globalSource.indexOf('async function loadGlobalGraph')
   const globalGraphLoadEnd = globalSource.indexOf('async function catalogRefresh', globalGraphLoadStart)
   const globalGraphLoad = globalSource.slice(globalGraphLoadStart, globalGraphLoadEnd)

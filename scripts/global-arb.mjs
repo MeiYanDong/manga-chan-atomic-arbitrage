@@ -65,7 +65,7 @@ import {
   selectSettlementSearchRoots,
   selectSettlementFundingCandidates,
 } from '../src/global-settlement-assets.mjs'
-import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
+import { loadEarnOnHoodOnchainCatalog, mergeEarnOnHoodPartialCatalog } from '../src/earnonhood-onchain-catalog.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
 import {
@@ -89,7 +89,7 @@ import {
   errorText,
   latestUnresolvedMutation,
 } from '../src/policy.mjs'
-import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
+import { publicBatchWithDirectRetryTransport, publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 import { RpcEvidence, instrumentRpcTransport, withRpcEvidence } from '../src/rpc-evidence.mjs'
 import {
   assertGlobalCatalogMaintenanceBoundary,
@@ -206,13 +206,15 @@ const executionClient = createPublicClient({
 const discoveryClient = createPublicClient({
   chain,
   transport: instrumentRpcTransport(
-    publicFirstRpcTransport(PUBLIC_RPC, RPC_URL, {
-      batchSize: PUBLIC_DISCOVERY_BATCH_SIZE,
-      managedFetchFn: async (input, init) => {
-        consumeManagedFallbackBudget(init?.body)
-        return globalThis.fetch(input, init)
-      },
-    }),
+    RPC_URL === PUBLIC_RPC
+      ? publicBatchWithDirectRetryTransport(PUBLIC_RPC, { batchSize: PUBLIC_DISCOVERY_BATCH_SIZE })
+      : publicFirstRpcTransport(PUBLIC_RPC, RPC_URL, {
+          batchSize: PUBLIC_DISCOVERY_BATCH_SIZE,
+          managedFetchFn: async (input, init) => {
+            consumeManagedFallbackBudget(init?.body)
+            return globalThis.fetch(input, init)
+          },
+        }),
     'DISCOVERY_CLIENT',
   ),
 })
@@ -502,7 +504,11 @@ async function refreshGlobalCatalog(blockNumber, headRetries = 0) {
   const earnRead = await catalogCriticalRead('EARN_CANONICAL_CATALOG', () =>
     loadEarnOnHoodOnchainCatalog(catalogPublicClient, blockNumber),
   )
-  const earn = earnRead.value
+  const earnObservedAt = new Date().toISOString()
+  const earn = mergeEarnOnHoodPartialCatalog(earnRead.value, previous?.earn, {
+    generatedAt: earnObservedAt,
+    previousGeneratedAt: previous?.generatedAt,
+  })
   const earnAssets = earn.pools.flatMap((pool) => [pool.address, ...pool.tokens.map((token) => token.address)])
   const universeState = readGlobalUniverseState()
   // The rotating V4 handoff is an overlay, not durable base-catalog state.
@@ -522,7 +528,7 @@ async function refreshGlobalCatalog(blockNumber, headRetries = 0) {
     earnCatalogRetries: earnRead.retries,
   }
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt,
     blockNumber: BigInt(blockNumber).toString(),
     earn: { ...earn, rejected: earn.rejected.slice(0, 128) },
