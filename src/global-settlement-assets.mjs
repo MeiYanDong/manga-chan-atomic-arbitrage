@@ -1,9 +1,24 @@
 import { getAddress } from 'viem'
 
 export const GLOBAL_SETTLEMENT_ADMISSION_POLICY =
-  'RULES_BASED_GRAPH_CYCLE_WITH_ROTATING_FUNDING_AND_GRAPH_VERIFIED_USDG_NORMALIZATION_V2'
+  'RULES_BASED_GRAPH_CYCLE_WITH_ROTATING_FUNDING_GRAPH_VERIFIED_NORMALIZATION_AND_BOUNDED_READS_V3'
 export const GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE = 64
 export const GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE = 16
+export const GLOBAL_SETTLEMENT_READ_POLICY = Object.freeze({
+  version: 'BOUNDED_FIXED_BLOCK_SETTLEMENT_READS_V1',
+  maximumLogicalConcurrency: 8,
+  fundingCallsPerCandidate: 3,
+  fundingCandidateConcurrency: 2,
+  maximumAttempts: 2,
+  retryBaseDelayMs: 250,
+})
+
+if (
+  GLOBAL_SETTLEMENT_READ_POLICY.fundingCandidateConcurrency * GLOBAL_SETTLEMENT_READ_POLICY.fundingCallsPerCandidate >
+  GLOBAL_SETTLEMENT_READ_POLICY.maximumLogicalConcurrency
+) {
+  throw new Error('settlement funding policy exceeds the logical RPC concurrency ceiling')
+}
 
 function key(value) {
   return String(value).toLowerCase()

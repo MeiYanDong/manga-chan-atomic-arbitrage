@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bound Global settlement admission by logical RPC calls instead of outer candidate count. Funding probes now run at
+  two candidates times three fixed-block reads, valuation paths run at most eight calls concurrently, and only typed
+  transient failures receive one bounded retry. The public snapshot exposes policy and retry counts without endpoints,
+  calldata or raw errors. Production v0.17.10 proved the need: a complete 247-asset graph found funded USDG/WETH
+  liquidity, yet a 24-call funding burst left only one funded candidate and zero admitted settlement assets. This
+  changes no principal, Gas, profit, nonce, signer, simulation, submission or receipt boundary.
 - Normalize a viem `allowFailure` result array whose every subcall failed with a transient RPC classification back into
   one aggregate transport failure before applying the paced retry policy. Production v0.17.9 proved the adapter gap:
   36 V3 factory and 12 V3 state reads were returned as four all-`THROTTLED` 12-item arrays, while outer retry evidence

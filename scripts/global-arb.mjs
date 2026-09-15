@@ -36,6 +36,12 @@ import {
   classifyQuoteOutcome,
   summarizeEvaluationOutcomes,
 } from '../src/evaluation-outcome.mjs'
+import { retryReadOnly } from '../src/event-driven-shadow.mjs'
+import {
+  mapSettlementFundingCandidates,
+  mapSettlementValuationPaths,
+  settleConcurrentReads,
+} from '../src/global-settlement-read-scheduler.mjs'
 import {
   buildEarnBptArbitrageTemplates,
   buildUnifiedLiquidityGraph,
@@ -60,6 +66,7 @@ import {
   GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
   GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
   GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+  GLOBAL_SETTLEMENT_READ_POLICY,
   globalSettlementSeeds,
   rankDynamicSettlementCandidates,
   selectSettlementSearchRoots,
@@ -87,6 +94,7 @@ import {
   classifyReconciliation,
   classifyRpcError,
   errorText,
+  isTransientRpcError,
   latestUnresolvedMutation,
 } from '../src/policy.mjs'
 import { publicBatchWithDirectRetryTransport, publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
@@ -125,7 +133,7 @@ const V3_FEES = [100, 500, 3_000, 10_000]
 // while larger call batches are rate-limited. Keep broad discovery inside the
 // observed public boundary instead of spilling oversized batches into the
 // authorization-bounded managed fallback.
-const PUBLIC_DISCOVERY_BATCH_SIZE = 8
+const PUBLIC_DISCOVERY_BATCH_SIZE = GLOBAL_SETTLEMENT_READ_POLICY.maximumLogicalConcurrency
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtime = loadRuntimeConfig()
@@ -712,23 +720,21 @@ async function bestV3Quote(tokenIn, tokenOut, amountIn, blockNumber, client = ex
     }
   }
   if (paths.length === 0) throw new Error('no graph-verified V3 valuation path for settlement asset')
-  const quotes = await Promise.all(
-    paths.map(async (pathValue) => {
-      try {
-        const { result } = await client.simulateContract({
-          account: WALLET,
-          address: V3_QUOTER,
-          abi: v3QuoterAbi,
-          functionName: 'quoteExactInput',
-          args: [pathValue, amountIn],
-          blockNumber,
-        })
-        return classifyQuoteOutcome({ result: BigInt(result[0]) })
-      } catch (error) {
-        return classifyQuoteOutcome({ error })
-      }
-    }),
-  )
+  const quotes = await mapSettlementValuationPaths(paths, async (pathValue) => {
+    try {
+      const { result } = await client.simulateContract({
+        account: WALLET,
+        address: V3_QUOTER,
+        abi: v3QuoterAbi,
+        functionName: 'quoteExactInput',
+        args: [pathValue, amountIn],
+        blockNumber,
+      })
+      return classifyQuoteOutcome({ result: BigInt(result[0]) })
+    } catch (error) {
+      return classifyQuoteOutcome({ error })
+    }
+  })
   const usable = quotes.map((quote) => quote.result).filter((amount) => amount !== null && amount > 0n)
   if (usable.length === 0) {
     const evidence = summarizeEvaluationOutcomes(quotes)
@@ -792,30 +798,45 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
     (candidate) =>
       hasValuationPath(ROBINHOOD_WETH, candidate.token) && hasValuationPath(candidate.token, ROBINHOOD_USDG),
   )
-  const checked = await mapWithConcurrency(valuationCandidates, PUBLIC_DISCOVERY_BATCH_SIZE, async (candidate) => {
+  let fundingReadRetries = 0
+  let valuationReadRetries = 0
+  const retryOptions = (lane) => ({
+    attempts: GLOBAL_SETTLEMENT_READ_POLICY.maximumAttempts,
+    delayMs: GLOBAL_SETTLEMENT_READ_POLICY.retryBaseDelayMs,
+    shouldRetry: isTransientRpcError,
+    onRetry: () => {
+      if (lane === 'FUNDING') fundingReadRetries += 1
+      else valuationReadRetries += 1
+    },
+  })
+  const checked = await mapSettlementFundingCandidates(valuationCandidates, async (candidate) => {
     try {
-      const [decimals, morphoLiquidity, inventory] = await Promise.all([
-        client.readContract({
-          address: candidate.token,
-          abi: erc20Abi,
-          functionName: 'decimals',
-          blockNumber: block.number,
-        }),
-        client.readContract({
-          address: candidate.token,
-          abi: erc20Abi,
-          functionName: 'balanceOf',
-          args: [MORPHO],
-          blockNumber: block.number,
-        }),
-        client.readContract({
-          address: candidate.token,
-          abi: erc20Abi,
-          functionName: 'balanceOf',
-          args: [deployment.executor],
-          blockNumber: block.number,
-        }),
-      ])
+      const [decimals, morphoLiquidity, inventory] = await retryReadOnly(
+        () =>
+          settleConcurrentReads([
+            client.readContract({
+              address: candidate.token,
+              abi: erc20Abi,
+              functionName: 'decimals',
+              blockNumber: block.number,
+            }),
+            client.readContract({
+              address: candidate.token,
+              abi: erc20Abi,
+              functionName: 'balanceOf',
+              args: [MORPHO],
+              blockNumber: block.number,
+            }),
+            client.readContract({
+              address: candidate.token,
+              abi: erc20Abi,
+              functionName: 'balanceOf',
+              args: [deployment.executor],
+              blockNumber: block.number,
+            }),
+          ]),
+        retryOptions('FUNDING'),
+      )
       return assessSettlementFunding(candidate, { decimals, morphoLiquidity, inventory })
     } catch (error) {
       return {
@@ -836,21 +857,13 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
   for (const candidate of checked.filter((item) => !item.rejected)) {
     if (admitted.length >= GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE) break
     try {
-      const settlementProbe = await bestV3Quote(
-        ROBINHOOD_WETH,
-        candidate.token,
-        valuationProbeWethWei,
-        block.number,
-        client,
-        graph,
+      const settlementProbe = await retryReadOnly(
+        () => bestV3Quote(ROBINHOOD_WETH, candidate.token, valuationProbeWethWei, block.number, client, graph),
+        retryOptions('VALUATION'),
       )
-      const normalizedProbe = await bestV3Quote(
-        candidate.token,
-        ROBINHOOD_USDG,
-        settlementProbe,
-        block.number,
-        client,
-        graph,
+      const normalizedProbe = await retryReadOnly(
+        () => bestV3Quote(candidate.token, ROBINHOOD_USDG, settlementProbe, block.number, client, graph),
+        retryOptions('VALUATION'),
       )
       if (settlementProbe <= 0n || normalizedProbe <= 0n) throw new Error('valuation quote is non-positive')
       admitted.push({
@@ -888,6 +901,11 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
     deferred: fundingWorkset.deferred,
     maximumAdmitted: GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
     evidence: 'GRAPH_STRUCTURE_PLUS_FIXED_BLOCK_FUNDING_AND_EXECUTABLE_VALUATION',
+    readEvidence: {
+      ...GLOBAL_SETTLEMENT_READ_POLICY,
+      fundingReadRetries,
+      valuationReadRetries,
+    },
   }
 }
 
@@ -1457,6 +1475,7 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
           rejected: discovery.settlementAdmission.rejected.length,
           deferred: discovery.settlementAdmission.deferred,
           maximumAdmitted: discovery.settlementAdmission.maximumAdmitted,
+          readEvidence: discovery.settlementAdmission.readEvidence,
         },
         routeCoverage: discovery.routeCoverage,
       },

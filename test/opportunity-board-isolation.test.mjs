@@ -717,8 +717,16 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.doesNotMatch(globalSource, /from '\.\/universal-contract-compile\.mjs'/)
   assert.match(globalSource, /manual global execution requires GLOBAL_LIVE_ARM=1/)
   assert.match(globalSource, /publicFirstRpcTransport\(PUBLIC_RPC, RPC_URL/)
-  assert.match(globalSource, /const PUBLIC_DISCOVERY_BATCH_SIZE = 8/)
+  assert.match(
+    globalSource,
+    /const PUBLIC_DISCOVERY_BATCH_SIZE = GLOBAL_SETTLEMENT_READ_POLICY\.maximumLogicalConcurrency/,
+  )
   assert.match(globalSource, /batchSize: PUBLIC_DISCOVERY_BATCH_SIZE/)
+  assert.match(globalSource, /mapSettlementFundingCandidates\(valuationCandidates/)
+  assert.match(globalSource, /mapSettlementValuationPaths\(paths/)
+  assert.match(globalSource, /settleConcurrentReads\(\[/)
+  assert.match(globalSource, /retryOptions\('FUNDING'\)/)
+  assert.match(globalSource, /retryOptions\('VALUATION'\)/)
   assert.match(globalSource, /consumeManagedFallbackBudget\(init\?\.body\)/)
   assert.match(globalSource, /global-rpc-fallback-budget\.json/)
   assert.match(globalSource, /BigInt\(arm\.global\.minimumNetProfitUsdgWei\) !== MINIMUM_NET_USDG/)

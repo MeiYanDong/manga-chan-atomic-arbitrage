@@ -6,6 +6,7 @@ import {
   classifyGlobalSearchReadiness,
   enumerateV3ValuationRoutes,
   GLOBAL_SETTLEMENT_ADMISSION_POLICY,
+  GLOBAL_SETTLEMENT_READ_POLICY,
   globalSettlementSeeds,
   rankDynamicSettlementCandidates,
   selectSettlementSearchRoots,
@@ -16,6 +17,24 @@ import { buildUnifiedLiquidityGraph } from '../src/global-liquidity-graph.mjs'
 const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168'
 const WETH = '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73'
 const EXTRA = '0xA3b6AEe90017b72c0812dC1e013De70eB2917ba3'
+
+test('settlement reads cap nested funding fanout by logical RPC calls', () => {
+  assert.match(GLOBAL_SETTLEMENT_ADMISSION_POLICY, /BOUNDED_READS_V3$/)
+  assert.equal(
+    GLOBAL_SETTLEMENT_READ_POLICY.fundingCandidateConcurrency * GLOBAL_SETTLEMENT_READ_POLICY.fundingCallsPerCandidate,
+    6,
+  )
+  assert.ok(
+    GLOBAL_SETTLEMENT_READ_POLICY.fundingCandidateConcurrency *
+      GLOBAL_SETTLEMENT_READ_POLICY.fundingCallsPerCandidate <=
+      GLOBAL_SETTLEMENT_READ_POLICY.maximumLogicalConcurrency,
+  )
+  assert.ok(
+    (GLOBAL_SETTLEMENT_READ_POLICY.fundingCandidateConcurrency + 1) *
+      GLOBAL_SETTLEMENT_READ_POLICY.fundingCallsPerCandidate >
+      GLOBAL_SETTLEMENT_READ_POLICY.maximumLogicalConcurrency,
+  )
+})
 
 test('settlement seed set deduplicates defaults and explicit priorities', () => {
   assert.deepEqual(globalSettlementSeeds([USDG, WETH], `${USDG.toLowerCase()}, ${EXTRA}`), [USDG, WETH, EXTRA])
