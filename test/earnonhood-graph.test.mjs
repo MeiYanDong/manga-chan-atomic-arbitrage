@@ -331,7 +331,7 @@ test('onchain Earn rejection preserves typed pool-state failure evidence for rec
   assert.deepEqual(catalog.rejected[0], {
     address,
     name: 'UNKNOWN',
-    reason: 'temporary read failure',
+    reason: 'PUBLIC_RPC_THROTTLED',
     rpcClass: 'THROTTLED',
     phase: 'POOL_STATE',
   })

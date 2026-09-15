@@ -783,9 +783,11 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     globalCatalogRefresh.indexOf('mergeRobinhoodPartialCatalog') < globalCatalogRefresh.indexOf('writeProtectedJson'),
     'partial catalog topology must be merged before the atomic publication boundary',
   )
-  assert.match(globalCatalogRefresh, /schemaVersion: 3/)
+  assert.match(globalCatalogRefresh, /schemaVersion: 4/)
   assert.match(globalCatalogRefresh, /mergeEarnOnHoodPartialCatalog\(earnRead\.value, previous\?\.earn/)
   assert.match(globalCatalogRefresh, /loadEarnOnHoodOnchainCatalog\(catalogPublicClient, blockNumber\)/)
+  assert.match(globalCatalogRefresh, /loadRobinhoodHubUniswapCatalog\(catalogPublicClient, earnAssets, blockNumber/)
+  assert.match(globalCatalogRefresh, /verifiedMulticallCodeHash: earn\.multicallCodeHash/)
   assert.match(globalCatalogRefresh, /maintenanceReadEvidence/)
   const catalogPublicClientStart = globalSource.indexOf('const catalogPublicClient = createPublicClient')
   const catalogPublicClientEnd = globalSource.indexOf('const erc20Abi', catalogPublicClientStart)

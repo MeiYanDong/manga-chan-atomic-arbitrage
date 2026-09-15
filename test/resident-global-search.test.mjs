@@ -115,6 +115,39 @@ test('catalog access keeps every search path on the last atomic maintenance snap
     },
   }
   assert.equal(classifyGlobalCatalogAccess(schema3, { now }), 'CACHE')
+  const schema4 = {
+    ...schema3,
+    schemaVersion: 4,
+    uniswap: {
+      ...schema3.uniswap,
+      readEvidence: {
+        ...schema3.uniswap.readEvidence,
+        bulkRead: {
+          policy: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
+          multicallCodeHash: '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891',
+          rpcRequests: 2,
+          subcalls: 15,
+        },
+      },
+    },
+  }
+  assert.equal(classifyGlobalCatalogAccess(schema4, { now }), 'CACHE')
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...schema4,
+        uniswap: {
+          ...schema4.uniswap,
+          readEvidence: {
+            ...schema4.uniswap.readEvidence,
+            bulkRead: { ...schema4.uniswap.readEvidence.bulkRead, multicallCodeHash: `0x${'00'.repeat(32)}` },
+          },
+        },
+      },
+      { now },
+    ),
+    'UNAVAILABLE',
+  )
   const schema3WithRetainedEarn = {
     ...schema3,
     earn: {
@@ -290,7 +323,7 @@ test('catalog access keeps every search path on the last atomic maintenance snap
   )
   assert.equal(classifyGlobalCatalogAccess(null, { now }), 'UNAVAILABLE')
   assert.deepEqual(GLOBAL_CATALOG_MAINTENANCE_POLICY, {
-    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V4',
+    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V5',
     refreshIntervalMs: 15 * 60 * 1_000,
     maximumAgeMs: 6 * 60 * 60 * 1_000,
     writer: 'DEDICATED_SYSTEMD_ONESHOT',
@@ -299,7 +332,7 @@ test('catalog access keeps every search path on the last atomic maintenance snap
     partialRefresh: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
     earnPartialRefresh: 'FAILED_TRANSIENT_POOL_READ_LAST_VERIFIED_V1',
     criticalRead: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
-    bulkRead: 'PUBLIC_BATCH_MISSING_ITEM_DIRECT_RETRY_V1',
+    bulkRead: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
   })
   assert.deepEqual(GLOBAL_CATALOG_CRITICAL_READ_POLICY, {
     version: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
@@ -308,9 +341,11 @@ test('catalog access keeps every search path on the last atomic maintenance snap
     transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
   })
   assert.deepEqual(GLOBAL_CATALOG_BULK_READ_POLICY, {
-    version: 'PUBLIC_BATCH_MISSING_ITEM_DIRECT_RETRY_V1',
-    primary: 'OFFICIAL_PUBLIC_BATCHED',
-    retry: 'FAILED_LOGICAL_CALL_OFFICIAL_PUBLIC_DIRECT',
+    version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
+    transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
+    maximumSubcallsPerRequest: 12,
+    concurrency: 1,
+    runtimeCodeHash: '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891',
   })
 })
 

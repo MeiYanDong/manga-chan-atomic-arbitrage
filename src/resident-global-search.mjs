@@ -4,7 +4,10 @@ import { retryReadOnly } from './event-driven-shadow.mjs'
 import { EARN_PARTIAL_CATALOG_RETENTION_POLICY } from './earnonhood-onchain-catalog.mjs'
 import { mergePendingMarketSignals } from './feed-signal-coalescer.mjs'
 import { isTransientRpcError, redactSensitiveText } from './policy.mjs'
-import { ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY } from './robinhood-uniswap-catalog.mjs'
+import {
+  ROBINHOOD_CATALOG_MULTICALL_POLICY,
+  ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY,
+} from './robinhood-uniswap-catalog.mjs'
 
 export const GLOBAL_SEARCH_WORKER_POLICY = 'RESIDENT_SIGNER_FREE_EVENT_SEARCH_V1'
 export const GLOBAL_SEARCH_PROTOCOL_VERSION = 1
@@ -17,12 +20,14 @@ export const GLOBAL_CATALOG_CRITICAL_READ_POLICY = Object.freeze({
   transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
 })
 export const GLOBAL_CATALOG_BULK_READ_POLICY = Object.freeze({
-  version: 'PUBLIC_BATCH_MISSING_ITEM_DIRECT_RETRY_V1',
-  primary: 'OFFICIAL_PUBLIC_BATCHED',
-  retry: 'FAILED_LOGICAL_CALL_OFFICIAL_PUBLIC_DIRECT',
+  version: ROBINHOOD_CATALOG_MULTICALL_POLICY.version,
+  transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
+  maximumSubcallsPerRequest: ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest,
+  concurrency: ROBINHOOD_CATALOG_MULTICALL_POLICY.concurrency,
+  runtimeCodeHash: ROBINHOOD_CATALOG_MULTICALL_POLICY.runtimeCodeHash,
 })
 export const GLOBAL_CATALOG_MAINTENANCE_POLICY = Object.freeze({
-  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V4',
+  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V5',
   refreshIntervalMs: GLOBAL_CATALOG_REFRESH_INTERVAL_MS,
   maximumAgeMs: GLOBAL_CATALOG_MAX_AGE_MS,
   writer: 'DEDICATED_SYSTEMD_ONESHOT',
@@ -104,6 +109,27 @@ function validEarnCatalogReadEvidence(catalog, now) {
   )
 }
 
+function validCatalogBulkReadEvidence(catalog, requestedPairs, requestedV3FeeQueries) {
+  const evidence = catalog?.uniswap?.readEvidence?.bulkRead
+  const rpcRequests = Number(evidence?.rpcRequests)
+  const subcalls = Number(evidence?.subcalls)
+  const maximum = ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest
+  const minimumRequests = Math.ceil(requestedPairs / maximum) + Math.ceil(requestedV3FeeQueries / maximum)
+  const maximumRequests = minimumRequests * 2
+  const minimumSubcalls = requestedPairs + requestedV3FeeQueries
+  const maximumSubcalls = minimumSubcalls * 2
+  return (
+    evidence?.policy === ROBINHOOD_CATALOG_MULTICALL_POLICY.version &&
+    evidence?.multicallCodeHash === ROBINHOOD_CATALOG_MULTICALL_POLICY.runtimeCodeHash &&
+    Number.isSafeInteger(rpcRequests) &&
+    rpcRequests >= minimumRequests &&
+    rpcRequests <= maximumRequests &&
+    Number.isSafeInteger(subcalls) &&
+    subcalls >= minimumSubcalls &&
+    subcalls <= maximumSubcalls
+  )
+}
+
 function validCatalogReadEvidence(catalog, now) {
   const evidence = catalog?.uniswap?.readEvidence
   const requestedPairs = Number(evidence?.requestedPairs)
@@ -122,7 +148,7 @@ function validCatalogReadEvidence(catalog, now) {
   const complete = v2TransportErrors + v3TransportErrors === 0
   if (evidence?.complete !== complete || evidence?.status !== (complete ? 'COMPLETE' : 'PARTIAL')) return false
   if (catalog?.schemaVersion === 1) return true
-  if (![2, 3].includes(catalog?.schemaVersion)) return false
+  if (![2, 3, 4].includes(catalog?.schemaVersion)) return false
   const retention = evidence.topologyRetention
   const counts = [
     retention?.freshV2Pools,
@@ -155,14 +181,17 @@ function validCatalogReadEvidence(catalog, now) {
     counts[2] === observedRetainedV2 &&
     counts[3] === observedRetainedV3 &&
     validPoolEvidence
-  return validUniswapEvidence && (catalog.schemaVersion === 2 || validEarnCatalogReadEvidence(catalog, now))
+  const validEarnEvidence = catalog.schemaVersion === 2 || validEarnCatalogReadEvidence(catalog, now)
+  const validBulkEvidence =
+    catalog.schemaVersion !== 4 || validCatalogBulkReadEvidence(catalog, requestedPairs, requestedV3FeeQueries)
+  return validUniswapEvidence && validEarnEvidence && validBulkEvidence
 }
 
 export function classifyGlobalCatalogAccess(catalog, { now = Date.now() } = {}) {
   const generatedAt = Date.parse(catalog?.generatedAt)
   const age = now - generatedAt
   const current =
-    [1, 2, 3].includes(catalog?.schemaVersion) &&
+    [1, 2, 3, 4].includes(catalog?.schemaVersion) &&
     Array.isArray(catalog?.earn?.pools) &&
     Array.isArray(catalog?.uniswap?.v2Pools) &&
     Array.isArray(catalog?.uniswap?.v3Pools) &&

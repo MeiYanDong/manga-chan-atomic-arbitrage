@@ -40,10 +40,11 @@ Sequencer submission, and any managed-RPC fallback must broadcast the identical 
 the official public endpoint first; a transport/rate-limit fallback has a persisted 20,000-logical-call daily ceiling.
 Feed wakes require one protocol/pool address or two distinct graph assets, evaluate at most eight related routes without
 filling unrelated work, and have separate 32-call event and 8-call recovery fallback ceilings committed by
-authorization v13. The signer-free catalog batches broad public reads, but retries only a batch response's omitted
-logical call as a direct request to that same public endpoint. Recently verified V2/V3 and Earn topology may survive an
-exact transient read failure for at most six hours; it remains visibly partial and never substitutes for current
-execution state. See
+authorization v13. The signer-free catalog compresses broad V2/V3 reads through code-hash-verified canonical
+Multicall3 calls at one fixed block, with at most 12 sequential subcalls per request. Other public discovery can retry
+only a batch response's omitted logical call as a direct request to that same public endpoint. Recently verified V2/V3
+and Earn topology may survive an exact transient read failure for at most six hours; it remains visibly partial and
+never substitutes for current execution state. See
 [ADR 0060](docs/decisions/0060-universal-cross-protocol-atomic-execution.md),
 [ADR 0063](docs/decisions/0063-bounded-public-first-global-rpc-fallback.md),
 [ADR 0064](docs/decisions/0064-sequencer-wake-relevance-and-per-wake-rpc-budget.md) and
@@ -51,6 +52,7 @@ execution state. See
 [ADR 0085](docs/decisions/0085-versioned-global-universe-projection.md) and
 [ADR 0089](docs/decisions/0089-streaming-global-recovery-workset.md) plus
 [ADR 0090](docs/decisions/0090-retain-verified-topology-across-partial-catalog-refresh.md) and
+[ADR 0091](docs/decisions/0091-canonical-multicall-global-catalog.md) plus
 [the global live stories](docs/stories/global-cross-protocol-live.md). The bounded audit reader and managed Earn event
 recovery are defined by [ADR 0080](docs/decisions/0080-bounded-audit-runtime-and-managed-earn-events.md).
 

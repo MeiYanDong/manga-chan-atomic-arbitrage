@@ -175,11 +175,12 @@ export function buildEarnOnHoodCatalogFromOnchain({ records, blockNumber, factor
   const rejected = []
   for (const record of records) {
     if (record?.error) {
+      const rpcClass = record.rpcClass || RpcErrorClass.INVARIANT
       rejected.push({
         address: record.address || null,
         name: record.name || 'UNKNOWN',
-        reason: publicError(record.error),
-        rpcClass: record.rpcClass || RpcErrorClass.INVARIANT,
+        reason: `PUBLIC_RPC_${rpcClass}`,
+        rpcClass,
         phase: record.phase || 'UNKNOWN',
       })
       continue
@@ -402,10 +403,11 @@ export async function loadEarnOnHoodOnchainCatalog(client, blockNumber, options 
     const failed = [immutableResult, dynamicResult].find((result) => result?.status !== 'success')
     if (failed) {
       const error = failed.error || 'weighted pool read failed'
+      const rpcClass = classifyRpcError(error)
       return {
         address,
-        error: publicError(error),
-        rpcClass: classifyRpcError(error),
+        error: `PUBLIC_RPC_${rpcClass}`,
+        rpcClass,
         phase: 'POOL_STATE',
       }
     }
@@ -476,6 +478,7 @@ export async function loadEarnOnHoodOnchainCatalog(client, blockNumber, options 
     ...catalog,
     discoveredFactoryPools: factoryPools.length,
     reviewedLegacyPools: EARN_REVIEWED_LEGACY_OMNIPOOLS.length,
+    multicallCodeHash: keccak256(multicallCode),
   }
 }
 
@@ -510,10 +513,13 @@ export async function refreshEarnOnHoodCachedDynamicCatalog(client, cached, bloc
     const pool = cached.pools[index]
     const result = dynamicResults[index]
     if (result?.status !== 'success') {
+      const rpcClass = classifyRpcError(result?.error || 'dynamic weighted pool read failed')
       refreshRejected.push({
         address: pool.address,
         name: pool.name || shortAddress(pool.address),
-        reason: publicError(result?.error || 'dynamic weighted pool read failed'),
+        reason: `PUBLIC_RPC_${rpcClass}`,
+        rpcClass,
+        phase: 'POOL_STATE',
       })
       continue
     }
