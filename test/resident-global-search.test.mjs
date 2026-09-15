@@ -21,15 +21,101 @@ test('catalog access keeps legacy refresh as the only writer', () => {
   const now = Date.parse('2026-09-15T00:00:00.000Z')
   const topology = {
     earn: { pools: [] },
-    uniswap: { v2Pools: [], v3Pools: [], v4Pools: [] },
+    uniswap: {
+      v2Pools: [],
+      v3Pools: [],
+      v4Pools: [],
+      readEvidence: {
+        status: 'COMPLETE',
+        complete: true,
+        requestedPairs: 3,
+        requestedV3FeeQueries: 12,
+        v2TransportErrors: 0,
+        v3TransportErrors: 0,
+      },
+    },
   }
   const fresh = { schemaVersion: 1, generatedAt: '2026-09-14T23:59:00.000Z', ...topology }
   const stale = { schemaVersion: 1, generatedAt: '2026-09-14T17:59:59.999Z', ...topology }
   assert.equal(classifyGlobalCatalogAccess(fresh, { readOnly: true, now }), 'CACHE')
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...fresh,
+        generatedAt: '2026-09-14T23:54:00.000Z',
+        uniswap: {
+          ...fresh.uniswap,
+          readEvidence: {
+            status: 'PARTIAL',
+            complete: false,
+            requestedPairs: 3,
+            requestedV3FeeQueries: 12,
+            v2TransportErrors: 1,
+            v3TransportErrors: 2,
+          },
+        },
+      },
+      { readOnly: true, now },
+    ),
+    'CACHE',
+  )
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...fresh,
+        generatedAt: '2026-09-14T23:54:00.000Z',
+        uniswap: {
+          ...fresh.uniswap,
+          readEvidence: {
+            status: 'PARTIAL',
+            complete: false,
+            requestedPairs: 3,
+            requestedV3FeeQueries: 12,
+            v2TransportErrors: 1,
+            v3TransportErrors: 2,
+          },
+        },
+      },
+      { readOnly: false, now },
+    ),
+    'REFRESH',
+  )
   assert.equal(classifyGlobalCatalogAccess(stale, { readOnly: true, now }), 'UNAVAILABLE')
   assert.equal(classifyGlobalCatalogAccess(stale, { readOnly: false, now }), 'REFRESH')
   assert.equal(
     classifyGlobalCatalogAccess({ schemaVersion: 1, generatedAt: '2026-09-14T23:59:00.000Z' }, { readOnly: true, now }),
+    'UNAVAILABLE',
+  )
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        schemaVersion: 1,
+        generatedAt: '2026-09-14T23:59:00.000Z',
+        earn: { pools: [] },
+        uniswap: { v2Pools: [], v3Pools: [], v4Pools: [] },
+      },
+      { readOnly: true, now },
+    ),
+    'UNAVAILABLE',
+  )
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...fresh,
+        uniswap: {
+          ...fresh.uniswap,
+          readEvidence: {
+            status: 'COMPLETE',
+            complete: false,
+            requestedPairs: 3,
+            requestedV3FeeQueries: 12,
+            v2TransportErrors: 1,
+            v3TransportErrors: 0,
+          },
+        },
+      },
+      { readOnly: true, now },
+    ),
     'UNAVAILABLE',
   )
   assert.equal(classifyGlobalCatalogAccess(null, { readOnly: true, now }), 'UNAVAILABLE')

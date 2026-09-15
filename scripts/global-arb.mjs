@@ -468,16 +468,12 @@ async function refreshGlobalCatalog(blockNumber) {
   const earn = await loadEarnOnHoodOnchainCatalog(discoveryClient, blockNumber)
   const earnAssets = earn.pools.flatMap((pool) => [pool.address, ...pool.tokens.map((token) => token.address)])
   const universeState = readGlobalUniverseState()
-  const universeAssets = universeState.projection?.assets || []
-  const uniswap = await loadRobinhoodHubUniswapCatalog(
-    discoveryClient,
-    [...earnAssets, ...universeAssets],
-    blockNumber,
-    {
-      hubs: SETTLEMENT_SEEDS,
-      additionalV4Pools: universeState.projection?.v4Pools || [],
-    },
-  )
+  // The rotating V4 handoff is an overlay, not durable base-catalog state.
+  // Persisting it here makes the same PoolKeys look duplicated on the next
+  // read and lets an old rotation consume the current graph's capacity.
+  const uniswap = await loadRobinhoodHubUniswapCatalog(discoveryClient, earnAssets, blockNumber, {
+    hubs: SETTLEMENT_SEEDS,
+  })
   const generatedAt = new Date().toISOString()
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
     schemaVersion: 1,
@@ -560,6 +556,7 @@ async function catalogRefresh() {
     v3Pools: uniswap.v3Pools.length,
     v4Pools: uniswap.v4Pools.length,
     coverage: uniswap.coverage,
+    readEvidence: uniswap.readEvidence,
     universe,
   }
   console.log(stringify(output))
@@ -756,7 +753,8 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
       return {
         ...candidate,
         rejected: true,
-        outcome: classifyEvaluationFailure(error),
+        outcome:
+          error?.code === 'NO_ATOMIC_FUNDING' ? EvaluationOutcome.POLICY_FILTERED : classifyEvaluationFailure(error),
         stage: 'SETTLEMENT_FUNDING',
         rpcClass: classifyRpcError(error),
         reason: errorText(error).slice(0, 200),
@@ -814,7 +812,6 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
     admittedCount: admitted.length,
     fundedCount: checked.filter((candidate) => !candidate.rejected).length,
     fundingEvidenceComplete:
-      valuationCandidates.length > 0 &&
       checked.length === valuationCandidates.length &&
       checked.every((candidate) => !candidate.rejected || candidate.outcome === EvaluationOutcome.POLICY_FILTERED),
     selectedForFunding: fundingCandidates.length,
@@ -1323,6 +1320,7 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
       searchableRouteCount,
       fundedCount: discovery.settlementAdmission.fundedCount,
       fundingEvidenceComplete: discovery.settlementAdmission.fundingEvidenceComplete,
+      catalogEvidenceComplete: discovery.uniswap.readEvidence?.complete === true,
       evaluationValid: evaluation.valid,
       evaluationCoverage: evaluation.coverage,
     })
@@ -1373,6 +1371,7 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
         v3Pools: discovery.uniswap.v3Pools.length,
         v4Pools: discovery.uniswap.v4Pools.length,
         coverage: discovery.uniswap.coverage,
+        catalogReadEvidence: discovery.uniswap.readEvidence,
         universe: discovery.universe,
         settlementAssets: discovery.settlementAdmission.admitted.map((item) => item.token),
         settlementAdmission: {

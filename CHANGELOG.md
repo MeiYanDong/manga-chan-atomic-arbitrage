@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Keep the rotating board-derived V4 universe as a current search overlay instead of persisting it into the six-hour
+  Earn/Uniswap base catalog. A later rotation can no longer consume current graph capacity or make already-present
+  PoolKeys look rejected. Bound V2/V3 factory reads to Earn assets and settlement hubs, attach validated transport
+  completeness evidence, retry a partial writer catalog after five minutes, and classify an incomplete negative as
+  evidence-incomplete rather than proven no-profit. Missing atomic funding is now a typed policy result, and the public
+  business API exposes compact catalog completeness and failure counts without provider details. This changes no
+  capital, Gas, signing, execution or receipt gate and claims no new profit.
 - Stream the append-only trading ledgers into a field-minimized business-report projection instead of loading and
   parsing the complete audit history on every refresh. The original ledgers remain authoritative and unchanged; the
   reporter retains only failed-Gas evidence, the latest wallet verification, the active authorization's Global funnel,

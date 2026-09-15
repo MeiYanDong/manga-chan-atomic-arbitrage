@@ -40,7 +40,10 @@ test('settlement funding requires trustworthy decimals and an actual atomic fund
   )
   assert.throws(
     () => assessSettlementFunding(candidate, { decimals: 18, morphoLiquidity: 0n, inventory: 0n }),
-    /no Morpho liquidity/,
+    (error) => {
+      const failure = /** @type {{ code?: string, message?: string }} */ (error)
+      return failure?.code === 'NO_ATOMIC_FUNDING' && /no Morpho liquidity/.test(failure.message || '')
+    },
   )
 })
 
@@ -206,6 +209,18 @@ test('readiness never turns a funding block or incomplete evidence into no-profi
       fundingEvidenceComplete: false,
       evaluationValid: 0,
       evaluationCoverage: 'UNAVAILABLE',
+    }).status,
+    'EVALUATION_INCOMPLETE_NO_SIGNATURE',
+  )
+  assert.equal(
+    classifyGlobalSearchReadiness({
+      selected: false,
+      searchableRouteCount: 12,
+      fundedCount: 1,
+      fundingEvidenceComplete: true,
+      catalogEvidenceComplete: false,
+      evaluationValid: 8,
+      evaluationCoverage: 'COMPLETE',
     }).status,
     'EVALUATION_INCOMPLETE_NO_SIGNATURE',
   )

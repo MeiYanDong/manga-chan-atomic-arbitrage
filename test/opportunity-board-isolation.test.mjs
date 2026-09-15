@@ -743,6 +743,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(globalSource, /'SUBMITTED'/)
   assert.match(globalSource, /'global_preflight_failed'/)
   assert.match(globalSource, /calls: rpcEvidence\.snapshot\(\)/)
+  assert.match(globalSource, /catalogEvidenceComplete: discovery\.uniswap\.readEvidence\?\.complete === true/)
+  assert.match(globalSource, /catalogReadEvidence: discovery\.uniswap\.readEvidence/)
+  const globalCatalogRefreshStart = globalSource.indexOf('async function refreshGlobalCatalog')
+  const globalCatalogRefreshEnd = globalSource.indexOf('function readGlobalUniverseState', globalCatalogRefreshStart)
+  const globalCatalogRefresh = globalSource.slice(globalCatalogRefreshStart, globalCatalogRefreshEnd)
+  assert.doesNotMatch(globalCatalogRefresh, /universeAssets|additionalV4Pools/)
   const globalPreflightStart = globalSource.indexOf('async function globalPreflight')
   const globalPreflightEnd = globalSource.indexOf('async function deployPreflight', globalPreflightStart)
   assert.doesNotMatch(

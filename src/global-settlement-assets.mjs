@@ -61,13 +61,14 @@ export function classifyGlobalSearchReadiness(input) {
   }
   const selected = input?.selected === true
   const evaluationCoverage = String(input?.evaluationCoverage || '')
+  const catalogEvidenceIncomplete = input?.catalogEvidenceComplete === false
   const fundingBlocked =
     !selected && searchableRouteCount > 0 && fundedCount === 0 && input?.fundingEvidenceComplete === true
   const evaluationIncomplete =
     !selected &&
     !fundingBlocked &&
-    evaluationValid === 0 &&
-    ['EMPTY', 'UNAVAILABLE', 'PARTIAL'].includes(evaluationCoverage)
+    (catalogEvidenceIncomplete ||
+      (evaluationValid === 0 && ['EMPTY', 'UNAVAILABLE', 'PARTIAL'].includes(evaluationCoverage)))
   return {
     status: selected
       ? 'EXACT_NET_POSITIVE'
@@ -97,7 +98,11 @@ export function assessSettlementFunding(candidate, evidence) {
     ...(morphoLiquidity > 0n ? ['MORPHO_FLASH'] : []),
     ...(inventory > 0n ? ['EXECUTOR_INVENTORY'] : []),
   ]
-  if (fundingModes.length === 0) throw new Error('no Morpho liquidity or protected executor inventory')
+  if (fundingModes.length === 0) {
+    throw Object.assign(new Error('no Morpho liquidity or protected executor inventory'), {
+      code: 'NO_ATOMIC_FUNDING',
+    })
+  }
   return {
     ...candidate,
     decimals,

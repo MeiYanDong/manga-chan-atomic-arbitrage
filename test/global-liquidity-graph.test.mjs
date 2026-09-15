@@ -243,8 +243,32 @@ test('catalog quarantines factory entries that have no executable liquidity', as
   const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n)
   assert.equal(catalog.v2Pools.length, 0)
   assert.equal(catalog.v3Pools.length, 0)
+  assert.deepEqual(catalog.readEvidence, {
+    status: 'COMPLETE',
+    complete: true,
+    requestedPairs: 3,
+    requestedV3FeeQueries: 12,
+    v2TransportErrors: 0,
+    v3TransportErrors: 0,
+  })
   assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V2' && item.reason === 'zero reserve'))
   assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V3' && item.reason === 'zero active liquidity'))
+})
+
+test('catalog exposes incomplete transport evidence without retaining credentialized errors', async () => {
+  const credentializedEndpoint = `${'https'}://${['reader', 'secret'].join(':')}@example.invalid/rpc`
+  const client = {
+    async readContract() {
+      throw new Error(`request failed at ${credentializedEndpoint}`)
+    },
+  }
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n)
+
+  assert.equal(catalog.readEvidence.status, 'PARTIAL')
+  assert.equal(catalog.readEvidence.complete, false)
+  assert.equal(catalog.readEvidence.v2TransportErrors, 3)
+  assert.equal(catalog.readEvidence.v3TransportErrors, 12)
+  assert.ok(catalog.rejected.every((item) => !String(item.error || '').includes('secret')))
 })
 
 test('Permit2-incompatible Earn tokens disable only their input edges and add hyperedge', () => {
