@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Normalize the completed immutable release tree after extraction, dependency installation and production build, then
+  fail closed before symlink promotion if any regular file or directory remains group/world writable. This closes the
+  gap observed while promoting v0.17.13: source archives preserve their stored mode bits, so `umask 0022` alone did not
+  remove group-write permission from codeload contents. A restrictive `umask 0077` caller must now produce a release
+  that `manga-board` can import without an operator repair. Configuration, credentials and mutable state remain outside
+  the normalized tree with their explicit restrictive modes; signer, principal, Gas, profit, nonce and receipt policy
+  are unchanged.
+- Verify an inactive historical generic generation only when its watcher is active or enabled. A retained
+  `generic-state.json` no longer makes an obsolete loopback dependency block promotion of the current dual/global
+  generation; the active dual verifier still checks both deployed base executors, the universal deployment, nonce and
+  unresolved-mutation boundary. This changes verification routing only and never deletes historical state.
 - Make immutable release permissions independent from the invoking operator's `umask`. The installer now establishes
   `0022` before extracting the archive or running npm, so isolated read-only service identities can traverse the
   application and its dependencies even when the bootstrap caller starts under `0077`. Secrets, configuration and

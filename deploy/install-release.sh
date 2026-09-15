@@ -64,6 +64,19 @@ npm ci --no-audit --no-fund
 # Production rebuilds runtime artifacts but does not repeat the memory-heavy test suite.
 npm run release:build
 
+# tar preserves mode bits stored in the archive, so caller umask normalization
+# alone cannot guarantee this shared immutable tree is readable by every
+# isolated service identity. Normalize the completed tree before writing the
+# release identity or promoting the symlink, then fail closed if any regular
+# file or directory remains group/world writable. Configuration, credentials
+# and mutable state live outside release_dir and retain their explicit modes.
+chmod -R go-w,a+rX "${release_dir}"
+writable_entry=$(find "${release_dir}" -xdev \( -type f -o -type d \) -perm /0022 -print -quit)
+if [[ -n ${writable_entry} ]]; then
+  echo "release contains group/world writable entries after normalization" >&2
+  exit 1
+fi
+
 printf 'MANGA_RELEASE_SHA=%s\n' "${release_sha}" > "${config_dir}/release.env.tmp"
 chown root:"${service_group}" "${config_dir}/release.env.tmp"
 chmod 0640 "${config_dir}/release.env.tmp"
