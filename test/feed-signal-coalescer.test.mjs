@@ -67,3 +67,36 @@ test('deduplicates case-insensitive addresses and preserves large sequence numbe
   assert.equal(merged.matchedAddresses.length, 1)
   assert.equal(merged.routeAddresses.length, 1)
 })
+
+test('repeated coalescing never feeds the joined presentation reason back into atomic evidence', () => {
+  let merged = null
+  for (let index = 0; index < 20_000; index += 1) {
+    merged = mergePendingMarketSignals(
+      merged,
+      {
+        classificationReason: index % 2 === 0 ? 'EARN_POOL_MATCH' : 'NON_HUB_ASSET_PATH_MATCH',
+        routeAddresses: [index % 2 === 0 ? POOL_A : POOL_B],
+        receivedAt: `2026-09-15T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
+        firstSequenceNumber: index,
+        lastSequenceNumber: index,
+        messageCount: 1,
+      },
+      { coalescedWakeCount: index },
+    )
+  }
+
+  assert.deepEqual(merged.classificationReasons, ['EARN_POOL_MATCH', 'NON_HUB_ASSET_PATH_MATCH'])
+  assert.equal(merged.classificationReason, 'EARN_POOL_MATCH+NON_HUB_ASSET_PATH_MATCH')
+  assert.deepEqual(merged.routeAddresses, [POOL_A, POOL_B])
+  assert.equal(merged.messageCount, 20_000)
+  assert.equal(merged.firstSequenceNumber, 0)
+  assert.equal(merged.lastSequenceNumber, 19_999)
+  assert.equal(merged.coalescedWakeCount, 19_999)
+})
+
+test('coalescing fails closed on an unbounded classification reason', () => {
+  assert.throws(
+    () => mergePendingMarketSignals(null, { classificationReason: 'X'.repeat(129) }),
+    /classification reason exceeds its character bound/,
+  )
+})

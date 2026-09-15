@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Stop hot Sequencer Feed traffic from amplifying one pending wake into an exponential heap leak. Atomic
+  `classificationReasons` are now the only merge source and the joined display label never feeds back into later
+  coalescing; 20,000 alternating wakes remain two reasons and a 40-character projection instead of growing past
+  171 MiB after only 24 legacy merges. Bound all coalesced signal collections and reason sizes, cap WebSocket payloads
+  at 8 MiB before decode, and degrade an oversized frame to public-log/periodic recovery. These intake limits add no
+  signing authority and leave exact state, simulation, Gas, nonce, balance, profit and receipt gates unchanged.
 - Preserve fail-closed signer startup while migrating the one production-observed 6.9 MiB legacy
   `global_watch_wake` row. The incremental reader may stream-discard only that exact signer-free scheduler event;
   unknown and safety-event rows still fail when oversized, and the discard scanner rejects any accepted safety-event

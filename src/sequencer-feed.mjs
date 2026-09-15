@@ -6,6 +6,17 @@ const DEFAULT_FEED_URL = 'wss://feed.mainnet.chain.robinhood.com'
 const FEED_CLIENT_VERSION = 2
 const DEFAULT_CHAIN_ID = 4_663
 const MAX_SERVER_RETRY_AFTER_MS = 3_600_000
+const DEFAULT_MAXIMUM_FRAME_BYTES = 8 * 1024 * 1024
+const MAXIMUM_CONFIGURABLE_FRAME_BYTES = 32 * 1024 * 1024
+
+class SequencerFeedFrameTooLargeError extends Error {
+  constructor(bytes) {
+    super('sequencer feed frame exceeds its byte bound')
+    this.name = 'SequencerFeedFrameTooLargeError'
+    this.code = 'SEQUENCER_FEED_FRAME_TOO_LARGE'
+    this.bytes = bytes
+  }
+}
 
 function integer(value) {
   const parsed = Number(value)
@@ -139,7 +150,19 @@ export function sequencerFeedAddressMatches(value, addresses) {
   return [...matches]
 }
 
-async function eventDataText(data) {
+function eventDataBytes(data) {
+  if (typeof data === 'string') return Buffer.byteLength(data)
+  if (data instanceof ArrayBuffer) return data.byteLength
+  if (ArrayBuffer.isView(data)) return data.byteLength
+  if (data && Number.isSafeInteger(data.size) && data.size >= 0) return data.size
+  return null
+}
+
+async function eventDataText(data, maximumFrameBytes) {
+  const bytes = eventDataBytes(data)
+  if (bytes !== null && bytes > maximumFrameBytes) {
+    throw new SequencerFeedFrameTooLargeError(bytes)
+  }
   if (typeof data === 'string') return data
   if (data instanceof ArrayBuffer) return new TextDecoder().decode(data)
   if (ArrayBuffer.isView(data)) {
@@ -163,6 +186,14 @@ export class SequencerFeedWakeClient {
     this.reconnectMs = Number(options.reconnectMs || 1_000)
     this.reconnectMaxMs = Number(options.reconnectMaxMs || 64_000)
     this.handshakeTimeoutMs = Number(options.handshakeTimeoutMs || 10_000)
+    this.maximumFrameBytes = Number(options.maximumFrameBytes || DEFAULT_MAXIMUM_FRAME_BYTES)
+    if (
+      !Number.isSafeInteger(this.maximumFrameBytes) ||
+      this.maximumFrameBytes <= 0 ||
+      this.maximumFrameBytes > MAXIMUM_CONFIGURABLE_FRAME_BYTES
+    ) {
+      throw new Error('sequencer feed maximum frame bytes is outside bounds')
+    }
     this.expectedChainId = String(options.expectedChainId || DEFAULT_CHAIN_ID)
     this.requestedSequenceNumber = sequenceNumber(options.requestedSequenceNumber ?? 0n)
     this.watchedAddresses = []
@@ -189,6 +220,7 @@ export class SequencerFeedWakeClient {
       sequenceGapFrames: 0,
       outOfOrderFrames: 0,
       malformed: 0,
+      oversizedFrames: 0,
       errors: 0,
       rejections: 0,
       reconnects: 0,
@@ -223,6 +255,7 @@ export class SequencerFeedWakeClient {
       nextReconnectAt: this.nextReconnectAt,
       feedUrl: this.url,
       watchedAddresses: this.watchedAddresses.length,
+      maximumFrameBytes: this.maximumFrameBytes,
     }
   }
 
@@ -280,6 +313,7 @@ export class SequencerFeedWakeClient {
         },
         perMessageDeflate: true,
         handshakeTimeout: this.handshakeTimeoutMs,
+        maxPayload: this.maximumFrameBytes,
       })
     } catch (error) {
       this.metrics.errors += 1
@@ -319,7 +353,7 @@ export class SequencerFeedWakeClient {
     })
     socket.addEventListener('message', async (event) => {
       try {
-        const text = await eventDataText(event.data)
+        const text = await eventDataText(event.data, this.maximumFrameBytes)
         const source = JSON.parse(text)
         const selected = selectUnseenSequencerFeedMessages(source, this.lastSequenceNumber)
         this.metrics.frames += 1
@@ -359,6 +393,19 @@ export class SequencerFeedWakeClient {
         this.metrics.wakes += 1
         this.onWake(signal)
       } catch (error) {
+        if (error instanceof SequencerFeedFrameTooLargeError) {
+          this.metrics.oversizedFrames += 1
+          this.lastStatus = 'OVERSIZED_FRAME_RECOVERY'
+          this.onStatus({
+            status: 'OVERSIZED_FRAME_RECOVERY',
+            frameBytes: error.bytes,
+            maximumFrameBytes: this.maximumFrameBytes,
+            recovery: 'PUBLIC_LOG_AND_PERIODIC',
+          })
+          socket.terminate?.()
+          reconnect(this.reconnectMaxMs)
+          return
+        }
         this.metrics.malformed += 1
         this.onStatus({ status: 'MALFORMED_FRAME', error: String(error) })
       }
