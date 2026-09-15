@@ -281,6 +281,7 @@ test('business reporter can read ledgers but cannot sign or write trading state'
     'utf8',
   )
   const source = fs.readFileSync(path.join(root, 'scripts', 'business-report.mjs'), 'utf8')
+  const reportInput = fs.readFileSync(path.join(root, 'src', 'business-report-input.mjs'), 'utf8')
   const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
 
   assert.match(service, /^Type=oneshot$/m)
@@ -319,6 +320,10 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.match(source, /deriveDeliveryState/)
   assert.match(source, /resolveBusinessBoardProjection/)
   assert.match(source, /readBusinessBoardSnapshot/)
+  assert.match(source, /readBusinessReportInputs/)
+  assert.doesNotMatch(source, /auditRecords:\s*readJsonLines/)
+  assert.match(reportInput, /IncrementalJsonlEventReader/)
+  assert.doesNotMatch(reportInput, /readFileSync/)
   assert.match(source, /fs\.fsyncSync\(descriptor\)/)
   assert.match(timer, /^OnBootSec=2min$/m)
   assert.match(timer, /^OnCalendar=\*-\*-\* \*:0\/5:00$/m)

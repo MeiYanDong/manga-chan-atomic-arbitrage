@@ -34,6 +34,29 @@ test('reads only selected events and incrementally consumes appended bytes', (co
   ])
 })
 
+test('projects selected records before retaining them and may discard a selected record', (context) => {
+  const { file } = fixture(context)
+  fs.writeFileSync(
+    file,
+    `${JSON.stringify({ event: 'mutation_signed', hash: '0x01', large: 'x'.repeat(64 * 1024) })}\n${JSON.stringify({ event: 'mutation_effect', hash: '0x02' })}\n`,
+  )
+  const reader = new IncrementalJsonlEventReader(file, {
+    events: ['mutation_signed', 'mutation_effect'],
+    projectRecord: (record) => (record.event === 'mutation_signed' ? { event: record.event, hash: record.hash } : null),
+  })
+
+  assert.deepEqual(reader.read(), [{ event: 'mutation_signed', hash: '0x01' }])
+  assert.equal(JSON.stringify(reader.records).includes('large'), false)
+  assert.throws(
+    () =>
+      new IncrementalJsonlEventReader(file, {
+        // @ts-expect-error Exercise the runtime boundary for untyped callers.
+        projectRecord: 'invalid',
+      }),
+    /record projector must be a function/,
+  )
+})
+
 test('holds an incomplete tail until its newline arrives', (context) => {
   const { file } = fixture(context)
   fs.writeFileSync(file, '{"event":"mutation_signed","hash":"0x02"')
