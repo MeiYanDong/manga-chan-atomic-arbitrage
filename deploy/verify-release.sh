@@ -18,7 +18,11 @@ else
   echo "fixed-route runtime verification skipped: service is inactive and disabled"
 fi
 if [[ -f /var/lib/manga-chan-arbitrage/generic-state.json ]]; then
-  runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run generic:runtime-verify
+  if systemctl is-active --quiet manga-generic-watcher.service || systemctl is-enabled --quiet manga-generic-watcher.service; then
+    runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run generic:runtime-verify
+  else
+    echo "generic runtime verification skipped: service is inactive and disabled"
+  fi
 fi
 if [[ -f /var/lib/manga-chan-arbitrage/weth-state.json ]]; then
   runuser -u manga-chan-arb --preserve-environment -- /usr/bin/env npm run dual:runtime-verify

@@ -260,14 +260,28 @@ test('competitor census is a public-RPC receipt reader without a signer lane', (
 test('release installer rebuilds artifacts without repeating CI contract suites on production', () => {
   const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
   const bootstrap = fs.readFileSync(path.join(root, 'deploy', 'bootstrap-release.sh'), 'utf8')
+  const verifier = fs.readFileSync(path.join(root, 'deploy', 'verify-release.sh'), 'utf8')
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 
   const umaskOffset = installer.indexOf('umask 0022')
   const dependencyInstallOffset = installer.indexOf('npm ci --no-audit --no-fund')
+  const buildOffset = installer.indexOf('npm run release:build')
+  const permissionNormalizationOffset = installer.indexOf('chmod -R go-w,a+rX "${release_dir}"')
+  const permissionVerificationOffset = installer.indexOf('writable_entry=$(find "${release_dir}"')
+  const promotionOffset = installer.indexOf('ln -sfn "${release_dir}" "${prefix}/current.next"')
   assert.ok(umaskOffset >= 0, 'installer must normalize the caller umask')
   assert.ok(dependencyInstallOffset > umaskOffset, 'umask must be normalized before npm writes the release')
+  assert.ok(permissionNormalizationOffset > buildOffset, 'permissions must be normalized after the release build')
+  assert.ok(
+    permissionVerificationOffset > permissionNormalizationOffset,
+    'normalized permissions must be verified before promotion',
+  )
+  assert.ok(promotionOffset > permissionVerificationOffset, 'the release must not be promoted before permission proof')
   assert.match(installer, /^npm ci --no-audit --no-fund$/m)
   assert.match(installer, /^npm run release:build$/m)
+  assert.match(installer, /^chmod -R go-w,a\+rX "\$\{release_dir\}"$/m)
+  assert.match(installer, /-perm \/0022 -print -quit/)
+  assert.match(installer, /release contains group\/world writable entries after normalization/)
   assert.doesNotMatch(installer, /^npm run check$/m)
   assert.match(packageJson.scripts['release:build'], /ui:build/)
   assert.match(packageJson.scripts['release:build'], /compile/)
@@ -280,6 +294,9 @@ test('release installer rebuilds artifacts without repeating CI contract suites 
   assert.match(bootstrap, /bash -n "\$\{candidate_installer\}"/)
   assert.match(bootstrap, /bash "\$\{candidate_installer\}" "\$\{archive\}" "\$\{release_sha\}"/)
   assert.doesNotMatch(bootstrap, /\/opt\/manga-chan-arbitrage\/current/)
+  assert.match(verifier, /systemctl is-active --quiet manga-generic-watcher\.service/)
+  assert.match(verifier, /systemctl is-enabled --quiet manga-generic-watcher\.service/)
+  assert.match(verifier, /generic runtime verification skipped: service is inactive and disabled/)
 })
 
 test('business reporter can read ledgers but cannot sign or write trading state', () => {

@@ -14,15 +14,22 @@ An operator repaired the existing release permissions without exposing configura
 module imports, but an unrecorded post-install permission rewrite is not a safe release contract and would recur on the
 next restrictive invocation.
 
+The v0.17.13 promotion then proved a second boundary: GitHub codeload archives preserve stored file and directory mode
+bits. Establishing `umask 0022` prevented newly created npm content from becoming private, but it did not remove the
+archive's existing group-write bits. The installer therefore also needs an explicit post-build normalization and proof.
+
 ## Decision
 
 1. The release installer establishes `umask 0022` before it creates the immutable release, extracts source or runs npm.
-2. Immutable application code and dependencies are readable and traversable by isolated service identities, but are
+2. After the production build, the installer removes group/other write permission and adds shared read/traverse
+   permission across the immutable release tree. It verifies no regular file or directory remains group/world writable
+   before writing the release identity or promoting the current symlink.
+3. Immutable application code and dependencies are readable and traversable by isolated service identities, but are
    never writable by group or other users.
-3. Configuration, encrypted credentials and mutable state do not inherit that general release policy. The installer
+4. Configuration, encrypted credentials and mutable state do not inherit that general release policy. The installer
    continues to give each of them an explicit owner, group and restrictive mode.
-4. A regression test verifies that umask normalization exists and precedes dependency installation.
-5. Production promotion must prove the contract by invoking the bootstrap beneath `umask 0077`, then importing a
+5. Regression tests verify both the pre-install umask and the post-build permission normalization precede promotion.
+6. Production promotion must prove the contract by invoking the bootstrap beneath `umask 0077`, then importing a
    runtime dependency as the read-only board identity without a repair step.
 
 ## Consequences
