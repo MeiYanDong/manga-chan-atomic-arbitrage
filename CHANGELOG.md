@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Retry the dual watcher arm's coherent chain/deployment/nonce/principal baseline only when RPC classification proves a
+  transient state-readiness or transport failure. The whole baseline is reacquired at a fresh fixed block, while a
+  pending nonce, missing principal, foreign runtime or any business invariant still fails immediately. Signing material
+  is now loaded only after all read-only evidence and economic gates converge; the arm remains a local authorization
+  write and performs no signature or broadcast.
 - Stop hot Sequencer Feed traffic from amplifying one pending wake into an exponential heap leak. Atomic
   `classificationReasons` are now the only merge source and the joined display label never feeds back into later
   coalescing; 20,000 alternating wakes remain two reasons and a 40-character projection instead of growing past

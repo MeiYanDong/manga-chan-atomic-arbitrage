@@ -2048,27 +2048,50 @@ async function armDualWatcher() {
     const unresolved = latestUnresolved()
     if (unresolved) throw new Error(`unresolved ${unresolved.kind} mutation ${unresolved.hash}`)
     assertDualBoardIdentity(await loadBoardSnapshot())
-    await assertCanonicalBase()
-    const deployments = await loadVerifiedDeployments()
-    loadAccount()
-    const wallet = await walletSnapshot()
-    if (wallet.nonceLatest !== wallet.noncePending) throw new Error('wallet has a pending nonce')
-    const [usdgPrincipal, wethPrincipal] = await Promise.all([
-      publicClient.readContract({
-        address: GENERIC_USDG,
-        abi: ERC20_ABI,
-        functionName: 'balanceOf',
-        args: [deployments.usdg.executor],
-        blockNumber: wallet.blockNumber,
-      }),
-      publicClient.readContract({
-        address: GENERIC_WETH,
-        abi: ERC20_ABI,
-        functionName: 'balanceOf',
-        args: [deployments.weth.executor],
-        blockNumber: wallet.blockNumber,
-      }),
-    ])
+    const { deployments, wallet, usdgPrincipal, wethPrincipal } = await retryReadOnly(
+      async () => {
+        await assertCanonicalBase()
+        const verifiedDeployments = await loadVerifiedDeployments()
+        const walletReadback = await walletSnapshot()
+        if (walletReadback.nonceLatest !== walletReadback.noncePending) {
+          throw new Error('wallet has a pending nonce')
+        }
+        const [usdgBalance, wethBalance] = await Promise.all([
+          publicClient.readContract({
+            address: GENERIC_USDG,
+            abi: ERC20_ABI,
+            functionName: 'balanceOf',
+            args: [verifiedDeployments.usdg.executor],
+            blockNumber: walletReadback.blockNumber,
+          }),
+          publicClient.readContract({
+            address: GENERIC_WETH,
+            abi: ERC20_ABI,
+            functionName: 'balanceOf',
+            args: [verifiedDeployments.weth.executor],
+            blockNumber: walletReadback.blockNumber,
+          }),
+        ])
+        return {
+          deployments: verifiedDeployments,
+          wallet: walletReadback,
+          usdgPrincipal: usdgBalance,
+          wethPrincipal: wethBalance,
+        }
+      },
+      {
+        attempts: STARTUP_RPC_ATTEMPTS,
+        delayMs: STARTUP_RPC_RETRY_DELAY_MS,
+        shouldRetry: isTransientRpcError,
+        onRetry: (error, attempt) => {
+          appendAudit('dual_arm_rpc_retry', {
+            attempt,
+            retryDelayMs: STARTUP_RPC_RETRY_DELAY_MS * 2 ** (attempt - 1),
+            reason: errorText(error),
+          })
+        },
+      },
+    )
     if (usdgPrincipal <= 0n || wethPrincipal <= 0n)
       throw new Error('both USDG and WETH executors require positive principal')
     const walletEthReserve = parseNonNegativeUnits(RUNTIME_CONFIG.genericMinEthReserve, 18, 'minimum ETH reserve')
@@ -2107,6 +2130,10 @@ async function armDualWatcher() {
     ) {
       throw new Error('EarnOnHood requires positive receipt-proven lifetime net and positive per-transaction economics')
     }
+    // The arm is a local policy write, not a transaction. Validate the signer
+    // only after every retryable chain read and every economic invariant has
+    // converged, so transient RPC failures never load signing material.
+    loadAccount()
     const issuedAt = new Date().toISOString()
     const authorization = {
       schemaVersion: 1,
