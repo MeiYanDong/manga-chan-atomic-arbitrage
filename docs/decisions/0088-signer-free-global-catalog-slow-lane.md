@@ -39,6 +39,10 @@ overlay continues on its existing cadence.
 This change does not create atomic funding, improve Sequencer Feed coverage or prove profit. It changes no capital,
 profit, Gas, nonce, simulation, submission or receipt boundary.
 
+ADR 0090 refines the publication rule for partial generations: an atomic JSON write alone cannot prevent a truthful
+but incomplete public-RPC refresh from erasing recently verified topology. The writer now retains only exact,
+transiently failed V2/V3 queries inside the same six-hour evidence lifetime.
+
 ## Rollback
 
 Stop and disable the catalog timer, revoke and stop the live watcher, reconcile the shared nonce lane, then restore the

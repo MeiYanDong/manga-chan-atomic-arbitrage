@@ -1,12 +1,16 @@
 import { getAddress } from 'viem'
 
-import { redactSensitiveText } from './policy.mjs'
+import { RpcErrorClass, classifyRpcError, redactSensitiveText } from './policy.mjs'
 
 export const ROBINHOOD_UNISWAP_V2_FACTORY = getAddress('0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f')
 export const ROBINHOOD_UNISWAP_V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
 export const ROBINHOOD_UNISWAP_V4_POOL_MANAGER = getAddress('0x8366a39CC670B4001A1121B8F6A443A643e40951')
 export const ROBINHOOD_USDG = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 export const ROBINHOOD_WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
+export const ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY = Object.freeze({
+  version: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
+  maximumAgeMs: 6 * 60 * 60 * 1_000,
+})
 
 const ZERO = getAddress('0x0000000000000000000000000000000000000000')
 const V3_FEES = [100, 500, 3_000, 10_000]
@@ -133,6 +137,142 @@ function safeError(error) {
   return redactSensitiveText(error instanceof Error ? error.message : String(error)).slice(0, 240)
 }
 
+function pairQueryKey(source) {
+  try {
+    return [key(getAddress(source.token0)), key(getAddress(source.token1))].sort().join(':')
+  } catch {
+    return null
+  }
+}
+
+function v3QueryKey(source) {
+  const pair = pairQueryKey(source)
+  const fee = Number(source?.fee)
+  return pair && Number.isSafeInteger(fee) && V3_FEES.includes(fee) ? `${pair}:${fee}` : null
+}
+
+function retainedPool(pool, previousGeneratedAt, generatedAt) {
+  const lastVerifiedAt = String(pool?.lastVerifiedAt || previousGeneratedAt || '')
+  const verifiedAt = Date.parse(lastVerifiedAt)
+  const currentAt = Date.parse(generatedAt)
+  if (
+    !Number.isFinite(verifiedAt) ||
+    !Number.isFinite(currentAt) ||
+    currentAt - verifiedAt < -60_000 ||
+    currentAt - verifiedAt > ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.maximumAgeMs
+  ) {
+    return null
+  }
+  try {
+    return {
+      ...pool,
+      address: getAddress(pool.address),
+      token0: getAddress(pool.token0),
+      token1: getAddress(pool.token1),
+      lastVerifiedAt,
+      catalogObservation: 'RETAINED_AFTER_CURRENT_TRANSIENT_QUERY_FAILURE',
+    }
+  } catch {
+    return null
+  }
+}
+
+function freshPool(pool, generatedAt) {
+  return {
+    ...pool,
+    lastVerifiedAt: generatedAt,
+    catalogObservation: 'CURRENT_FIXED_BLOCK_READ',
+  }
+}
+
+function stablePoolOrder(queryKey) {
+  return (left, right) =>
+    String(queryKey(left) || '').localeCompare(String(queryKey(right) || '')) ||
+    String(left.address).localeCompare(String(right.address))
+}
+
+/**
+ * A partial public-RPC refresh may replace only queries that produced current
+ * evidence. Previously verified topology is retained solely for the exact
+ * pair/fee queries that failed transiently, and only inside the catalog age
+ * bound. Exact execution still revalidates current pool state.
+ */
+export function mergeRobinhoodPartialCatalog(current, previous, options = {}) {
+  if (
+    !current ||
+    !Array.isArray(current.v2Pools) ||
+    !Array.isArray(current.v3Pools) ||
+    !Array.isArray(current.rejected) ||
+    typeof current.readEvidence !== 'object'
+  ) {
+    throw new Error('current Robinhood catalog is invalid')
+  }
+  const generatedAt = String(options.generatedAt || new Date().toISOString())
+  if (!Number.isFinite(Date.parse(generatedAt))) throw new Error('catalog merge timestamp is invalid')
+  const previousGeneratedAt = String(options.previousGeneratedAt || '')
+  const transientClasses = new Set([RpcErrorClass.NETWORK, RpcErrorClass.THROTTLED, RpcErrorClass.STATE_NOT_READY])
+  const failedV2 = new Set(
+    current.rejected
+      .filter((item) => item?.venue === 'UNISWAP_V2' && item.error && transientClasses.has(item.rpcClass))
+      .map(pairQueryKey)
+      .filter(Boolean),
+  )
+  const failedV3 = new Set(
+    current.rejected
+      .filter((item) => item?.venue === 'UNISWAP_V3' && item.error && transientClasses.has(item.rpcClass))
+      .map(v3QueryKey)
+      .filter(Boolean),
+  )
+  const freshV2 = current.v2Pools.map((pool) => freshPool(pool, generatedAt))
+  const freshV3 = current.v3Pools.map((pool) => freshPool(pool, generatedAt))
+  const freshV2Keys = new Set(freshV2.map(pairQueryKey).filter(Boolean))
+  const freshV3Keys = new Set(freshV3.map(v3QueryKey).filter(Boolean))
+  const retainedV2 = []
+  const retainedV3 = []
+  let expiredV2 = 0
+  let expiredV3 = 0
+
+  for (const pool of Array.isArray(previous?.v2Pools) ? previous.v2Pools : []) {
+    const query = pairQueryKey(pool)
+    if (!query || !failedV2.has(query) || freshV2Keys.has(query)) continue
+    const retained = retainedPool(pool, previousGeneratedAt, generatedAt)
+    if (retained) {
+      retainedV2.push(retained)
+      freshV2Keys.add(query)
+    } else expiredV2 += 1
+  }
+  for (const pool of Array.isArray(previous?.v3Pools) ? previous.v3Pools : []) {
+    const query = v3QueryKey(pool)
+    if (!query || !failedV3.has(query) || freshV3Keys.has(query)) continue
+    const retained = retainedPool(pool, previousGeneratedAt, generatedAt)
+    if (retained) {
+      retainedV3.push(retained)
+      freshV3Keys.add(query)
+    } else expiredV3 += 1
+  }
+
+  const v2Pools = [...freshV2, ...retainedV2].sort(stablePoolOrder(pairQueryKey))
+  const v3Pools = [...freshV3, ...retainedV3].sort(stablePoolOrder(v3QueryKey))
+  return {
+    ...current,
+    v2Pools,
+    v3Pools,
+    readEvidence: {
+      ...current.readEvidence,
+      topologyRetention: {
+        policy: ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.version,
+        previousCatalogBlock: previous?.blockNumber ? String(previous.blockNumber) : null,
+        freshV2Pools: freshV2.length,
+        freshV3Pools: freshV3.length,
+        retainedV2Pools: retainedV2.length,
+        retainedV3Pools: retainedV3.length,
+        expiredV2Pools: expiredV2,
+        expiredV3Pools: expiredV3,
+      },
+    },
+  }
+}
+
 /**
  * Discover canonical V2/V3 pools only for asset-to-hub pairs. This bounded
  * coverage connects every Earn asset/BPT to USDG and WETH without the O(n^2)
@@ -180,7 +320,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
         source: 'CANONICAL_UNISWAP_V2_FACTORY_GET_PAIR_WITH_NONZERO_RESERVES',
       }
     } catch (error) {
-      return { error: safeError(error), ...pair }
+      return { error: safeError(error), rpcClass: classifyRpcError(error), ...pair }
     }
   })
 
@@ -213,7 +353,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
         source: 'CANONICAL_UNISWAP_V3_FACTORY_GET_POOL_WITH_ACTIVE_LIQUIDITY',
       }
     } catch (error) {
-      return { error: safeError(error), ...query }
+      return { error: safeError(error), rpcClass: classifyRpcError(error), ...query }
     }
   })
 

@@ -40,6 +40,74 @@ test('catalog access keeps every search path on the last atomic maintenance snap
   const fresh = { schemaVersion: 1, generatedAt: '2026-09-14T23:59:00.000Z', ...topology }
   const stale = { schemaVersion: 1, generatedAt: '2026-09-14T17:59:59.999Z', ...topology }
   assert.equal(classifyGlobalCatalogAccess(fresh, { now }), 'CACHE')
+  const retained = {
+    schemaVersion: 2,
+    generatedAt: '2026-09-14T23:59:00.000Z',
+    ...topology,
+    uniswap: {
+      ...topology.uniswap,
+      readEvidence: {
+        status: 'PARTIAL',
+        complete: false,
+        requestedPairs: 3,
+        requestedV3FeeQueries: 12,
+        v2TransportErrors: 1,
+        v3TransportErrors: 2,
+        topologyRetention: {
+          policy: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
+          previousCatalogBlock: '123',
+          freshV2Pools: 0,
+          freshV3Pools: 0,
+          retainedV2Pools: 0,
+          retainedV3Pools: 0,
+          expiredV2Pools: 0,
+          expiredV3Pools: 0,
+        },
+      },
+    },
+  }
+  assert.equal(classifyGlobalCatalogAccess(retained, { now }), 'CACHE')
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...retained,
+        uniswap: {
+          ...retained.uniswap,
+          readEvidence: {
+            ...retained.uniswap.readEvidence,
+            topologyRetention: { ...retained.uniswap.readEvidence.topologyRetention, retainedV2Pools: 1 },
+          },
+        },
+      },
+      { now },
+    ),
+    'UNAVAILABLE',
+  )
+  assert.equal(
+    classifyGlobalCatalogAccess(
+      {
+        ...retained,
+        uniswap: {
+          ...retained.uniswap,
+          v2Pools: [
+            {
+              address: POOL_A,
+              token0: POOL_B,
+              token1: POOL_C,
+              lastVerifiedAt: '2026-09-14T17:59:59.999Z',
+              catalogObservation: 'RETAINED_AFTER_CURRENT_TRANSIENT_QUERY_FAILURE',
+            },
+          ],
+          readEvidence: {
+            ...retained.uniswap.readEvidence,
+            topologyRetention: { ...retained.uniswap.readEvidence.topologyRetention, retainedV2Pools: 1 },
+          },
+        },
+      },
+      { now },
+    ),
+    'UNAVAILABLE',
+  )
   assert.equal(
     classifyGlobalCatalogAccess(
       {
@@ -121,12 +189,13 @@ test('catalog access keeps every search path on the last atomic maintenance snap
   )
   assert.equal(classifyGlobalCatalogAccess(null, { now }), 'UNAVAILABLE')
   assert.deepEqual(GLOBAL_CATALOG_MAINTENANCE_POLICY, {
-    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V1',
+    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V2',
     refreshIntervalMs: 15 * 60 * 1_000,
     maximumAgeMs: 6 * 60 * 60 * 1_000,
     writer: 'DEDICATED_SYSTEMD_ONESHOT',
     readPath: 'ATOMIC_CACHE_ONLY',
     rpc: 'OFFICIAL_PUBLIC_ONLY',
+    partialRefresh: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
   })
 })
 
