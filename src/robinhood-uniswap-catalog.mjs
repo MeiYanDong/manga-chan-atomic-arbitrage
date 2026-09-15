@@ -1,6 +1,9 @@
-import { getAddress } from 'viem'
+import { getAddress, keccak256 } from 'viem'
 
-import { RpcErrorClass, classifyRpcError, redactSensitiveText } from './policy.mjs'
+import { RpcErrorClass, classifyRpcError } from './policy.mjs'
+
+const MULTICALL3 = getAddress('0xcA11bde05977b3631167028862bE2a173976CA11')
+const MULTICALL3_RUNTIME_CODE_HASH = '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891'
 
 export const ROBINHOOD_UNISWAP_V2_FACTORY = getAddress('0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f')
 export const ROBINHOOD_UNISWAP_V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
@@ -10,6 +13,12 @@ export const ROBINHOOD_WETH = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAc
 export const ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY = Object.freeze({
   version: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
   maximumAgeMs: 6 * 60 * 60 * 1_000,
+})
+export const ROBINHOOD_CATALOG_MULTICALL_POLICY = Object.freeze({
+  version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_V1',
+  maximumSubcallsPerRequest: 12,
+  concurrency: 1,
+  runtimeCodeHash: MULTICALL3_RUNTIME_CODE_HASH,
 })
 
 const ZERO = getAddress('0x0000000000000000000000000000000000000000')
@@ -114,27 +123,58 @@ function key(value) {
   return String(value).toLowerCase()
 }
 
-async function mapWithConcurrency(items, concurrency, task) {
-  const output = new Array(items.length)
-  let cursor = 0
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-      for (;;) {
-        const index = cursor++
-        if (index >= items.length) return
-        output[index] = await task(items[index], index)
-      }
-    }),
-  )
-  return output
-}
-
 function uniqueAddresses(values) {
   return [...new Map(values.map((value) => [key(getAddress(value)), getAddress(value)])).values()]
 }
 
-function safeError(error) {
-  return redactSensitiveText(error instanceof Error ? error.message : String(error)).slice(0, 240)
+function rpcFailure(error) {
+  const rpcClass = classifyRpcError(error)
+  return { error: `PUBLIC_RPC_${rpcClass}`, rpcClass }
+}
+
+async function boundedFixedBlockMulticall(client, contracts, blockNumber) {
+  const results = []
+  let requests = 0
+  for (
+    let offset = 0;
+    offset < contracts.length;
+    offset += ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest
+  ) {
+    const chunk = contracts.slice(offset, offset + ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest)
+    requests += 1
+    try {
+      const chunkResults = await client.multicall({
+        contracts: chunk,
+        multicallAddress: MULTICALL3,
+        allowFailure: true,
+        batchSize: 0,
+        blockNumber,
+      })
+      if (!Array.isArray(chunkResults) || chunkResults.length !== chunk.length) {
+        throw new Error('canonical Multicall3 result count mismatch')
+      }
+      results.push(...chunkResults)
+    } catch (error) {
+      results.push(...chunk.map(() => ({ status: 'failure', error })))
+    }
+  }
+  return { results, requests }
+}
+
+async function verifiedMulticallCodeHash(client, blockNumber, options) {
+  const expected =
+    options.expectedMulticallCodeHash === undefined ? MULTICALL3_RUNTIME_CODE_HASH : options.expectedMulticallCodeHash
+  if (expected === null) return null
+  const prior = options.verifiedMulticallCodeHash
+  if (prior !== undefined) {
+    if (prior !== expected) throw new Error('canonical Multicall3 prior verification mismatch')
+    return prior
+  }
+  const code = await client.getCode({ address: MULTICALL3, blockNumber })
+  if (!code || code === '0x') throw new Error('canonical Multicall3 has no bytecode')
+  const observed = keccak256(code)
+  if (observed !== expected) throw new Error('canonical Multicall3 bytecode mismatch')
+  return observed
 }
 
 function pairQueryKey(source) {
@@ -293,69 +333,176 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
     }
   }
 
-  const v2Results = await mapWithConcurrency(pairs, 8, async (pair) => {
+  const multicallCodeHash = await verifiedMulticallCodeHash(client, blockNumber, options)
+  const v2FactoryRead = await boundedFixedBlockMulticall(
+    client,
+    pairs.map((pair) => ({
+      address: ROBINHOOD_UNISWAP_V2_FACTORY,
+      abi: v2FactoryAbi,
+      functionName: 'getPair',
+      args: [pair.token0, pair.token1],
+    })),
+    blockNumber,
+  )
+  const v2Results = new Array(pairs.length)
+  const v2Candidates = []
+  for (let index = 0; index < pairs.length; index += 1) {
+    const pair = pairs[index]
+    const result = v2FactoryRead.results[index]
+    if (result?.status !== 'success') {
+      v2Results[index] = { ...rpcFailure(result?.error || 'V2 factory read failed'), phase: 'FACTORY', ...pair }
+      continue
+    }
     try {
-      const pool = await client.readContract({
-        address: ROBINHOOD_UNISWAP_V2_FACTORY,
-        abi: v2FactoryAbi,
-        functionName: 'getPair',
-        args: [pair.token0, pair.token1],
-        blockNumber,
-      })
-      if (key(pool) === key(ZERO)) return null
-      const reserves = await client.readContract({
-        address: getAddress(pool),
-        abi: v2PairAbi,
-        functionName: 'getReserves',
-        blockNumber,
-      })
-      if (BigInt(reserves[0]) === 0n || BigInt(reserves[1]) === 0n) {
-        return { rejected: true, reason: 'zero reserve', address: getAddress(pool), ...pair }
+      const pool = getAddress(result.result)
+      if (key(pool) === key(ZERO)) {
+        v2Results[index] = null
+        continue
       }
-      return {
-        address: getAddress(pool),
-        ...pair,
+      v2Candidates.push({ index, address: pool, ...pair })
+    } catch (error) {
+      v2Results[index] = { ...rpcFailure(error), phase: 'FACTORY_RESULT', ...pair }
+    }
+  }
+  const v2StateRead = await boundedFixedBlockMulticall(
+    client,
+    v2Candidates.map((candidate) => ({
+      address: candidate.address,
+      abi: v2PairAbi,
+      functionName: 'getReserves',
+    })),
+    blockNumber,
+  )
+  for (let index = 0; index < v2Candidates.length; index += 1) {
+    const candidate = v2Candidates[index]
+    const result = v2StateRead.results[index]
+    if (result?.status !== 'success') {
+      v2Results[candidate.index] = {
+        ...rpcFailure(result?.error || 'V2 pool-state read failed'),
+        phase: 'POOL_STATE',
+        address: candidate.address,
+        token0: candidate.token0,
+        token1: candidate.token1,
+      }
+      continue
+    }
+    try {
+      const reserves = result.result
+      if (BigInt(reserves[0]) === 0n || BigInt(reserves[1]) === 0n) {
+        v2Results[candidate.index] = {
+          rejected: true,
+          reason: 'zero reserve',
+          address: candidate.address,
+          token0: candidate.token0,
+          token1: candidate.token1,
+        }
+        continue
+      }
+      v2Results[candidate.index] = {
+        address: candidate.address,
+        token0: candidate.token0,
+        token1: candidate.token1,
         reserve0: BigInt(reserves[0]).toString(),
         reserve1: BigInt(reserves[1]).toString(),
         source: 'CANONICAL_UNISWAP_V2_FACTORY_GET_PAIR_WITH_NONZERO_RESERVES',
       }
     } catch (error) {
-      return { error: safeError(error), rpcClass: classifyRpcError(error), ...pair }
+      v2Results[candidate.index] = {
+        ...rpcFailure(error),
+        phase: 'POOL_STATE_RESULT',
+        address: candidate.address,
+        token0: candidate.token0,
+        token1: candidate.token1,
+      }
     }
-  })
+  }
 
   const v3Queries = pairs.flatMap((pair) => V3_FEES.map((fee) => ({ ...pair, fee })))
-  const v3Results = await mapWithConcurrency(v3Queries, 8, async (query) => {
+  const v3FactoryRead = await boundedFixedBlockMulticall(
+    client,
+    v3Queries.map((query) => ({
+      address: ROBINHOOD_UNISWAP_V3_FACTORY,
+      abi: v3FactoryAbi,
+      functionName: 'getPool',
+      args: [query.token0, query.token1, query.fee],
+    })),
+    blockNumber,
+  )
+  const v3Results = new Array(v3Queries.length)
+  const v3Candidates = []
+  for (let index = 0; index < v3Queries.length; index += 1) {
+    const query = v3Queries[index]
+    const result = v3FactoryRead.results[index]
+    if (result?.status !== 'success') {
+      v3Results[index] = { ...rpcFailure(result?.error || 'V3 factory read failed'), phase: 'FACTORY', ...query }
+      continue
+    }
     try {
-      const pool = await client.readContract({
-        address: ROBINHOOD_UNISWAP_V3_FACTORY,
-        abi: v3FactoryAbi,
-        functionName: 'getPool',
-        args: [query.token0, query.token1, query.fee],
-        blockNumber,
-      })
-      if (key(pool) === key(ZERO)) return null
-      const liquidity = BigInt(
-        await client.readContract({
-          address: getAddress(pool),
-          abi: v3PoolAbi,
-          functionName: 'liquidity',
-          blockNumber,
-        }),
-      )
-      if (liquidity === 0n) {
-        return { rejected: true, reason: 'zero active liquidity', address: getAddress(pool), ...query }
+      const pool = getAddress(result.result)
+      if (key(pool) === key(ZERO)) {
+        v3Results[index] = null
+        continue
       }
-      return {
-        address: getAddress(pool),
-        ...query,
+      v3Candidates.push({ index, address: pool, ...query })
+    } catch (error) {
+      v3Results[index] = { ...rpcFailure(error), phase: 'FACTORY_RESULT', ...query }
+    }
+  }
+  const v3StateRead = await boundedFixedBlockMulticall(
+    client,
+    v3Candidates.map((candidate) => ({
+      address: candidate.address,
+      abi: v3PoolAbi,
+      functionName: 'liquidity',
+    })),
+    blockNumber,
+  )
+  for (let index = 0; index < v3Candidates.length; index += 1) {
+    const candidate = v3Candidates[index]
+    const result = v3StateRead.results[index]
+    if (result?.status !== 'success') {
+      v3Results[candidate.index] = {
+        ...rpcFailure(result?.error || 'V3 pool-state read failed'),
+        phase: 'POOL_STATE',
+        address: candidate.address,
+        token0: candidate.token0,
+        token1: candidate.token1,
+        fee: candidate.fee,
+      }
+      continue
+    }
+    try {
+      const liquidity = BigInt(result.result)
+      if (liquidity === 0n) {
+        v3Results[candidate.index] = {
+          rejected: true,
+          reason: 'zero active liquidity',
+          address: candidate.address,
+          token0: candidate.token0,
+          token1: candidate.token1,
+          fee: candidate.fee,
+        }
+        continue
+      }
+      v3Results[candidate.index] = {
+        address: candidate.address,
+        token0: candidate.token0,
+        token1: candidate.token1,
+        fee: candidate.fee,
         liquidity: liquidity.toString(),
         source: 'CANONICAL_UNISWAP_V3_FACTORY_GET_POOL_WITH_ACTIVE_LIQUIDITY',
       }
     } catch (error) {
-      return { error: safeError(error), rpcClass: classifyRpcError(error), ...query }
+      v3Results[candidate.index] = {
+        ...rpcFailure(error),
+        phase: 'POOL_STATE_RESULT',
+        address: candidate.address,
+        token0: candidate.token0,
+        token1: candidate.token1,
+        fee: candidate.fee,
+      }
     }
-  })
+  }
 
   const rejected = [
     ...v2Results.filter((item) => item?.error || item?.rejected).map((item) => ({ venue: 'UNISWAP_V2', ...item })),
@@ -406,6 +553,12 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
       requestedV3FeeQueries: v3Queries.length,
       v2TransportErrors,
       v3TransportErrors,
+      bulkRead: {
+        policy: ROBINHOOD_CATALOG_MULTICALL_POLICY.version,
+        multicallCodeHash,
+        rpcRequests: v2FactoryRead.requests + v2StateRead.requests + v3FactoryRead.requests + v3StateRead.requests,
+        subcalls: pairs.length + v2Candidates.length + v3Queries.length + v3Candidates.length,
+      },
     },
     assets,
     hubs,

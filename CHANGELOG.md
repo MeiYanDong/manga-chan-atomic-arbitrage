@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Replace the signer-free Global catalog's hundreds of bursty V2/V3 JSON-RPC reads with sequential, fixed-block calls
+  to the code-hash-verified canonical Multicall3 contract. Each request contains at most 12 factory or pool-state
+  subcalls; schema v4 validates the code identity, aggregate request count, logical subcall count and existing partial
+  topology evidence before any search consumes the snapshot. The same official public endpoint remains the only
+  catalog transport. Persist only typed error labels, never provider URLs, request bodies or calldata. A live read-only
+  probe at block 63,606,133 completed in 47,239 ms with 32 Earn, 29 V2 and 119 V3 pools, zero query errors, and 95 HTTP
+  RPC requests representing 1,118 same-block subcalls. This changes no signer, capital, Gas, profit, simulation,
+  submission or receipt boundary.
 - Recover only the logical call omitted from a malformed official-public JSON-RPC batch by retrying that call directly
   against the same public endpoint. The catalog process still has no managed RPC or signer, and HTTP denial,
   throttling, deterministic RPC errors and EVM reverts do not fan out. Extend bounded topology continuity to Earn:

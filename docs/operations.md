@@ -174,14 +174,18 @@ The six-hour base catalog and the rotating projection have different lifetimes. 
 Earn topology, Earn-asset-to-USDG/WETH V2/V3 reads and only the reviewed V4 bootstrap. The current board projection is
 merged in memory for that search round; never persist its assets or pools back into `global-catalog.json`. Otherwise an
 old rotation can consume the next rotation's bounded capacity and can amplify V2/V3 discovery into an unbounded
-long-tail RPC fanout. Every base refresh records requested-call and transport-failure counts. A malformed evidence
-record is not a valid cache. Both resident discovery and the live signer child are strictly cache-only; broad factory
-reads never enter their 60-second deadline. `manga-global-catalog.timer` runs the sole writer every 15 minutes as a
-credential-free one-shot against the official public RPC. It receives neither `live.env`, the managed endpoint, WSS,
-the private key nor a live arm. A transport-partial snapshot remains readable until replaced, but its negative results
-stay evidence-partial and must not be reported as proven no-profit. A missing, malformed or six-hour-stale snapshot
-degrades only Global until maintenance publishes a valid atomic replacement; it must not stop Earn or cause a search
-child to refresh inline.
+long-tail RPC fanout. Every base refresh records requested-call and transport-failure counts. V2/V3 factory and
+pool-state reads use the canonical Multicall3 contract at one fixed block, after its runtime code hash has been verified
+by the canonical Earn catalog read. The slow lane submits at most 12 logical subcalls per sequential official-public
+RPC request and records both aggregate request and subcall counts. Schema-v4 readers reject a mismatched code hash or
+impossible count. Catalog failures persist only typed classes, never provider URLs, request bodies or calldata. A
+malformed evidence record is not a valid cache. Both resident discovery and the live signer child are strictly
+cache-only; broad factory reads never enter their 60-second deadline. `manga-global-catalog.timer` runs the sole writer
+every 15 minutes as a credential-free one-shot against the official public RPC. It receives neither `live.env`, the
+managed endpoint, WSS, the private key nor a live arm. A transport-partial snapshot remains readable until replaced,
+but its negative results stay evidence-partial and must not be reported as proven no-profit. A missing, malformed or
+six-hour-stale snapshot degrades only Global until maintenance publishes a valid atomic replacement; it must not stop
+Earn or cause a search child to refresh inline.
 
 The catalog service has a six-minute process deadline, an exclusive `global-catalog.lock`, a 384 MiB cgroup ceiling and
 shared-host CPU de-prioritization. The release installer copies only `GLOBAL_EXTRA_SETTLEMENT_ASSETS` into the separate

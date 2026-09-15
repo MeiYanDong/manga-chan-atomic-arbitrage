@@ -514,8 +514,9 @@ async function refreshGlobalCatalog(blockNumber, headRetries = 0) {
   // The rotating V4 handoff is an overlay, not durable base-catalog state.
   // Persisting it here makes the same PoolKeys look duplicated on the next
   // read and lets an old rotation consume the current graph's capacity.
-  const refreshedUniswap = await loadRobinhoodHubUniswapCatalog(discoveryClient, earnAssets, blockNumber, {
+  const refreshedUniswap = await loadRobinhoodHubUniswapCatalog(catalogPublicClient, earnAssets, blockNumber, {
     hubs: SETTLEMENT_SEEDS,
+    verifiedMulticallCodeHash: earn.multicallCodeHash,
   })
   const generatedAt = new Date().toISOString()
   const uniswap = mergeRobinhoodPartialCatalog(refreshedUniswap, previous?.uniswap, {
@@ -528,7 +529,7 @@ async function refreshGlobalCatalog(blockNumber, headRetries = 0) {
     earnCatalogRetries: earnRead.retries,
   }
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt,
     blockNumber: BigInt(blockNumber).toString(),
     earn: { ...earn, rejected: earn.rejected.slice(0, 128) },

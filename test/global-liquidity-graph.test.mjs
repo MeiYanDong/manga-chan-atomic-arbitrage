@@ -16,6 +16,7 @@ import { buildGlobalWakeFromEarnEvent } from '../src/feed-signal-coalescer.mjs'
 import {
   loadRobinhoodHubUniswapCatalog,
   mergeRobinhoodPartialCatalog,
+  ROBINHOOD_CATALOG_MULTICALL_POLICY,
   ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY,
 } from '../src/robinhood-uniswap-catalog.mjs'
 
@@ -307,16 +308,22 @@ test('quarantines malformed or explicitly unsupported source records', () => {
 test('catalog quarantines factory entries that have no executable liquidity', async () => {
   const v2Pool = '0x0000000000000000000000000000000000000021'
   const v3Pool = '0x0000000000000000000000000000000000000022'
+  let rpcRequests = 0
   const client = {
-    async readContract({ functionName }) {
-      if (functionName === 'getPair') return v2Pool
-      if (functionName === 'getReserves') return [0n, 1n, 0]
-      if (functionName === 'getPool') return v3Pool
-      if (functionName === 'liquidity') return 0n
-      throw new Error(`unexpected read ${functionName}`)
+    async multicall({ contracts }) {
+      rpcRequests += 1
+      return contracts.map(({ functionName }) => {
+        if (functionName === 'getPair') return { status: 'success', result: v2Pool }
+        if (functionName === 'getReserves') return { status: 'success', result: [0n, 1n, 0] }
+        if (functionName === 'getPool') return { status: 'success', result: v3Pool }
+        if (functionName === 'liquidity') return { status: 'success', result: 0n }
+        throw new Error(`unexpected read ${functionName}`)
+      })
     },
   }
-  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n)
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    expectedMulticallCodeHash: null,
+  })
   assert.equal(catalog.v2Pools.length, 0)
   assert.equal(catalog.v3Pools.length, 0)
   assert.deepEqual(catalog.readEvidence, {
@@ -326,25 +333,96 @@ test('catalog quarantines factory entries that have no executable liquidity', as
     requestedV3FeeQueries: 12,
     v2TransportErrors: 0,
     v3TransportErrors: 0,
+    bulkRead: {
+      policy: ROBINHOOD_CATALOG_MULTICALL_POLICY.version,
+      multicallCodeHash: null,
+      rpcRequests: 4,
+      subcalls: 30,
+    },
   })
+  assert.equal(rpcRequests, 4)
   assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V2' && item.reason === 'zero reserve'))
   assert.ok(catalog.rejected.some((item) => item.venue === 'UNISWAP_V3' && item.reason === 'zero active liquidity'))
 })
 
-test('catalog exposes incomplete transport evidence without retaining credentialized errors', async () => {
-  const credentializedEndpoint = `${'https'}://${['reader', 'secret'].join(':')}@example.invalid/rpc`
+test('catalog discovers active V2/V3 pools through bounded canonical Multicall requests', async () => {
+  const zero = '0x0000000000000000000000000000000000000000'
+  const v2Pool = '0x0000000000000000000000000000000000000021'
+  const v3Pool = '0x0000000000000000000000000000000000000022'
+  let rpcRequests = 0
   const client = {
-    async readContract() {
-      throw new Error(`request failed at ${credentializedEndpoint}`)
+    async multicall({ contracts }) {
+      rpcRequests += 1
+      return contracts.map(({ functionName, args }) => {
+        const pair = new Set((args || []).slice(0, 2).map((address) => address.toLowerCase()))
+        const targetPair = pair.has(STOCK.toLowerCase()) && pair.has(USDG.toLowerCase())
+        if (functionName === 'getPair') return { status: 'success', result: targetPair ? v2Pool : zero }
+        if (functionName === 'getReserves') return { status: 'success', result: [10n, 20n, 0] }
+        if (functionName === 'getPool') {
+          return { status: 'success', result: targetPair && args[2] === 500 ? v3Pool : zero }
+        }
+        if (functionName === 'liquidity') return { status: 'success', result: 30n }
+        throw new Error(`unexpected read ${functionName}`)
+      })
     },
   }
-  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n)
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    hubs: [USDG, WETH],
+    expectedMulticallCodeHash: null,
+  })
+
+  assert.equal(catalog.v2Pools.length, 1)
+  assert.equal(catalog.v2Pools[0].address, v2Pool)
+  assert.equal(catalog.v3Pools.length, 1)
+  assert.equal(catalog.v3Pools[0].address, v3Pool)
+  assert.equal(catalog.readEvidence.complete, true)
+  assert.deepEqual(catalog.readEvidence.bulkRead, {
+    policy: ROBINHOOD_CATALOG_MULTICALL_POLICY.version,
+    multicallCodeHash: null,
+    rpcRequests: 4,
+    subcalls: 17,
+  })
+  assert.equal(rpcRequests, 4)
+})
+
+test('catalog rejects an untrusted prior Multicall identity before making a request', async () => {
+  let requests = 0
+  const client = {
+    async multicall() {
+      requests += 1
+      return []
+    },
+  }
+  await assert.rejects(
+    loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+      verifiedMulticallCodeHash: `0x${'00'.repeat(32)}`,
+    }),
+    /prior verification mismatch/,
+  )
+  assert.equal(requests, 0)
+})
+
+test('catalog exposes typed incomplete evidence without retaining endpoints, request bodies, or calldata', async () => {
+  const credentializedEndpoint = `${'https'}://${['reader', 'secret'].join(':')}@example.invalid/rpc`
+  const client = {
+    async multicall() {
+      const error = new Error(`http request failed at ${credentializedEndpoint}; Request body: {"data":"0xdeadbeef"}`)
+      error.name = 'HttpRequestError'
+      throw error
+    },
+  }
+  const catalog = await loadRobinhoodHubUniswapCatalog(client, [STOCK], 123n, {
+    expectedMulticallCodeHash: null,
+  })
 
   assert.equal(catalog.readEvidence.status, 'PARTIAL')
   assert.equal(catalog.readEvidence.complete, false)
   assert.equal(catalog.readEvidence.v2TransportErrors, 3)
   assert.equal(catalog.readEvidence.v3TransportErrors, 12)
-  assert.ok(catalog.rejected.every((item) => !String(item.error || '').includes('secret')))
+  assert.ok(catalog.rejected.every((item) => item.error === 'PUBLIC_RPC_NETWORK'))
+  assert.ok(
+    catalog.rejected.every((item) => !/secret|Request body|deadbeef|example\.invalid/i.test(JSON.stringify(item))),
+  )
 })
 
 test('partial catalog refresh retains only exact transiently failed queries inside the evidence lifetime', () => {
