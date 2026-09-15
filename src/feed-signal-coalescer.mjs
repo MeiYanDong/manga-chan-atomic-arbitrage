@@ -1,14 +1,34 @@
-function values(values) {
-  return (values || []).filter((value) => typeof value === 'string' && value.length > 0)
+const MAXIMUM_SIGNAL_VALUES = 1_024
+const MAXIMUM_CLASSIFICATION_REASONS = 16
+const MAXIMUM_CLASSIFICATION_REASON_CHARACTERS = 128
+
+function values(collection) {
+  return (collection || []).filter((value) => typeof value === 'string' && value.length > 0)
 }
 
 function unionValues(...collections) {
   const unique = new Map()
-  for (const value of collections.flatMap(values)) {
-    const key = /^0x[0-9a-f]+$/i.test(value) ? value.toLowerCase() : value
-    if (!unique.has(key)) unique.set(key, value)
+  for (const collection of collections) {
+    for (const value of values(collection)) {
+      const key = /^0x[0-9a-f]+$/i.test(value) ? value.toLowerCase() : value
+      if (!unique.has(key)) unique.set(key, value)
+      if (unique.size > MAXIMUM_SIGNAL_VALUES) throw new Error('coalesced market signal exceeds its value bound')
+    }
   }
   return [...unique.values()].sort((left, right) => left.toLowerCase().localeCompare(right.toLowerCase()))
+}
+
+function atomicClassificationReasons(signal) {
+  const explicit = values(signal?.classificationReasons)
+  const source = explicit.length > 0 ? explicit : values([signal?.classificationReason])
+  if (source.some((reason) => reason.length > MAXIMUM_CLASSIFICATION_REASON_CHARACTERS)) {
+    throw new Error('market classification reason exceeds its character bound')
+  }
+  const unique = unionValues(source)
+  if (unique.length > MAXIMUM_CLASSIFICATION_REASONS) {
+    throw new Error('coalesced market signal exceeds its classification-reason bound')
+  }
+  return unique
 }
 
 function parsedSequence(value) {
@@ -55,12 +75,13 @@ function latestTime(...candidates) {
 export function mergePendingMarketSignals(current, next, options = {}) {
   const left = current && typeof current === 'object' ? current : {}
   const right = next && typeof next === 'object' ? next : {}
-  const classificationReasons = unionValues(
-    left.classificationReasons,
-    [left.classificationReason],
-    right.classificationReasons,
-    [right.classificationReason],
-  )
+  // classificationReason is a presentation-only projection. Once the atomic
+  // list exists, feeding that joined projection back into the next merge would
+  // create A, B, A+B, A+B+A+B... and grow exponentially under a hot Feed.
+  const classificationReasons = unionValues(atomicClassificationReasons(left), atomicClassificationReasons(right))
+  if (classificationReasons.length > MAXIMUM_CLASSIFICATION_REASONS) {
+    throw new Error('coalesced market signal exceeds its classification-reason bound')
+  }
   const eventPools = unionValues(left.eventPools, [left.eventPool], right.eventPools, [right.eventPool])
   const sourceReceivedAt = earliestTime(
     left.sourceReceivedAt,

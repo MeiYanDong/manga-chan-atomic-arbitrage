@@ -191,6 +191,7 @@ test('counts policy-rejected matched frames as filtered and wakes only actionabl
     },
     perMessageDeflate: true,
     handshakeTimeout: 10_000,
+    maxPayload: 8 * 1024 * 1024,
   })
   FakeWebSocket.latest.readyState = 1
   FakeWebSocket.latest.emit('open')
@@ -224,6 +225,7 @@ test('counts policy-rejected matched frames as filtered and wakes only actionabl
     sequenceGapFrames: 0,
     outOfOrderFrames: 0,
     malformed: 0,
+    oversizedFrames: 0,
     errors: 0,
     rejections: 0,
     reconnects: 0,
@@ -237,7 +239,57 @@ test('counts policy-rejected matched frames as filtered and wakes only actionabl
     nextReconnectAt: null,
     feedUrl: 'wss://feed.mainnet.chain.robinhood.com',
     watchedAddresses: 2,
+    maximumFrameBytes: 8 * 1024 * 1024,
   })
+  client.stop()
+})
+
+test('rejects an oversized frame before decoding and falls back to recovery', async () => {
+  class BoundedWebSocket {
+    static latest = null
+    static options = null
+
+    constructor(_url, _protocols, options) {
+      this.readyState = 0
+      this.listeners = new Map()
+      BoundedWebSocket.latest = this
+      BoundedWebSocket.options = options
+    }
+
+    addEventListener(name, listener) {
+      this.listeners.set(name, listener)
+    }
+
+    emit(name, event = {}) {
+      this.listeners.get(name)?.(event)
+    }
+
+    terminate() {
+      this.readyState = 3
+    }
+
+    close() {
+      this.readyState = 3
+    }
+  }
+
+  const statuses = []
+  const client = new SequencerFeedWakeClient({
+    WebSocketImpl: BoundedWebSocket,
+    maximumFrameBytes: 64,
+    reconnectMaxMs: 1,
+    onStatus: (status) => statuses.push(status),
+  })
+  client.start()
+  assert.equal(BoundedWebSocket.options.maxPayload, 64)
+  BoundedWebSocket.latest.readyState = 1
+  BoundedWebSocket.latest.emit('open')
+  BoundedWebSocket.latest.emit('message', { data: 'x'.repeat(65) })
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 0))
+
+  assert.equal(client.snapshot().oversizedFrames, 1)
+  assert.equal(client.snapshot().lastStatus, 'OVERSIZED_FRAME_RECOVERY')
+  assert.equal(statuses.at(-1).recovery, 'PUBLIC_LOG_AND_PERIODIC')
   client.stop()
 })
 
