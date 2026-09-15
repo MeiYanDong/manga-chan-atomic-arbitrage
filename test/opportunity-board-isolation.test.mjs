@@ -262,6 +262,10 @@ test('release installer rebuilds artifacts without repeating CI contract suites 
   const bootstrap = fs.readFileSync(path.join(root, 'deploy', 'bootstrap-release.sh'), 'utf8')
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 
+  const umaskOffset = installer.indexOf('umask 0022')
+  const dependencyInstallOffset = installer.indexOf('npm ci --no-audit --no-fund')
+  assert.ok(umaskOffset >= 0, 'installer must normalize the caller umask')
+  assert.ok(dependencyInstallOffset > umaskOffset, 'umask must be normalized before npm writes the release')
   assert.match(installer, /^npm ci --no-audit --no-fund$/m)
   assert.match(installer, /^npm run release:build$/m)
   assert.doesNotMatch(installer, /^npm run check$/m)
