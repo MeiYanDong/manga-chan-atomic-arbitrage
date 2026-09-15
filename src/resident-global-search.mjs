@@ -30,7 +30,7 @@ export const GLOBAL_CATALOG_BULK_READ_POLICY = Object.freeze({
   runtimeCodeHash: ROBINHOOD_CATALOG_MULTICALL_POLICY.runtimeCodeHash,
 })
 export const GLOBAL_CATALOG_MAINTENANCE_POLICY = Object.freeze({
-  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V6',
+  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V7',
   refreshIntervalMs: GLOBAL_CATALOG_REFRESH_INTERVAL_MS,
   maximumAgeMs: GLOBAL_CATALOG_MAX_AGE_MS,
   writer: 'DEDICATED_SYSTEMD_ONESHOT',
@@ -117,6 +117,7 @@ function validCatalogBulkReadEvidence(catalog, requestedPairs, requestedV3FeeQue
   const rpcRequests = Number(evidence?.rpcRequests)
   const retries = Number(evidence?.retries)
   const transientFailures = Number(evidence?.transientFailures)
+  const embeddedTransientBatches = Number(evidence?.embeddedTransientBatches)
   const subcalls = Number(evidence?.subcalls)
   const maximum = ROBINHOOD_CATALOG_MULTICALL_POLICY.maximumSubcallsPerRequest
   const minimumRequests = Math.ceil(requestedPairs / maximum) + Math.ceil(requestedV3FeeQueries / maximum)
@@ -142,6 +143,9 @@ function validCatalogBulkReadEvidence(catalog, requestedPairs, requestedV3FeeQue
     Number.isSafeInteger(transientFailures) &&
     transientFailures >= retries &&
     transientFailures <= rpcRequests &&
+    Number.isSafeInteger(embeddedTransientBatches) &&
+    embeddedTransientBatches >= 0 &&
+    embeddedTransientBatches <= transientFailures &&
     Number.isSafeInteger(subcalls) &&
     subcalls >= minimumSubcalls &&
     subcalls <= maximumSubcalls

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Normalize a viem `allowFailure` result array whose every subcall failed with a transient RPC classification back into
+  one aggregate transport failure before applying the paced retry policy. Production v0.17.9 proved the adapter gap:
+  36 V3 factory and 12 V3 state reads were returned as four all-`THROTTLED` 12-item arrays, while outer retry evidence
+  incorrectly remained zero. Mixed-result arrays and invariant failures are never promoted or retried. Schema-v4
+  evidence now counts embedded transient batches separately; no signer, paid RPC, transaction or profit boundary
+  changes.
 - Pace canonical Multicall3 catalog requests by at least 250 ms and retry only aggregate failures classified as
   `NETWORK`, `THROTTLED` or `STATE_NOT_READY`, at most three attempts with exponential backoff. Persist and validate
   the fixed retry policy, actual request count, retry count and transient-failure count. Production v0.17.8 proved the

@@ -44,3 +44,9 @@ RPC usage, signer authority, transaction attempt or profit claim.
 Stop the watcher, reconcile the shared wallet lane and restore the preceding immutable release. Rebuild a compatible
 catalog with that release's maintenance service. Never hand-edit retry evidence or relabel a partial generation as
 complete.
+
+## Production follow-up
+
+v0.17.9 showed that viem may resolve one throttled aggregate as an all-failure subcall array when `allowFailure` is
+enabled, bypassing the thrown-error retry branch. [ADR 0093](0093-normalize-embedded-multicall-transport-failures.md)
+defines the narrowly bounded normalization used to honor this ADR's retry policy.
