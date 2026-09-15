@@ -92,6 +92,13 @@ cursor and no unresolved mutation. For v4 it must also report `BALANCE_SCALED_BR
 `EARN_NO_NET_OPPORTUNITY` is a healthy no-trade decision; it proves no signature or broadcast, not that every Earn pool
 or future block lacks an opportunity.
 
+Earn event and five-minute recovery discovery first enter one resident public-only worker. Its environment is a strict
+allowlist and contains no managed endpoint, WSS, webhook, signing reference or live arm. Schema-v1 through schema-v4
+atomic catalog snapshots are accepted only when their current/retained/expired counters and pool observations agree.
+Only a complete negative no older than 15 seconds may skip duplicate discovery. A positive is a bounded hint and must
+pass current canonical Factory/Vault/pool membership, quote, Gas, balance, nonce, authorization and simulation in the
+sole signer child. Worker failure falls back only Earn to the prior bounded child and does not stop Global discovery.
+
 If an Earn broadcast becomes UNKNOWN, the watcher enters `RECONCILING_UNKNOWN` itself. It freezes only the shared
 wallet/nonce signer, continues the board, Earn event and Sequencer Feed read paths, and retries the typed reconciler
 every five seconds. Do not stop it merely to run a manual reconciliation. If the supervisor itself is no longer alive,
@@ -258,14 +265,21 @@ If deployment or execution becomes UNKNOWN, leave the watcher stopped and run `n
 `dual:reconcile`). Reconciliation may replay only the exact persisted raw transaction. Never deploy a second universal
 executor while the first deployment mutation is unresolved.
 
-The Global event lane starts one credential-stripped resident search child before the serial signer scheduler. Its
-environment has no signing authorization, managed endpoint or live arm; it uses only the official public reader and
-keeps at most one request in flight. A complete negative result can suppress an identical queued read, but a positive
-result is only a hint and always returns through the existing latest-block signer gates. Neither the worker nor its
-bounded live fallback child writes or refreshes `global-catalog.json`; both consume the same atomic snapshot. Missing,
-malformed or stale catalog evidence degrades that Global request while the dedicated maintenance timer repairs the
-slow lane. A partial cache remains usable but cannot upgrade its negative result to complete evidence. Worker crash,
-timeout or protocol failure degrades that request only.
+The Global event and periodic lanes enter one credential-stripped resident search child before the serial signer
+scheduler. Its environment is an explicit allowlist with no signing authorization, managed endpoint, WSS, webhook or
+live arm; it uses only the official public reader and keeps at most one request in flight. A complete negative result no
+older than 15 seconds can suppress an identical queued read. A positive hint expires after 60 seconds and carries no
+executable plan: the signer reloads the atomic catalog, requires the same graph/catalog commitments, deterministically
+finds the original route, rebuilds the typed plan, and then reacquires current funding, quote, Gas, net-profit,
+simulation, balance, nonce and authorization evidence. Neither worker nor bounded fallback writes or refreshes
+`global-catalog.json`. Missing, malformed or stale evidence degrades that request while maintenance repairs the slow
+lane; a partial cache cannot prove no-profit. Worker crash, timeout or protocol failure degrades that adapter only.
+Earn and Global recovery starts are offset by 15 seconds to avoid a synchronized public-RPC burst.
+
+These resident workers are children of the signer supervisor and therefore share its operating-system service identity;
+environment stripping prevents accidental capability inheritance but is not a hostile-code security boundary. Do not
+describe them as separate credential-inaccessible services. A future release may move the same bounded protocol behind
+dedicated service users and a Unix socket without changing the signer gate.
 The worker accepts exact dependency wakes from the shared Sequencer Feed, the already-running canonical Earn Vault WSS
 subscription and the existing public Earn-log backstop. Earn events are projected as changed pool addresses and can
 therefore wake same-Earn or cross-protocol routes in the unified graph. This fan-out performs no extra source request and

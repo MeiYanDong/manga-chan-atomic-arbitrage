@@ -36,7 +36,8 @@ export function isChildProcessDeadlineError(error) {
  *
  * @param {string} executable
  * @param {string[]} args
- * @param {{cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number, label: string, maximumOutputBytes?: number, killGraceMs?: number}} options
+ * @param {{cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number, label: string, input?: string,
+ * maximumInputBytes?: number, maximumOutputBytes?: number, killGraceMs?: number}} options
  */
 export function runBoundedProcess(executable, args, options) {
   const {
@@ -44,6 +45,8 @@ export function runBoundedProcess(executable, args, options) {
     env,
     timeoutMs,
     label,
+    input,
+    maximumInputBytes = DEFAULT_MAXIMUM_OUTPUT_BYTES,
     maximumOutputBytes = DEFAULT_MAXIMUM_OUTPUT_BYTES,
     killGraceMs = DEFAULT_KILL_GRACE_MS,
   } = options
@@ -52,9 +55,20 @@ export function runBoundedProcess(executable, args, options) {
   if (!Number.isSafeInteger(maximumOutputBytes) || maximumOutputBytes <= 0) {
     throw new Error('child output bound must be positive')
   }
+  if (!Number.isSafeInteger(maximumInputBytes) || maximumInputBytes <= 0) {
+    throw new Error('child input bound must be positive')
+  }
+  if (input !== undefined && typeof input !== 'string') throw new Error('child input must be a string')
+  if (input !== undefined && Buffer.byteLength(input) > maximumInputBytes) {
+    throw new Error('child input exceeds its bound')
+  }
 
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(executable, args, {
+      cwd,
+      env,
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    })
     let stdout = ''
     let stderr = ''
     let deadlineExceeded = false
@@ -67,6 +81,7 @@ export function runBoundedProcess(executable, args, options) {
     child.stderr.on('data', (chunk) => {
       stderr = appendBounded(stderr, chunk)
     })
+    if (input !== undefined) child.stdin.end(input)
     const timeout = setTimeout(() => {
       deadlineExceeded = true
       child.kill('SIGTERM')

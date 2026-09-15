@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Move both Earn and Global event/periodic market search into independent coalescing resident read workers so a public
+  scan no longer occupies the serial signer scheduler. Fix Earn schema-v4 atomic-catalog reuse, accept a negative only
+  with complete evidence no older than 15 seconds, and stagger periodic startup. A Global positive now carries only a
+  bounded route hint: the signer requires the same graph/catalog commitments, reconstructs the typed route and plan,
+  and reacquires current funding, quote, Gas, net-profit, simulation, balance, nonce and authorization evidence before
+  loading signing material. Worker environments are strict public-only allowlists and adapter failure remains isolated.
+  This addresses the production-observed 46.759-second periodic lateness behind an in-flight Earn read without adding a
+  signer, changing capital/Gas/profit limits or weakening receipt accounting.
 - Let only high-confidence market events (priority 80 or above) precede an overdue periodic recovery job, and only
   while the oldest recovery deadline is less than 30 seconds late. Event work never moves that deadline; at the hard
   bound recovery wins. Runtime evidence now reports the policy, bound and actual deferrals. Production v0.17.14 showed

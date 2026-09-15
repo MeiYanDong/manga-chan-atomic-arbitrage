@@ -99,7 +99,16 @@ import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/gene
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
 import { ProtectedStrategyScheduler } from '../src/protected-strategy-scheduler.mjs'
-import { classifyGlobalSearchHandoff, ResidentGlobalSearchClient } from '../src/resident-global-search.mjs'
+import {
+  classifyGlobalSearchHandoff,
+  encodeGlobalLiveRevalidationInput,
+  ResidentGlobalSearchClient,
+} from '../src/resident-global-search.mjs'
+import {
+  classifyEarnSearchHandoff,
+  encodeEarnLiveRevalidationInput,
+  ResidentEarnSearchClient,
+} from '../src/resident-earn-search.mjs'
 import {
   MANAGED_EARN_RECONNECT_POLICY,
   ManagedEarnEventSource,
@@ -142,6 +151,7 @@ const STARTUP_RPC_RETRY_DELAY_MS = 1_000
 const UNKNOWN_RECONCILE_RETRY_MS = 5_000
 const STRATEGY_PRIORITY_EVENT_FLOOR = 80
 const STRATEGY_MAX_PERIODIC_DEFERRAL_MS = 30_000
+const GLOBAL_PERIODIC_START_STAGGER_MS = 15_000
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUNTIME_CONFIG = loadRuntimeConfig()
@@ -2400,7 +2410,7 @@ function parseEarnChildOutput(stdout) {
   }
 }
 
-async function runEarnOnHoodChild(command, extraEnvironment = {}, timeoutMs = 180_000) {
+async function runEarnOnHoodChild(command, extraEnvironment = {}, timeoutMs = 180_000, input = undefined) {
   const childEnvironment = { ...process.env, ...extraEnvironment }
   if (!extraEnvironment.EARN_SHARED_AUTHORIZATION_ID) delete childEnvironment.EARN_SHARED_AUTHORIZATION_ID
   if (!extraEnvironment.EARN_SHARED_WATCH_PID) delete childEnvironment.EARN_SHARED_WATCH_PID
@@ -2412,15 +2422,17 @@ async function runEarnOnHoodChild(command, extraEnvironment = {}, timeoutMs = 18
       env: childEnvironment,
       timeoutMs,
       label: `EarnOnHood ${command} child`,
+      ...(input === undefined ? {} : { input, maximumInputBytes: 1_000_000 }),
     },
   )
   return parseEarnChildOutput(result.stdout)
 }
 
-function runEarnOnHoodShared(arm, signal, wakeReason) {
+function runEarnOnHoodShared(arm, signal, wakeReason, preparedSearchResult = null) {
   const eventPools = [...new Set([...(signal?.eventPools || []), signal?.eventPool].filter(Boolean))]
+  const candidateInput = preparedSearchResult ? encodeEarnLiveRevalidationInput(preparedSearchResult) : undefined
   return runEarnOnHoodChild(
-    'execute',
+    candidateInput ? 'execute-candidate' : 'execute',
     {
       EARN_LIVE_ARM: '1',
       EARN_SHARED_AUTHORIZATION_ID: arm.authorizationId,
@@ -2433,13 +2445,15 @@ function runEarnOnHoodShared(arm, signal, wakeReason) {
       EARN_WAKE_REASON: wakeReason || '',
     },
     RUNTIME_CONFIG.earnWatchChildTimeoutMs,
+    candidateInput,
   )
 }
 
-function runGlobalShared(arm, signal, wakeReason, scheduling = {}) {
+function runGlobalShared(arm, signal, wakeReason, scheduling = {}, preparedSearchResult = null) {
+  const candidateInput = preparedSearchResult ? encodeGlobalLiveRevalidationInput(preparedSearchResult) : undefined
   return runChildScript(
     'global-arb.mjs',
-    'execute',
+    candidateInput ? 'execute-candidate' : 'execute',
     {
       // Broad topology refresh is a separate signer-free slow lane. A live
       // child may consume the last atomic catalog snapshot but must never let
@@ -2471,6 +2485,7 @@ function runGlobalShared(arm, signal, wakeReason, scheduling = {}) {
       GLOBAL_WAKE_REASON: wakeReason || '',
     },
     RUNTIME_CONFIG.globalWatchChildTimeoutMs,
+    candidateInput,
   )
 }
 
@@ -2539,12 +2554,13 @@ function applyGlobalFeedWatchPolicy(feed) {
   return policy
 }
 
-async function runChildScript(script, command, extraEnvironment = {}, timeoutMs = 240_000) {
+async function runChildScript(script, command, extraEnvironment = {}, timeoutMs = 240_000, input = undefined) {
   const result = await runBoundedProcess(process.execPath, [path.join(ROOT, 'scripts', script), command], {
     cwd: ROOT,
     env: { ...process.env, ...extraEnvironment },
     timeoutMs,
     label: `global ${command} child`,
+    ...(input === undefined ? {} : { input, maximumInputBytes: 1_000_000 }),
   })
   return parseEarnChildOutput(result.stdout)
 }
@@ -2589,7 +2605,9 @@ async function executeGlobalWatcherWake({
     },
   }
   writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
-  const handoff = classifyGlobalSearchHandoff(preparedSearchResult)
+  const handoff = classifyGlobalSearchHandoff(preparedSearchResult, {
+    requiresLegacySearch: Boolean(signal?.requiresLegacyGlobalSearch),
+  })
   appendAudit('global_watch_exact_preflight_started', {
     authorizationId: arm.authorizationId,
     wakeReason,
@@ -2597,16 +2615,23 @@ async function executeGlobalWatcherWake({
       handoff.mode === 'REUSE_READ_ONLY_RESULT'
         ? 'RESIDENT_SIGNER_FREE_WORKER_REUSED'
         : handoff.mode === 'LIVE_REVALIDATION'
-          ? 'RESIDENT_POSITIVE_THEN_BOUNDED_SIGNER_CHILD'
+          ? 'RESIDENT_POSITIVE_THEN_COMMITTED_ROUTE_REBUILD_AND_EXACT_SIGNER_GATE'
           : preparedSearchResult
             ? 'RESIDENT_INCOMPLETE_THEN_BOUNDED_SIGNER_CHILD'
             : 'BOUNDED_SIGNER_CHILD',
+    residentResultAgeMs: handoff.ageMs,
   })
   const preparedSnapshot = handoff.snapshot
   const result =
     handoff.mode === 'REUSE_READ_ONLY_RESULT'
       ? { status: preparedSnapshot.status, ...preparedSnapshot }
-      : await runGlobalShared(arm, signal, wakeReason, { scheduledAt, claimedAt })
+      : await runGlobalShared(
+          arm,
+          signal,
+          wakeReason,
+          { scheduledAt, claimedAt },
+          handoff.mode === 'LIVE_REVALIDATION' ? preparedSearchResult : null,
+        )
   const feedPolicy = applyGlobalFeedWatchPolicy(feed)
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const usage = assertDualAuthorization(arm, nextDeployments)
@@ -2690,6 +2715,7 @@ async function executeEarnWatcherWake({
   signal,
   eventCursor,
   nextPeriodicAt,
+  preparedSearchResult = null,
 }) {
   appendAudit('earn_watch_wake', {
     authorizationId: arm.authorizationId,
@@ -2718,7 +2744,31 @@ async function executeEarnWatcherWake({
     },
   }
   writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
-  const earnResult = await runEarnOnHoodShared(arm, signal, wakeReason)
+  const handoff = classifyEarnSearchHandoff(preparedSearchResult, {
+    requiresLegacySearch: Boolean(signal?.requiresLegacyEarnSearch),
+  })
+  appendAudit('earn_search_handoff', {
+    authorizationId: arm.authorizationId,
+    wakeReason,
+    preflightSource:
+      handoff.mode === 'REUSE_READ_ONLY_RESULT'
+        ? 'RESIDENT_SIGNER_FREE_WORKER_REUSED'
+        : handoff.mode === 'LIVE_REVALIDATION'
+          ? 'RESIDENT_POSITIVE_THEN_BOUNDED_SIGNER_CHILD'
+          : preparedSearchResult
+            ? 'RESIDENT_INCOMPLETE_OR_STALE_THEN_BOUNDED_SIGNER_CHILD'
+            : 'BOUNDED_SIGNER_CHILD',
+    residentResultAgeMs: handoff.ageMs,
+  })
+  const earnResult =
+    handoff.mode === 'REUSE_READ_ONLY_RESULT'
+      ? { ...handoff.report, status: handoff.report.status }
+      : await runEarnOnHoodShared(
+          arm,
+          signal,
+          wakeReason,
+          handoff.mode === 'LIVE_REVALIDATION' ? preparedSearchResult : null,
+        )
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const earnUsage = assertDualAuthorization(arm, nextDeployments)
   const confirmed = earnResult.status === 'CONFIRMED_NET_PROFIT'
@@ -2797,6 +2847,7 @@ async function watchDual() {
   let sequencerFeed = null
   let managedEarnEventSource = null
   let globalSearchWorker = null
+  let earnSearchWorker = null
   const persistStopRequested = () => {
     if (!watchState) return
     watchState = { ...watchState, status: 'STOPPED_BY_SIGNAL', updatedAt: new Date().toISOString() }
@@ -2914,6 +2965,7 @@ async function watchDual() {
           id: 'GLOBAL',
           periodMs: RUNTIME_CONFIG.globalWatchPeriodicMs,
           minimumIntervalMs: RUNTIME_CONFIG.globalWatchMinIntervalMs,
+          firstPeriodicAt: Date.parse(startedAt) + GLOBAL_PERIODIC_START_STAGGER_MS,
         },
       ],
     })
@@ -2950,7 +3002,8 @@ async function watchDual() {
       strategyScheduler: strategyScheduler.snapshot(),
       earnOnHood: {
         status: 'STARTING',
-        triggerMode: 'MANAGED_WSS_OR_FILTERED_ORDERED_FEED_OR_PUBLIC_RECOVERY_OR_PERIODIC_RECOVERY',
+        triggerMode:
+          'RESIDENT_SIGNER_FREE_EVENT_OR_PERIODIC_SEARCH_THEN_COMPLETE_NEGATIVE_REUSE_OR_SINGLE_SIGNER_REVALIDATION',
         principalPolicy: arm.earnOnHood.principalPolicy,
         fixedPrincipalCap: null,
         routeCommitment: arm.earnOnHood.routeCommitment,
@@ -2961,6 +3014,7 @@ async function watchDual() {
         lastPreflightAt: null,
         lastResult: null,
         lastTransaction: null,
+        searchWorker: null,
       },
       global: {
         status: 'STARTING',
@@ -3004,12 +3058,120 @@ async function watchDual() {
     let lastEarnEventPollAt = 0
     let managedEarnStartFailures = 0
     let managedEarnNextRetryAt = 0
+    const readyEarnSearchResults = new Map()
     const readyGlobalSearchResults = new Map()
-    const enqueueEarnMarketWake = (wakeReason, signal) => {
+    const earnWakePriority = (wakeReason) =>
+      wakeReason === 'FILTERED_SEQUENCER_FEED'
+        ? 100
+        : wakeReason === 'MANAGED_WSS_EARN_SWAP'
+          ? 90
+          : wakeReason === 'RESIDENT_EARN_SEARCH_POSITIVE'
+            ? 85
+            : 50
+    const enqueueLegacyEarnWake = (wakeReason, signal) => {
       strategyScheduler.enqueueEvent('EARN', {
         reason: wakeReason,
-        signal,
-        priority: wakeReason === 'FILTERED_SEQUENCER_FEED' ? 100 : wakeReason === 'MANAGED_WSS_EARN_SWAP' ? 90 : 50,
+        signal: { ...signal, requiresLegacyEarnSearch: true },
+        priority: earnWakePriority(wakeReason),
+      })
+    }
+    const earnSearchContext = () => {
+      deployments = refreshDeploymentLedgers(deployments)
+      const currentUsage = assertDualAuthorization(arm, deployments)
+      const quarantine = earnOnHoodRouteQuarantine(readAuditRecords())
+      return {
+        earnGasSurplusWei: currentUsage.earnGasSurplusWei.toString(),
+        excludedRouteIds: quarantine.map((entry) => entry.routeId),
+      }
+    }
+    const earnSearchWakeSource = (wakeReason) =>
+      wakeReason === 'FILTERED_SEQUENCER_FEED'
+        ? 'SEQUENCER_FEED'
+        : wakeReason === 'MANAGED_WSS_EARN_SWAP'
+          ? 'MANAGED_WSS_EARN_SWAP'
+          : wakeReason === 'REVIEWED_POOL_SWAP_EVENT'
+            ? 'PUBLIC_EARN_LOG_BACKSTOP'
+            : 'PERIODIC_RECOVERY'
+    const enqueueEarnSearchWake = (wakeReason, signal = {}) => {
+      let enriched
+      try {
+        const wakeSource = earnSearchWakeSource(wakeReason)
+        enriched = {
+          ...signal,
+          wakeSource,
+          wakeSources: [...new Set([...(signal.wakeSources || []), wakeSource])],
+          sourceReceivedAt: signal.sourceReceivedAt || signal.receivedAt || new Date().toISOString(),
+          searchContext: earnSearchContext(),
+        }
+      } catch (error) {
+        appendAudit('earn_search_context_degraded', {
+          authorizationId: arm.authorizationId,
+          wakeReason,
+          reason: errorText(error),
+          fallback: 'BOUNDED_EARN_CHILD',
+        })
+        enqueueLegacyEarnWake(wakeReason, signal)
+        return false
+      }
+      if (!earnSearchWorker?.enqueue(enriched)) {
+        enqueueLegacyEarnWake(wakeReason, enriched)
+        return false
+      }
+      return true
+    }
+    earnSearchWorker = new ResidentEarnSearchClient({
+      scriptPath: path.join(ROOT, 'scripts', 'earn-search-worker.mjs'),
+      cwd: ROOT,
+      environment: {
+        ...process.env,
+        MANGA_RUN_DIR: RUN_DIR,
+        EARN_LIVE_MIN_NET_WETH: RUNTIME_CONFIG.earnLiveMinNetWeth,
+        EARN_LIVE_MIN_HEADROOM_WETH: RUNTIME_CONFIG.earnLiveMinHeadroomWeth,
+        EARN_LIVE_MAX_FAILED_GAS_WETH: RUNTIME_CONFIG.earnLiveMaxFailedGasWeth,
+        EARN_LIVE_WALLET_RESERVE_WETH: RUNTIME_CONFIG.earnLiveWalletReserveWeth,
+        EARN_LIVE_COARSE_PROBE_POINTS: String(RUNTIME_CONFIG.earnLiveCoarseProbePoints),
+        EARN_LIVE_REFINEMENT_POINTS: String(RUNTIME_CONFIG.earnLiveRefinementPoints),
+      },
+      timeoutMs: RUNTIME_CONFIG.earnWatchChildTimeoutMs,
+      onResult: ({ requestId, signal, result, completedAt, durationMs, superseded }) => {
+        const prepared = { ...result, completedAt }
+        const handoff = classifyEarnSearchHandoff(prepared)
+        const positive = handoff.mode === 'LIVE_REVALIDATION'
+        appendAudit('earn_search_worker_result', {
+          authorizationId: arm.authorizationId,
+          requestId,
+          status: result?.status || 'UNKNOWN',
+          evidenceCoverage: result?.evidenceCoverage || null,
+          durationMs,
+          superseded,
+          selected: positive,
+          routeId: positive ? result.candidateHint?.routeId || null : null,
+        })
+        if (superseded && !positive) return
+        readyEarnSearchResults.set(requestId, prepared)
+        while (readyEarnSearchResults.size > 16) {
+          readyEarnSearchResults.delete(readyEarnSearchResults.keys().next().value)
+        }
+        strategyScheduler.enqueueEvent('EARN', {
+          reason: positive ? 'RESIDENT_EARN_SEARCH_POSITIVE' : 'RESIDENT_EARN_SEARCH_RESULT',
+          signal: { ...signal, searchResultId: requestId, searchResultIds: [requestId] },
+          priority: positive ? 85 : 75,
+        })
+      },
+      onFailure: ({ signal, reason }) => {
+        appendAudit('earn_search_worker_degraded', {
+          authorizationId: arm.authorizationId,
+          reason,
+          fallback: 'BOUNDED_EARN_CHILD',
+        })
+        enqueueLegacyEarnWake('RESIDENT_EARN_SEARCH_FALLBACK', signal)
+      },
+    })
+    if (!earnSearchWorker.start()) {
+      appendAudit('earn_search_worker_degraded', {
+        authorizationId: arm.authorizationId,
+        reason: earnSearchWorker.snapshot().lastError,
+        fallback: 'BOUNDED_EARN_CHILD',
       })
     }
     const enqueueLegacyGlobalFeedWake = (signal, reason = 'FILTERED_SEQUENCER_FEED') => {
@@ -3024,9 +3186,10 @@ async function watchDual() {
       cwd: ROOT,
       environment: process.env,
       timeoutMs: RUNTIME_CONFIG.globalWatchChildTimeoutMs,
-      onResult: ({ requestId, signal, result, durationMs, superseded }) => {
+      onResult: ({ requestId, signal, result, completedAt, durationMs, superseded }) => {
         const snapshot = result?.snapshot || null
         const positive = snapshot?.status === 'EXACT_NET_POSITIVE'
+        const prepared = { ...result, completedAt }
         appendAudit('global_search_worker_result', {
           authorizationId: arm.authorizationId,
           requestId,
@@ -3040,7 +3203,7 @@ async function watchDual() {
           workset: snapshot?.workset || null,
         })
         if (superseded && !positive) return
-        readyGlobalSearchResults.set(requestId, result)
+        readyGlobalSearchResults.set(requestId, prepared)
         while (readyGlobalSearchResults.size > 16) {
           readyGlobalSearchResults.delete(readyGlobalSearchResults.keys().next().value)
         }
@@ -3082,7 +3245,7 @@ async function watchDual() {
           const eventBlockNumber = BigInt(signal.eventBlockNumber)
           if (eventBlockNumber > earnEventCursor) earnEventCursor = eventBlockNumber
         }
-        enqueueEarnMarketWake('MANAGED_WSS_EARN_SWAP', signal)
+        enqueueEarnSearchWake('MANAGED_WSS_EARN_SWAP', signal)
         const globalWake = buildGlobalWakeFromEarnEvent(signal, { wakeSource: 'MANAGED_WSS_EARN_SWAP' })
         if (globalWake) enqueueGlobalFeedWake(globalWake)
       },
@@ -3169,7 +3332,7 @@ async function watchDual() {
         const globalClassification = classifyGlobalFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
         const earnClassification = classifyEarnFeedMatches(signal.matchedAddresses, activeGlobalFeedPolicy)
         if (earnClassification.actionable) {
-          enqueueEarnMarketWake('FILTERED_SEQUENCER_FEED', {
+          enqueueEarnSearchWake('FILTERED_SEQUENCER_FEED', {
             ...signal,
             sourceReceivedAt: signal.receivedAt,
             eventPool: earnClassification.matchedPoolAddresses[0] || null,
@@ -3199,6 +3362,7 @@ async function watchDual() {
         const currentUsage = assertDualAuthorization(currentArm, deployments)
         watchState = {
           ...watchState,
+          earnOnHood: { ...watchState.earnOnHood, searchWorker: earnSearchWorker?.snapshot() || null },
           global: { ...watchState.global, searchWorker: globalSearchWorker?.snapshot() || null },
         }
         const unresolvedNow = latestUnresolved()
@@ -3259,7 +3423,7 @@ async function watchDual() {
               const wake = await pollEarnOnHoodWake(earnEventCursor)
               earnEventCursor = wake.cursor
               if (wake.event) {
-                enqueueEarnMarketWake('REVIEWED_POOL_SWAP_EVENT', wake)
+                enqueueEarnSearchWake('REVIEWED_POOL_SWAP_EVENT', wake)
                 const globalWake = buildGlobalWakeFromEarnEvent(wake, { wakeSource: 'PUBLIC_EARN_LOG_BACKSTOP' })
                 if (globalWake) enqueueGlobalFeedWake(globalWake)
               }
@@ -3392,7 +3556,7 @@ async function watchDual() {
             const wake = await pollEarnOnHoodWake(earnEventCursor)
             earnEventCursor = wake.cursor
             if (wake.event) {
-              enqueueEarnMarketWake('REVIEWED_POOL_SWAP_EVENT', wake)
+              enqueueEarnSearchWake('REVIEWED_POOL_SWAP_EVENT', wake)
               const globalWake = buildGlobalWakeFromEarnEvent(wake, { wakeSource: 'PUBLIC_EARN_LOG_BACKSTOP' })
               if (globalWake) enqueueGlobalFeedWake(globalWake)
             }
@@ -3436,6 +3600,34 @@ async function watchDual() {
             nextPeriodicAt: new Date(scheduledWork.nextPeriodicAt).toISOString(),
           })
           if (scheduledWork.laneId === 'EARN') {
+            const searchResultIds = scheduledWork.signal?.searchResultIds || []
+            if (scheduledWork.kind === 'PERIODIC' && searchResultIds.length === 0) {
+              const enqueued = enqueueEarnSearchWake('PERIODIC_RECOVERY', scheduledWork.signal)
+              watchState = {
+                ...watchState,
+                status: 'RUNNING',
+                updatedAt: new Date().toISOString(),
+                lastDecision: enqueued ? 'EARN_PERIODIC_SEARCH_ENQUEUED' : 'EARN_PERIODIC_LEGACY_FALLBACK_ENQUEUED',
+                earnOnHood: {
+                  ...watchState.earnOnHood,
+                  status: enqueued ? 'SEARCHING_READ_ONLY' : 'DEGRADED_SEARCH_WORKER',
+                  nextPeriodicAt: new Date(scheduledWork.nextPeriodicAt).toISOString(),
+                  searchWorker: earnSearchWorker?.snapshot() || null,
+                },
+              }
+              writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+              await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+              continue
+            }
+            const preparedResults = searchResultIds
+              .map((requestId) => ({ requestId, result: readyEarnSearchResults.get(requestId) }))
+              .filter((item) => item.result)
+            for (const requestId of searchResultIds) readyEarnSearchResults.delete(requestId)
+            const preparedSearchResult = scheduledWork.signal?.requiresLegacyEarnSearch
+              ? null
+              : preparedResults.find((item) => item.result?.status === 'SHOT_READY')?.result ||
+                preparedResults.at(-1)?.result ||
+                null
             phase = 'EARN'
             const earnRun = await executeEarnWatcherWake({
               arm: currentArm,
@@ -3445,12 +3637,35 @@ async function watchDual() {
               signal: scheduledWork.signal,
               eventCursor: earnEventCursor,
               nextPeriodicAt: scheduledWork.nextPeriodicAt,
+              preparedSearchResult,
             })
             watchState = earnRun.watchState
             deployments = earnRun.deployments
           } else {
-            phase = 'GLOBAL'
             const searchResultIds = scheduledWork.signal?.searchResultIds || []
+            if (scheduledWork.kind === 'PERIODIC' && searchResultIds.length === 0) {
+              enqueueGlobalFeedWake({
+                ...scheduledWork.signal,
+                wakeSource: 'PERIODIC_RECOVERY',
+                wakeSources: ['PERIODIC_RECOVERY'],
+              })
+              watchState = {
+                ...watchState,
+                status: 'RUNNING',
+                updatedAt: new Date().toISOString(),
+                lastDecision: 'GLOBAL_PERIODIC_SEARCH_ENQUEUED',
+                global: {
+                  ...watchState.global,
+                  status: 'SEARCHING_READ_ONLY',
+                  nextPeriodicAt: new Date(scheduledWork.nextPeriodicAt).toISOString(),
+                  searchWorker: globalSearchWorker?.snapshot() || null,
+                },
+              }
+              writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
+              await sleep(Math.max(0, RUNTIME_CONFIG.genericWatchPollMs - (Date.now() - loopStartedAt)))
+              continue
+            }
+            phase = 'GLOBAL'
             const preparedResults = searchResultIds
               .map((requestId) => ({ requestId, result: readyGlobalSearchResults.get(requestId) }))
               .filter((item) => item.result)
@@ -3820,6 +4035,7 @@ async function watchDual() {
     })
     return watchState
   } finally {
+    earnSearchWorker?.stop()
     globalSearchWorker?.stop()
     managedEarnEventSource?.stop()
     sequencerFeed?.stop()

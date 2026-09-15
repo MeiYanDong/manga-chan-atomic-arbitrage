@@ -674,8 +674,10 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualWatchSource, /strategyScheduler\.enqueueEvent\('GLOBAL'/)
   assert.match(
     dualWatchSource,
-    /wakeReason === 'FILTERED_SEQUENCER_FEED' \? 100 : wakeReason === 'MANAGED_WSS_EARN_SWAP' \? 90 : 50/,
+    /wakeReason === 'FILTERED_SEQUENCER_FEED'[\s\S]*\? 100[\s\S]*wakeReason === 'MANAGED_WSS_EARN_SWAP'[\s\S]*\? 90/,
   )
+  assert.match(dualWatchSource, /reason: positive \? 'RESIDENT_EARN_SEARCH_POSITIVE'/)
+  assert.match(dualWatchSource, /priority: positive \? 85 : 75/)
   assert.match(dualWatchSource, /new ManagedEarnEventSource/)
   assert.match(dualWatchSource, /managedEarnReconnectDelayMs\(managedEarnStartFailures\)/)
   assert.match(dualWatchSource, /Date\.now\(\) >= managedEarnNextRetryAt/)

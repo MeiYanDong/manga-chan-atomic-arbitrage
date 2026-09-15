@@ -107,6 +107,17 @@ function fixture() {
         lastResult: 'NO_SHOT_NO_SIGNATURE_NO_BROADCAST',
         lastDynamicMaximumPrincipalEth: '0.002378210095727194',
         nextPeriodicAt: '2026-09-08T03:05:00.000Z',
+        searchWorker: {
+          status: 'RUNNING',
+          inFlight: true,
+          pending: false,
+          completed: 8,
+          failures: 1,
+          restarts: 1,
+          coalesced: 3,
+          pid: 1234,
+          lastError: 'private provider detail',
+        },
       },
     },
     usdgState: { executions: [legacyExecution, usdgExecution] },
@@ -240,6 +251,16 @@ test('builds receipt-gated business results and compounds only authorized profit
   assert.equal(snapshot.strategy.earnOnHood.lastDynamicMaximumPrincipalEth, '0.002378210095727194')
   assert.equal(snapshot.strategy.earnOnHood.confirmedExecutions, 1)
   assert.equal(snapshot.strategy.earnOnHood.currentNetEth, '0.00003')
+  assert.deepEqual(snapshot.strategy.earnOnHood.search, {
+    status: 'RUNNING',
+    scanning: true,
+    queued: false,
+    completedSearches: 8,
+    failedSearches: 1,
+    restarts: 1,
+    coalescedSignals: 3,
+  })
+  assert.doesNotMatch(JSON.stringify(snapshot.strategy.earnOnHood.search), /private|provider|pid|lastError/)
   assert.equal(snapshot.economics.today.verifiedExecutionNetUsdg, '1.3')
   assert.equal(snapshot.economics.today.verifiedExecutionNetEth, '0.00003')
   assert.equal(snapshot.economics.today.confirmedExecutions, 3)

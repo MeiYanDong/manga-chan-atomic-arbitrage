@@ -2,6 +2,7 @@ import readline from 'node:readline'
 
 import { globalPreflight, resetGlobalPreflightWakeState } from './global-arb.mjs'
 import {
+  buildGlobalCandidateHint,
   encodeGlobalSearchResult,
   GLOBAL_SEARCH_WORKER_POLICY,
   parseGlobalSearchRequest,
@@ -20,7 +21,10 @@ function applySignal(signal) {
   assign('GLOBAL_WAKE_CLASSIFICATION', signal.classificationReason)
   assign('GLOBAL_WAKE_SOURCE', signal.wakeSource)
   assign('GLOBAL_WAKE_SOURCES', (signal.wakeSources || []).join(','))
-  assign('GLOBAL_WAKE_REASON', 'RESIDENT_SIGNER_FREE_EVENT_SEARCH')
+  assign(
+    'GLOBAL_WAKE_REASON',
+    signal.wakeSource === 'PERIODIC_RECOVERY' ? 'PERIODIC_RECOVERY' : 'RESIDENT_SIGNER_FREE_EVENT_SEARCH',
+  )
   assign('GLOBAL_WAKE_ENQUEUED_AT', signal.sourceReceivedAt || signal.receivedAt)
   assign('GLOBAL_WAKE_CLAIMED_AT', new Date().toISOString())
 }
@@ -54,6 +58,7 @@ for await (const line of input) {
       workerPolicy: GLOBAL_SEARCH_WORKER_POLICY,
       status: prepared.snapshot.status,
       snapshot: prepared.snapshot,
+      candidateHint: buildGlobalCandidateHint(prepared),
     }
   } catch (error) {
     result = {

@@ -9,10 +9,13 @@ import {
   GLOBAL_CATALOG_CRITICAL_READ_POLICY,
   GLOBAL_CATALOG_MAINTENANCE_POLICY,
   assertGlobalCatalogMaintenanceBoundary,
+  buildGlobalCandidateHint,
   buildGlobalSearchWorkerEnvironment,
   classifyGlobalCatalogAccess,
   classifyGlobalSearchHandoff,
+  encodeGlobalLiveRevalidationInput,
   encodeGlobalSearchResult,
+  parseGlobalLiveRevalidationInput,
   parseGlobalSearchRequest,
   readGlobalCatalogCritical,
   ResidentGlobalSearchClient,
@@ -21,6 +24,39 @@ import {
 const POOL_A = '0x000000000000000000000000000000000000000a'
 const POOL_B = '0x000000000000000000000000000000000000000b'
 const POOL_C = '0x000000000000000000000000000000000000000c'
+const GRAPH_COMMITMENT = `0x${'12'.repeat(32)}`
+
+function positiveSearchResult(completedAt = '2026-09-16T00:00:14.000Z') {
+  const snapshot = {
+    status: 'EXACT_NET_POSITIVE',
+    evidenceCoverage: 'COMPLETE',
+    generatedAt: '2026-09-16T00:00:13.000Z',
+    graph: { commitment: GRAPH_COMMITMENT },
+    lifecycle: {
+      eventId: 'event-1',
+      catalogVersion: 'EARN:100|UNISWAP:100|UNIVERSE:BASE_ONLY',
+      state: { blockNumber: '100' },
+    },
+  }
+  return {
+    completedAt,
+    snapshot,
+    candidateHint: {
+      schemaVersion: 1,
+      generatedAt: snapshot.generatedAt,
+      graphCommitment: GRAPH_COMMITMENT,
+      catalogVersion: snapshot.lifecycle.catalogVersion,
+      stateBlockNumber: '100',
+      templateId: 'GLOBAL_SWAP_CYCLE_1234567890abcdef',
+      opportunityKind: 'CROSS_VENUE_3_HOP_ATOMIC_SWAP_CYCLE',
+      routeType: 'CYCLE',
+      edgeIds: [`0x${'21'.repeat(32)}`, `0x${'22'.repeat(32)}`, `0x${'23'.repeat(32)}`],
+      settlementToken: POOL_A,
+      principal: '1000000',
+      fundingMode: 'MORPHO_FLASH',
+    },
+  }
+}
 
 test('catalog critical reads retry transient public failures but never retry an invariant', async () => {
   let transientCalls = 0
@@ -420,6 +456,7 @@ test('worker environment is public-only and strips every signing reference', () 
     CREDENTIALS_DIRECTORY: '/run/credentials/service',
     GLOBAL_SHARED_AUTHORIZATION_ID: 'authorization',
     FEISHU_WEBHOOK_SECRET: 'secret',
+    UNRELATED_HOST_SECRET: 'also-secret',
     GLOBAL_LIVE_ARM: '1',
   })
   assert.equal(environment.MANGA_RPC_URL, undefined)
@@ -429,6 +466,7 @@ test('worker environment is public-only and strips every signing reference', () 
   assert.equal(environment.CREDENTIALS_DIRECTORY, undefined)
   assert.equal(environment.GLOBAL_SHARED_AUTHORIZATION_ID, undefined)
   assert.equal(environment.FEISHU_WEBHOOK_SECRET, undefined)
+  assert.equal(environment.UNRELATED_HOST_SECRET, undefined)
   assert.equal(environment.GLOBAL_LIVE_ARM, '0')
   assert.equal(environment.GLOBAL_SEARCH_READONLY_CATALOG, '1')
   assert.equal(environment.MANGA_CONFIG_FILE, '/dev/null')
@@ -511,25 +549,100 @@ test('worker failure degrades only its in-flight search and leaves a restartable
   client.stop()
 })
 
-test('only a negative read result is reusable; a positive hint always returns to the live signer gate', () => {
-  assert.equal(
-    classifyGlobalSearchHandoff({
-      snapshot: { status: 'NO_EXACT_NET_OPPORTUNITY', evidenceCoverage: 'COMPLETE' },
-    }).mode,
-    'REUSE_READ_ONLY_RESULT',
-  )
-  assert.equal(classifyGlobalSearchHandoff({ snapshot: { status: 'EXACT_NET_POSITIVE' } }).mode, 'LIVE_REVALIDATION')
+test('only a negative read result is reusable; a fresh bound positive hint returns to the live signer gate', () => {
+  const now = Date.parse('2026-09-16T00:00:15.000Z')
+  const completedAt = '2026-09-16T00:00:14.000Z'
   assert.equal(
     classifyGlobalSearchHandoff(
-      { snapshot: { status: 'NO_EXACT_NET_OPPORTUNITY', evidenceCoverage: 'COMPLETE' } },
-      { requiresLegacySearch: true },
+      {
+        completedAt,
+        snapshot: { status: 'NO_EXACT_NET_OPPORTUNITY', evidenceCoverage: 'COMPLETE' },
+      },
+      { now },
+    ).mode,
+    'REUSE_READ_ONLY_RESULT',
+  )
+  assert.equal(classifyGlobalSearchHandoff(positiveSearchResult(completedAt), { now }).mode, 'LIVE_REVALIDATION')
+  assert.equal(
+    classifyGlobalSearchHandoff(
+      {
+        ...positiveSearchResult(completedAt),
+        candidateHint: { ...positiveSearchResult(completedAt).candidateHint, graphCommitment: `0x${'34'.repeat(32)}` },
+      },
+      { now },
     ).mode,
     'LEGACY_PREFLIGHT',
   )
   assert.equal(
-    classifyGlobalSearchHandoff({
-      snapshot: { status: 'NO_EXACT_NET_OPPORTUNITY', evidenceCoverage: 'UNAVAILABLE' },
-    }).mode,
+    classifyGlobalSearchHandoff(
+      { completedAt, snapshot: { status: 'NO_EXACT_NET_OPPORTUNITY', evidenceCoverage: 'COMPLETE' } },
+      { requiresLegacySearch: true, now },
+    ).mode,
     'LEGACY_PREFLIGHT',
   )
+  assert.equal(
+    classifyGlobalSearchHandoff(
+      {
+        completedAt,
+        snapshot: { status: 'NO_EXACT_NET_OPPORTUNITY', evidenceCoverage: 'UNAVAILABLE' },
+      },
+      { now },
+    ).mode,
+    'LEGACY_PREFLIGHT',
+  )
+  assert.equal(
+    classifyGlobalSearchHandoff(
+      {
+        completedAt: '2026-09-15T23:59:59.999Z',
+        snapshot: { status: 'NO_EXACT_NET_OPPORTUNITY', evidenceCoverage: 'COMPLETE' },
+      },
+      { now, maximumNegativeAgeMs: 15_000 },
+    ).mode,
+    'LEGACY_PREFLIGHT',
+  )
+})
+
+test('positive handoff carries only a bounded route hint and round-trips through explicit stdin evidence', () => {
+  const source = positiveSearchResult(new Date().toISOString())
+  const built = buildGlobalCandidateHint({
+    snapshot: source.snapshot,
+    selected: {
+      templateId: source.candidateHint.templateId,
+      opportunityKind: source.candidateHint.opportunityKind,
+      route: {
+        type: 'CYCLE',
+        cycle: { edges: source.candidateHint.edgeIds.map((id) => ({ id })) },
+      },
+      settlementToken: source.candidateHint.settlementToken,
+      principal: 1_000_000n,
+      fundingMode: source.candidateHint.fundingMode,
+    },
+  })
+  assert.deepEqual(built, source.candidateHint)
+  assert.equal('plan' in built, false)
+  assert.equal('calldata' in built, false)
+  const encoded = encodeGlobalLiveRevalidationInput(source)
+  assert.deepEqual(parseGlobalLiveRevalidationInput(encoded, { now: Date.parse(source.completedAt) + 1_000 }), {
+    schemaVersion: 1,
+    type: 'GLOBAL_LIVE_REVALIDATION',
+    completedAt: source.completedAt,
+    snapshot: source.snapshot,
+    candidateHint: source.candidateHint,
+  })
+})
+
+test('global worker and signer CLI enforce the committed-route handoff boundary', () => {
+  const workerSource = fs.readFileSync(new URL('../scripts/global-search-worker.mjs', import.meta.url), 'utf8')
+  assert.match(workerSource, /candidateHint: buildGlobalCandidateHint\(prepared\)/)
+  assert.match(workerSource, /signal\.wakeSource === 'PERIODIC_RECOVERY'/)
+
+  const liveSource = fs.readFileSync(new URL('../scripts/global-arb.mjs', import.meta.url), 'utf8')
+  assert.match(liveSource, /command === 'execute-candidate'/)
+  assert.match(liveSource, /parseGlobalLiveRevalidationInput\(fs\.readFileSync\(0, 'utf8'\)\)/)
+  assert.match(liveSource, /reconstructGlobalCandidateFromHint/)
+  assert.match(liveSource, /FINAL_FUNDING/)
+
+  const supervisorSource = fs.readFileSync(new URL('../scripts/dual-base-arb.mjs', import.meta.url), 'utf8')
+  assert.match(supervisorSource, /encodeGlobalLiveRevalidationInput/)
+  assert.match(supervisorSource, /candidateInput \? 'execute-candidate' : 'execute'/)
 })

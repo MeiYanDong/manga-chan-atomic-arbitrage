@@ -140,6 +140,19 @@ export function publicRealtimeDiscovery(runtime, arm) {
   }
 }
 
+function publicSearchWorker(worker) {
+  if (!worker || typeof worker !== 'object') return null
+  return {
+    status: worker.status || 'UNKNOWN',
+    scanning: worker.inFlight === true,
+    queued: worker.pending === true,
+    completedSearches: Number(worker.completed || 0),
+    failedSearches: Number(worker.failures || 0),
+    restarts: Number(worker.restarts || 0),
+    coalescedSignals: Number(worker.coalesced || 0),
+  }
+}
+
 function executionNetUsdgWei(record) {
   return bigint(record?.normalizedNetProfitUsdgWei ?? record?.netProfitUsdgWei)
 }
@@ -391,6 +404,7 @@ export function buildBusinessSnapshot({
             lastResult: runtime?.earnOnHood?.lastResult || null,
             lastDynamicMaximumPrincipalEth: runtime?.earnOnHood?.lastDynamicMaximumPrincipalEth || null,
             nextPeriodicAt: runtime?.earnOnHood?.nextPeriodicAt || null,
+            search: publicSearchWorker(runtime?.earnOnHood?.searchWorker),
           }
         : null,
       global: arm?.global
@@ -400,6 +414,7 @@ export function buildBusinessSnapshot({
             lastResult: runtime?.global?.lastResult || null,
             lastNormalizedNetProfitUsdg: runtime?.global?.lastNormalizedNetProfitUsdg || null,
             nextPeriodicAt: runtime?.global?.nextPeriodicAt || null,
+            search: publicSearchWorker(runtime?.global?.searchWorker),
             settlementAssets: countOrNull(
               globalWorkset?.fundedSettlementAssets ?? runtime?.global?.graph?.settlementAdmission?.admitted,
             ),

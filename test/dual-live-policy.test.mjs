@@ -149,6 +149,15 @@ test('global quote and Gas drift are normal no-shot outcomes before a signature 
   assert.equal(isDualOpportunityMiss(new Error('selected opportunity decayed before signing')), true)
   assert.equal(isDualOpportunityMiss(new Error('gross quote does not fund worst-case Gas plus net floor')), true)
   assert.equal(isDualOpportunityMiss(new Error('protected gas limit is below the final exact estimate')), true)
+  assert.equal(
+    isDualOpportunityMiss(new Error('global candidate graph commitment changed before exact revalidation')),
+    true,
+  )
+  assert.equal(
+    isDualOpportunityMiss(new Error('global candidate route is absent from the current committed graph')),
+    true,
+  )
+  assert.equal(isDualOpportunityMiss(new Error('global candidate principal exceeds current atomic funding')), true)
 })
 
 test('dual watcher exit codes restart only temporary failures', () => {
