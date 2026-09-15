@@ -110,6 +110,21 @@ strategy daemons. New PAIR, LONG or other protocol integrations add typed discov
 adapters to the same graph and supervisor; they do not receive a separate signer or private route budget merely because
 their front-end brand differs.
 
+Treat low-latency transport as an observed runtime capability, not a configuration claim. The managed Earn WSS is
+connected only when `eventSource.status=SUBSCRIBED` and `subscriptionActive=true`; the Sequencer path is connected only
+when its live snapshot says `connected=true`. Initial managed-WSS handshake failures retry after 30, 60, 120, 240, 480
+and at most 900 seconds. Do not shorten that schedule or raise paid-RPC polling merely to make the status look green.
+While both fast paths are unavailable, the 60-second Earn public-log backstop, five-minute Global recovery and local
+board continue, critical health is `DEGRADED/LOW_LATENCY_INPUTS_UNAVAILABLE`, and Feishu remains quiet. The public
+business API reports only the connection count and recovery-delay bounds; provider URLs, response codes and native
+errors remain private diagnostics.
+
+If managed HTTPS passes while the configured WSS fails, compare endpoint authority and credential identity only through
+a secret-safe boolean/hash probe. Never print either URL. A replacement WSS value must first pass chain ID 4663 and an
+actual subscription, then be written atomically with the original owner and mode. Restart the watcher only inside the
+ordinary disarm/reconcile/re-arm cutover; a successful standalone probe is not evidence that the watcher consumed the
+new value.
+
 The shared ordered Sequencer Feed also routes frames by adapter. An exact Earn pool match, or canonical Earn protocol
 plus a non-settlement Earn asset, queues the Earn local-cycle adapter first; the same frame remains queued for Global
 when it is also relevant to a cross-protocol route. All matched Earn pools are focus inputs. The event hot path reuses
@@ -300,7 +315,8 @@ For a planned production promotion, prevent a maintenance switch from becoming a
 2. stop the watcher and require its runtime state to become `STOPPED_BY_SIGNAL`;
 3. install and verify the immutable release, then start the watcher;
 4. require the new PID, exact release cwd, current authorization and `RUNNING`/`EXECUTING` runtime state;
-5. run one manual health check and require `TRADING_HEALTHY`, then start the critical timer before ending the cutover.
+5. run one manual health check and require `TRADING_HEALTHY` or the explicitly accepted non-paging
+   `LOW_LATENCY_INPUTS_UNAVAILABLE` degradation, then start the critical timer before ending the cutover.
 
 From v0.16.3 onward SIGTERM/SIGINT writes the maintenance state immediately, even while a bounded adapter child is
 finishing. The explicit timer sequence remains the preferred production procedure because it also covers upgrades from
@@ -313,11 +329,13 @@ acceptance so the latter can be polled independently. A timed-out invocation is 
 first read the current symlink, service state and process working directories before choosing recovery or rollback.
 
 Keep `manga-critical-health.timer` stopped across those invocation boundaries. Start the watcher, require its runtime
-PID to be alive and its state to be fresh, run one manual health check, require `TRADING_HEALTHY`, and only then restore
-the timer. Do not start the timer from a generic failure trap before the watcher has published its new runtime PID. The
-systemd `MainPID` is currently the `npm` wrapper while `dual-watch-state.json.pid` is the Node child, so equality between
-those two values is not an acceptance gate. Instead require both processes in the same service cgroup, the Node child
-alive, the process working directory at the exact release and zero unexpected restarts.
+PID to be alive and its state to be fresh, then run one manual health check. Restore the timer only after health is
+`TRADING_HEALTHY` or the explicitly accepted non-paging `LOW_LATENCY_INPUTS_UNAVAILABLE` degradation with both recovery
+cadences still active. Any critical result still fails the cutover. Do not start the timer from a generic failure trap
+before the watcher has published its new runtime PID. The systemd `MainPID` is currently the `npm` wrapper while
+`dual-watch-state.json.pid` is the Node child, so equality between those two values is not an acceptance gate. Instead
+require both processes in the same service cgroup, the Node child alive, the process working directory at the exact
+release and zero unexpected restarts.
 
 The release installer compiles and verifies the code before atomically moving the `current` symlink. The hardened runtime service only reads that release and writes under `/var/lib/manga-chan-arbitrage`; it does not attempt to compile inside the read-only `/opt` tree at service start.
 

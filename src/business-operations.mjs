@@ -93,6 +93,53 @@ function countOrNull(value) {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
 }
 
+function positiveIntervalSeconds(value) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.ceil(parsed / 1_000) : null
+}
+
+function earliestFutureTimestamp(values) {
+  const timestamps = values
+    .map((value) => Date.parse(String(value || '')))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right)
+  return timestamps.length > 0 ? new Date(timestamps[0]).toISOString() : null
+}
+
+/**
+ * Keep provider errors, URLs and transport internals out of the public model.
+ * Operators need to know whether a low-latency path is actually connected and
+ * how stale the independent recovery path may become, not the native client
+ * object that produced the answer.
+ */
+export function publicRealtimeDiscovery(runtime, arm) {
+  if (!arm?.earnOnHood || !arm?.global) return null
+  const earnSource = runtime?.earnOnHood?.eventSource || null
+  const sequencerFeed = runtime?.global?.feed || null
+  const earnConnected = earnSource?.status === 'SUBSCRIBED' && earnSource?.subscriptionActive === true
+  const sequencerConnected = sequencerFeed?.connected === true
+  const observed = earnSource !== null && sequencerFeed !== null
+  const connectedLowLatencyPaths = Number(earnConnected) + Number(sequencerConnected)
+  return {
+    status: !observed
+      ? 'STARTING'
+      : connectedLowLatencyPaths === 2
+        ? 'FULL_REALTIME'
+        : connectedLowLatencyPaths === 1
+          ? 'PARTIAL_REALTIME'
+          : 'FALLBACK_ONLY',
+    connectedLowLatencyPaths,
+    totalLowLatencyPaths: 2,
+    fallbackStatus: 'ACTIVE',
+    earnFallbackMaximumDelaySeconds: positiveIntervalSeconds(arm.earnOnHood.eventPollMs),
+    globalFallbackMaximumDelaySeconds: positiveIntervalSeconds(arm.global.periodicMs),
+    nextAutomaticRetryAt: earliestFutureTimestamp([
+      runtime?.earnOnHood?.eventSourceRetry?.nextRetryAt,
+      sequencerFeed?.nextReconnectAt,
+    ]),
+  }
+}
+
 function executionNetUsdgWei(record) {
   return bigint(record?.normalizedNetProfitUsdgWei ?? record?.netProfitUsdgWei)
 }
@@ -331,6 +378,7 @@ export function buildBusinessSnapshot({
       signedAttempts: Number(runtime?.usage?.signedAttempts || 0),
       confirmedExecutions: Number(runtime?.usage?.confirmedExecutions || 0),
       unresolvedMutation: ['HALTED_UNKNOWN', 'RECONCILING_UNKNOWN'].includes(runtime?.status),
+      realtime: publicRealtimeDiscovery(runtime, arm),
       earnOnHood: arm?.earnOnHood
         ? {
             status: runtime?.earnOnHood?.status || 'UNKNOWN',

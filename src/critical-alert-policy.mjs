@@ -142,6 +142,25 @@ export function evaluateCriticalTradingHealth(input = {}) {
       impairedAdapters: impairedDiscovery.map(({ key }) => key),
     })
   }
+  const earnRealtime = runtime?.earnOnHood?.eventSource || null
+  const sequencerRealtime = runtime?.global?.feed || null
+  const earnRealtimeUnavailable =
+    earnRealtime !== null &&
+    (earnRealtime.status === 'DEGRADED' ||
+      earnRealtime.status === 'STOPPED' ||
+      (earnRealtime.status === 'SUBSCRIBED' && earnRealtime.subscriptionActive !== true))
+  const sequencerRealtimeUnavailable =
+    sequencerRealtime !== null &&
+    sequencerRealtime.connected !== true &&
+    ['REJECTED', 'ERROR', 'DISCONNECTED'].includes(sequencerRealtime.lastStatus)
+  if (earnRealtimeUnavailable && sequencerRealtimeUnavailable) {
+    return result('DEGRADED', 'LOW_LATENCY_INPUTS_UNAVAILABLE', '低延迟市场入口暂时不可用，回补扫描继续运行', {
+      ageMs,
+      impactLabel: '发现速度下降，但公共日志回补、周期扫描和安全执行门槛仍在运行。',
+      automaticActionLabel: '系统分别退避重连两个实时入口，不会因此盲目发送交易。',
+      userActionLabel: '暂时无需操作。',
+    })
+  }
   return result('HEALTHY', 'TRADING_HEALTHY', '实盘交易进程运行正常', { ageMs })
 }
 

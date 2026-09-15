@@ -1513,6 +1513,22 @@ function StrategyPage({ data, opportunityData, onOpenOpportunity }) {
             <dd>{humanStatus(business?.strategy?.global?.status)}</dd>
           </div>
           <div>
+            <dt>实时发现</dt>
+            <dd>{humanStatus(business?.strategy?.realtime?.status)}</dd>
+          </div>
+          <div>
+            <dt>降级回补</dt>
+            <dd>
+              {business?.strategy?.realtime
+                ? `Earn 最长 ${business.strategy.realtime.earnFallbackMaximumDelaySeconds ?? '—'} 秒 · 全局最长 ${
+                    business.strategy.realtime.globalFallbackMaximumDelaySeconds
+                      ? Math.ceil(business.strategy.realtime.globalFallbackMaximumDelaySeconds / 60)
+                      : '—'
+                  } 分钟`
+                : '待核验'}
+            </dd>
+          </div>
+          <div>
             <dt>全局本轮已确认</dt>
             <dd>
               {business?.strategy?.global

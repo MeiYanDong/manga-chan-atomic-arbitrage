@@ -59,7 +59,11 @@ never substitutes for current execution state. See
 [ADR 0092](docs/decisions/0092-paced-transient-retry-for-public-multicall.md) plus
 [ADR 0093](docs/decisions/0093-normalize-embedded-multicall-transport-failures.md) and
 [the global live stories](docs/stories/global-cross-protocol-live.md). The bounded audit reader and managed Earn event
-recovery are defined by [ADR 0080](docs/decisions/0080-bounded-audit-runtime-and-managed-earn-events.md).
+recovery are defined by [ADR 0080](docs/decisions/0080-bounded-audit-runtime-and-managed-earn-events.md). A configured
+WSS or Feed URL is not evidence that its low-latency path is connected. Runtime readback distinguishes full real-time,
+partial real-time and public-log/periodic recovery-only operation. Rejected managed-WSS handshakes use bounded
+exponential retry, while both fast paths being unavailable is a visible non-paging degradation rather than a false
+healthy state. See [ADR 0095](docs/decisions/0095-truthful-low-latency-transport-degradation.md).
 
 All protocol adapters share one wallet/nonce safety domain. A canonical reverted receipt now closes the attempt, pays
 only its recorded Gas and lets unrelated candidates continue while the existing economic breakers remain open. A

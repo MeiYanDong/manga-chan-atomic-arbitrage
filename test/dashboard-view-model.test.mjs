@@ -156,6 +156,10 @@ test('business labels are human-facing while preserving degraded and unknown sta
     '本策略暂未成交',
   )
   assert.equal(humanStatus('CONNECTED'), '已连接')
+  assert.equal(humanStatus('FULL_REALTIME'), '实时入口已连接')
+  assert.equal(humanStatus('PARTIAL_REALTIME'), '部分实时入口可用')
+  assert.equal(humanStatus('FALLBACK_ONLY'), '回补扫描运行中')
+  assert.equal(toneForStatus('FALLBACK_ONLY'), 'proxy')
   assert.equal(humanStatus('PARKED'), '等待归集')
   assert.equal(humanStatus('VERIFIED'), '已核验')
   assert.equal(humanStatus('SOMETHING_NEW'), '待核验')
