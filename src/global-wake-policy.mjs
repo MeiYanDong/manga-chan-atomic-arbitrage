@@ -6,6 +6,8 @@ export const GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP = 32
 export const GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP = 8
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+const SAFE_LIFECYCLE_SOURCE = /^[A-Z][A-Z0-9_]{1,63}$/
+const MAXIMUM_WAKE_SOURCES = 8
 
 function normalizedAddress(value) {
   try {
@@ -14,6 +16,74 @@ function normalizedAddress(value) {
   } catch {
     return null
   }
+}
+
+/**
+ * Give every Global wake an evidence-accurate lifecycle identity. A sequencer
+ * sequence remains authoritative when present; exact dependency wakes from
+ * other reviewed sources are market events, while an empty workset is the
+ * periodic recovery path.
+ */
+export function globalWakeLifecycleIdentity({
+  feedSequenceNumber = null,
+  feedLastSequenceNumber = null,
+  routeDependencyCount = 0,
+  configuredWakeSource = null,
+  claimedAt = null,
+  preflightStartedAt = null,
+} = {}) {
+  const firstSequenceNumber = /^\d+$/.test(String(feedSequenceNumber || '')) ? String(feedSequenceNumber) : null
+  const lastSequenceNumber = /^\d+$/.test(String(feedLastSequenceNumber || ''))
+    ? String(feedLastSequenceNumber)
+    : firstSequenceNumber
+  const dependencyCount = Number(routeDependencyCount)
+  if (!Number.isSafeInteger(dependencyCount) || dependencyCount < 0) {
+    throw new Error('global wake dependency count is invalid')
+  }
+  const wakeSource = SAFE_LIFECYCLE_SOURCE.test(String(configuredWakeSource || ''))
+    ? String(configuredWakeSource)
+    : 'MARKET_EVENT'
+  const timestamp = String(claimedAt || preflightStartedAt || '')
+  if (!timestamp || timestamp.length > 64 || /(?:https?|wss?):\/\//i.test(timestamp)) {
+    throw new Error('global wake lifecycle timestamp is invalid')
+  }
+  if (firstSequenceNumber) {
+    return {
+      source: 'SEQUENCER_FEED',
+      eventId: `ROBINHOOD_SEQUENCER:${firstSequenceNumber}:${lastSequenceNumber}`,
+      firstSequenceNumber,
+      lastSequenceNumber,
+    }
+  }
+  if (dependencyCount > 0) {
+    return {
+      source: wakeSource,
+      eventId: `ROBINHOOD_EVENT:${wakeSource}:${timestamp}`,
+      firstSequenceNumber: null,
+      lastSequenceNumber: null,
+    }
+  }
+  return {
+    source: 'PERIODIC_RECOVERY',
+    eventId: `ROBINHOOD_RECOVERY:${timestamp}`,
+    firstSequenceNumber: null,
+    lastSequenceNumber: null,
+  }
+}
+
+export function globalWakeSourceList(value, fallbackSource) {
+  const sources = Array.isArray(value) ? value : String(value || '').split(',')
+  const populated = sources.map((item) => String(item).trim()).filter(Boolean)
+  if (populated.some((item) => !SAFE_LIFECYCLE_SOURCE.test(item))) {
+    throw new Error('global wake source list is invalid')
+  }
+  const unique = [...new Set(populated)].sort()
+  if (unique.length > MAXIMUM_WAKE_SOURCES) throw new Error('global wake source list exceeds its bound')
+  if (unique.length > 0) return unique
+  if (!SAFE_LIFECYCLE_SOURCE.test(String(fallbackSource || ''))) {
+    throw new Error('global wake fallback source is invalid')
+  }
+  return [String(fallbackSource)]
 }
 
 /**

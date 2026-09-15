@@ -77,6 +77,8 @@ import {
   GLOBAL_FEED_MATCH_POLICY,
   GLOBAL_MANAGED_FALLBACK_EVENT_LOGICAL_CALL_CAP,
   GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP,
+  globalWakeLifecycleIdentity,
+  globalWakeSourceList,
 } from '../src/global-wake-policy.mjs'
 import {
   RpcErrorClass,
@@ -1127,23 +1129,31 @@ export function resetGlobalPreflightWakeState() {
 export async function globalPreflight({ print = true, persist = true } = {}) {
   const preflightStartedAtMs = Date.now()
   const preflightStartedAt = new Date(preflightStartedAtMs).toISOString()
+  const routeDependencies = wakeAddressSet()
   const feedSequenceNumber = /^\d+$/.test(String(process.env.GLOBAL_WAKE_SEQUENCE_NUMBER || ''))
     ? process.env.GLOBAL_WAKE_SEQUENCE_NUMBER
     : null
   const feedLastSequenceNumber = /^\d+$/.test(String(process.env.GLOBAL_WAKE_LAST_SEQUENCE_NUMBER || ''))
     ? process.env.GLOBAL_WAKE_LAST_SEQUENCE_NUMBER
     : feedSequenceNumber
-  const eventId = feedSequenceNumber
-    ? `ROBINHOOD_SEQUENCER:${feedSequenceNumber}:${feedLastSequenceNumber}`
-    : `ROBINHOOD_RECOVERY:${process.env.GLOBAL_WAKE_CLAIMED_AT || preflightStartedAt}`
+  const wakeIdentity = globalWakeLifecycleIdentity({
+    feedSequenceNumber,
+    feedLastSequenceNumber,
+    routeDependencyCount: routeDependencies.size,
+    configuredWakeSource: process.env.GLOBAL_WAKE_SOURCE,
+    claimedAt: process.env.GLOBAL_WAKE_CLAIMED_AT,
+    preflightStartedAt,
+  })
+  const { eventId, source: lifecycleSource } = wakeIdentity
+  const lifecycleSources = globalWakeSourceList(process.env.GLOBAL_WAKE_SOURCES, lifecycleSource)
   const lifecycle = new EventLifecycle({
     eventId,
-    source: feedSequenceNumber ? 'SEQUENCER_FEED' : 'PERIODIC_RECOVERY',
+    source: lifecycleSource,
     observedAt: process.env.GLOBAL_WAKE_RECEIVED_AT || null,
     enqueuedAt: process.env.GLOBAL_WAKE_ENQUEUED_AT || null,
     dequeuedAt: process.env.GLOBAL_WAKE_CLAIMED_AT || null,
-    firstSequenceNumber: feedSequenceNumber,
-    lastSequenceNumber: feedLastSequenceNumber,
+    firstSequenceNumber: wakeIdentity.firstSequenceNumber,
+    lastSequenceNumber: wakeIdentity.lastSequenceNumber,
   })
   const rpcEvidence = new RpcEvidence()
   try {
@@ -1218,7 +1228,7 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
     const preflightCompletedAtMs = Date.now()
     const sourceReceivedAt = process.env.GLOBAL_WAKE_RECEIVED_AT || null
     const sourceReceivedAtMs = Number.isFinite(Date.parse(sourceReceivedAt || '')) ? Date.parse(sourceReceivedAt) : null
-    const routeAddresses = wakeAddressSet()
+    const routeAddresses = routeDependencies
     const discoveryOutcomes = summarizeEvaluationOutcomes(
       [...discovery.evaluations, ...discovery.settlementAdmission.rejected],
       { fallbackOutcome: EvaluationOutcome.UNSUPPORTED },
@@ -1299,6 +1309,8 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
       },
       wake: {
         reason: process.env.GLOBAL_WAKE_REASON || null,
+        source: lifecycleSource,
+        sources: lifecycleSources,
         classification: process.env.GLOBAL_WAKE_CLASSIFICATION || null,
         sourceReceivedAt,
         feedSequenceNumber,
@@ -1366,11 +1378,13 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
       ]),
       wake: {
         reason: process.env.GLOBAL_WAKE_REASON || null,
+        source: lifecycleSource,
+        sources: lifecycleSources,
         classification: process.env.GLOBAL_WAKE_CLASSIFICATION || null,
         sourceReceivedAt: process.env.GLOBAL_WAKE_RECEIVED_AT || null,
         feedSequenceNumber,
         feedLastSequenceNumber,
-        routeAddressCount: wakeAddressSet().size,
+        routeAddressCount: routeDependencies.size,
       },
       timing: {
         preflightStartedAt,

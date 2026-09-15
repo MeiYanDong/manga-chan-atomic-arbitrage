@@ -1,6 +1,9 @@
 const MAXIMUM_SIGNAL_VALUES = 1_024
 const MAXIMUM_CLASSIFICATION_REASONS = 16
 const MAXIMUM_CLASSIFICATION_REASON_CHARACTERS = 128
+const MAXIMUM_WAKE_SOURCES = 8
+const SAFE_WAKE_SOURCE = /^[A-Z][A-Z0-9_]{1,63}$/
+const GLOBAL_EARN_WAKE_SOURCES = new Set(['MANAGED_WSS_EARN_SWAP', 'PUBLIC_EARN_LOG_BACKSTOP'])
 
 function values(collection) {
   return (collection || []).filter((value) => typeof value === 'string' && value.length > 0)
@@ -28,6 +31,17 @@ function atomicClassificationReasons(signal) {
   if (unique.length > MAXIMUM_CLASSIFICATION_REASONS) {
     throw new Error('coalesced market signal exceeds its classification-reason bound')
   }
+  return unique
+}
+
+function atomicWakeSources(signal) {
+  const explicit = values(signal?.wakeSources)
+  const source = explicit.length > 0 ? explicit : values([signal?.wakeSource])
+  if (source.some((item) => !SAFE_WAKE_SOURCE.test(item))) {
+    throw new Error('market wake source is invalid')
+  }
+  const unique = unionValues(source)
+  if (unique.length > MAXIMUM_WAKE_SOURCES) throw new Error('coalesced market signal exceeds its wake-source bound')
   return unique
 }
 
@@ -69,6 +83,36 @@ function latestTime(...candidates) {
 }
 
 /**
+ * Translate one already-observed canonical Earn Vault swap into an exact
+ * dependency wake for the protocol-agnostic Global graph. This adds no read,
+ * signature or execution authority.
+ * @param {Record<string, any>} signal
+ * @param {{wakeSource?: string}} [options]
+ */
+export function buildGlobalWakeFromEarnEvent(signal, options = {}) {
+  const wakeSource = options.wakeSource
+  if (!GLOBAL_EARN_WAKE_SOURCES.has(wakeSource)) throw new Error('global Earn wake source is invalid')
+  const eventPools = unionValues(signal?.eventPools, [signal?.eventPool])
+  if (eventPools.length === 0) return null
+  if (eventPools.some((pool) => !/^0x[0-9a-f]{40}$/i.test(pool))) {
+    throw new Error('global Earn wake pool is invalid')
+  }
+  const sourceReceivedAt = earliestTime(signal?.sourceReceivedAt, signal?.receivedAt)
+  return {
+    ...signal,
+    wakeSource,
+    wakeSources: [wakeSource],
+    sourceReceivedAt,
+    receivedAt: sourceReceivedAt,
+    eventPools,
+    eventPool: eventPools[0],
+    routeAddresses: eventPools,
+    classificationReasons: ['EARN_POOL_SWAP_EVENT'],
+    classificationReason: 'EARN_POOL_SWAP_EVENT',
+  }
+}
+
+/**
  * Coalesce market wake evidence without losing an earlier pool or asset. The
  * result is still only a discovery hint; it grants no signing authority.
  */
@@ -81,6 +125,10 @@ export function mergePendingMarketSignals(current, next, options = {}) {
   const classificationReasons = unionValues(atomicClassificationReasons(left), atomicClassificationReasons(right))
   if (classificationReasons.length > MAXIMUM_CLASSIFICATION_REASONS) {
     throw new Error('coalesced market signal exceeds its classification-reason bound')
+  }
+  const wakeSources = unionValues(atomicWakeSources(left), atomicWakeSources(right))
+  if (wakeSources.length > MAXIMUM_WAKE_SOURCES) {
+    throw new Error('coalesced market signal exceeds its wake-source bound')
   }
   const eventPools = unionValues(left.eventPools, [left.eventPool], right.eventPools, [right.eventPool])
   const searchResultIds = unionValues(left.searchResultIds, [left.searchResultId], right.searchResultIds, [
@@ -133,6 +181,8 @@ export function mergePendingMarketSignals(current, next, options = {}) {
     classificationReasons,
     classificationReason:
       classificationReasons.length <= 1 ? classificationReasons[0] || null : classificationReasons.join('+'),
+    wakeSources,
+    wakeSource: wakeSources.length <= 1 ? wakeSources[0] || null : 'MULTI_SOURCE_MARKET_EVENT',
     duplicateMessages: Number(left.duplicateMessages || 0) + Number(right.duplicateMessages || 0),
     overlappingFrame: Boolean(left.overlappingFrame || right.overlappingFrame),
     outOfOrderFrame: Boolean(left.outOfOrderFrame || right.outOfOrderFrame),

@@ -603,6 +603,14 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     /wakeReason === 'FILTERED_SEQUENCER_FEED' \? 100 : wakeReason === 'MANAGED_WSS_EARN_SWAP' \? 90 : 50/,
   )
   assert.match(dualWatchSource, /new ManagedEarnEventSource/)
+  assert.match(
+    dualWatchSource,
+    /buildGlobalWakeFromEarnEvent\(signal, \{ wakeSource: 'MANAGED_WSS_EARN_SWAP' \}\)[\s\S]*enqueueGlobalFeedWake/,
+  )
+  assert.match(
+    dualWatchSource,
+    /buildGlobalWakeFromEarnEvent\(wake, \{ wakeSource: 'PUBLIC_EARN_LOG_BACKSTOP' \}\)[\s\S]*enqueueGlobalFeedWake/,
+  )
   assert.match(dualWatchSource, /assertLiveTransport\(RUNTIME_CONFIG, \{ requireWss: true \}\)/)
   assert.match(dualWatchSource, /const scheduledWork = strategyScheduler\.claimNext\(Date\.now\(\)\)/)
   assert.match(dualWatchSource, /strategyScheduler: strategyScheduler\.snapshot\(\)/)
@@ -692,8 +700,11 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualSource, /classifyGlobalFeedMatches/)
   assert.match(dualSource, /settlementAddresses: globalSettlementSeeds/)
   assert.match(dualSource, /GLOBAL_WAKE_ROUTE_ADDRESSES: \(signal\?\.routeAddresses \|\| \[\]\)\.join/)
+  assert.match(dualSource, /GLOBAL_WAKE_SOURCE: signal\?\.wakeSource/)
+  assert.match(dualSource, /GLOBAL_WAKE_SOURCES: \(signal\?\.wakeSources \|\| \[\]\)\.join/)
   assert.doesNotMatch(dualSource, /GLOBAL_WAKE_MATCHED_ADDRESSES/)
   assert.match(globalSource, /process\.env\.GLOBAL_WAKE_ROUTE_ADDRESSES/)
+  assert.match(globalSource, /process\.env\.GLOBAL_WAKE_SOURCE/)
   assert.match(dualSource, /GLOBAL_WAKE_LAST_SEQUENCE_NUMBER/)
   assert.match(dualSource, /GLOBAL_WAKE_ENQUEUED_AT/)
   assert.match(dualSource, /GLOBAL_WAKE_CLAIMED_AT/)

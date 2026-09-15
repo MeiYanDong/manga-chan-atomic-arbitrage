@@ -7,7 +7,9 @@
 
 ## 验收标准
 
-- Sequencer Feed 的 Global 事件立即进入一个常驻只读 worker；
+- Sequencer Feed、现有 Earn WSS 和公共 Earn 日志回补中的 Global 依赖事件立即进入一个常驻只读 worker；
+- Earn 事件只投影真实变化池地址，不按代币名称或“必须跨平台”限制路线；
+- 不为多源唤醒新增订阅、付费 RPC 消耗或签名权限；
 - worker 忙时保留所有新池、资产、序号和最早观察时间，不覆盖旧依赖；
 - worker 环境不含私钥文件、credential directory、授权 ID、Webhook 或 live-arm 权限；
 - worker 只读共享 catalog；目录缺失或过期时回退既有单写入刷新链路；
@@ -23,6 +25,7 @@
 ## 非目标
 
 - 不在本故事实现完整 V3 tick/V4 hook/Earn 动态状态镜像；
+- 不承诺 Sequencer Feed 不可用时对 Uniswap-only 交易提供逐事件唤醒；这类覆盖仍由周期恢复承担；
 - 不改变本金、Gas、最低净利润、失败 Gas、授权或执行合约；
 - 不把候选、模拟或 worker 正值记作收益；
 - 不扩大 ChainStack 日预算或服务器规格。

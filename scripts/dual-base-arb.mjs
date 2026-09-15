@@ -93,6 +93,7 @@ import {
   maximumEarnPublicExactQuotes,
 } from '../src/earnonhood-routes.mjs'
 import { retryReadOnly } from '../src/event-driven-shadow.mjs'
+import { buildGlobalWakeFromEarnEvent } from '../src/feed-signal-coalescer.mjs'
 import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/generic-plan.mjs'
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
@@ -2448,6 +2449,8 @@ function runGlobalShared(arm, signal, wakeReason, scheduling = {}) {
           : '',
       GLOBAL_WAKE_ROUTE_ADDRESSES: (signal?.routeAddresses || []).join(','),
       GLOBAL_WAKE_CLASSIFICATION: signal?.classificationReason || '',
+      GLOBAL_WAKE_SOURCE: signal?.wakeSource || '',
+      GLOBAL_WAKE_SOURCES: (signal?.wakeSources || []).join(','),
       GLOBAL_WAKE_REASON: wakeReason || '',
     },
     RUNTIME_CONFIG.globalWatchChildTimeoutMs,
@@ -3037,6 +3040,8 @@ async function watchDual() {
           if (eventBlockNumber > earnEventCursor) earnEventCursor = eventBlockNumber
         }
         enqueueEarnMarketWake('MANAGED_WSS_EARN_SWAP', signal)
+        const globalWake = buildGlobalWakeFromEarnEvent(signal, { wakeSource: 'MANAGED_WSS_EARN_SWAP' })
+        if (globalWake) enqueueGlobalFeedWake(globalWake)
       },
       onState: (eventSource) => {
         if (!watchState) return
@@ -3093,6 +3098,8 @@ async function watchDual() {
         if (globalClassification.actionable) {
           enqueueGlobalFeedWake({
             ...signal,
+            wakeSource: 'SEQUENCER_FEED',
+            wakeSources: ['SEQUENCER_FEED'],
             routeAddresses: globalClassification.routeAddresses,
             classificationReason: globalClassification.reason,
           })
@@ -3170,6 +3177,8 @@ async function watchDual() {
               earnEventCursor = wake.cursor
               if (wake.event) {
                 enqueueEarnMarketWake('REVIEWED_POOL_SWAP_EVENT', wake)
+                const globalWake = buildGlobalWakeFromEarnEvent(wake, { wakeSource: 'PUBLIC_EARN_LOG_BACKSTOP' })
+                if (globalWake) enqueueGlobalFeedWake(globalWake)
               }
               watchState = {
                 ...watchState,
@@ -3305,6 +3314,8 @@ async function watchDual() {
             earnEventCursor = wake.cursor
             if (wake.event) {
               enqueueEarnMarketWake('REVIEWED_POOL_SWAP_EVENT', wake)
+              const globalWake = buildGlobalWakeFromEarnEvent(wake, { wakeSource: 'PUBLIC_EARN_LOG_BACKSTOP' })
+              if (globalWake) enqueueGlobalFeedWake(globalWake)
             }
             watchState = {
               ...watchState,

@@ -1,12 +1,45 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { mergePendingMarketSignals } from '../src/feed-signal-coalescer.mjs'
+import { buildGlobalWakeFromEarnEvent, mergePendingMarketSignals } from '../src/feed-signal-coalescer.mjs'
 
 const POOL_A = '0x000000000000000000000000000000000000000a'
 const POOL_B = '0x000000000000000000000000000000000000000b'
 const ASSET_A = '0x000000000000000000000000000000000000001a'
 const ASSET_B = '0x000000000000000000000000000000000000001b'
+
+test('maps a canonical Earn swap to exact Global graph dependencies without adding authority', () => {
+  const wake = buildGlobalWakeFromEarnEvent(
+    {
+      sourceReceivedAt: '2026-09-15T00:00:00.000Z',
+      eventBlockNumber: 63_000_000n,
+      eventPool: POOL_A,
+      eventPools: [POOL_B, POOL_A],
+      routeAddresses: [ASSET_A],
+    },
+    { wakeSource: 'MANAGED_WSS_EARN_SWAP' },
+  )
+
+  assert.equal(wake.wakeSource, 'MANAGED_WSS_EARN_SWAP')
+  assert.deepEqual(wake.wakeSources, ['MANAGED_WSS_EARN_SWAP'])
+  assert.equal(wake.sourceReceivedAt, '2026-09-15T00:00:00.000Z')
+  assert.deepEqual(wake.eventPools, [POOL_A, POOL_B])
+  assert.deepEqual(wake.routeAddresses, [POOL_A, POOL_B])
+  assert.equal(wake.classificationReason, 'EARN_POOL_SWAP_EVENT')
+  assert.equal('authorizationId' in wake, false)
+})
+
+test('Earn-to-Global mapping is source-bounded and fails closed on malformed dependencies', () => {
+  assert.equal(buildGlobalWakeFromEarnEvent({}, { wakeSource: 'PUBLIC_EARN_LOG_BACKSTOP' }), null)
+  assert.throws(
+    () => buildGlobalWakeFromEarnEvent({ eventPool: '0xnot-a-pool' }, { wakeSource: 'MANAGED_WSS_EARN_SWAP' }),
+    /global Earn wake pool is invalid/,
+  )
+  assert.throws(
+    () => buildGlobalWakeFromEarnEvent({ eventPool: POOL_A }, { wakeSource: 'UNREVIEWED_SOURCE' }),
+    /global Earn wake source is invalid/,
+  )
+})
 
 test('coalesces every pending pool and asset dependency without changing authority', () => {
   const merged = mergePendingMarketSignals(
@@ -20,6 +53,7 @@ test('coalesces every pending pool and asset dependency without changing authori
       eventPool: POOL_A,
       eventPools: [POOL_A],
       classificationReason: 'EARN_POOL_MATCH',
+      wakeSource: 'SEQUENCER_FEED',
     },
     {
       receivedAt: '2026-09-15T00:00:01.000Z',
@@ -31,6 +65,7 @@ test('coalesces every pending pool and asset dependency without changing authori
       eventPool: POOL_B,
       eventPools: [POOL_B],
       classificationReason: 'NON_HUB_ASSET_PATH_MATCH',
+      wakeSource: 'MANAGED_WSS_EARN_SWAP',
     },
     { coalescedWakeCount: 1 },
   )
@@ -45,6 +80,8 @@ test('coalesces every pending pool and asset dependency without changing authori
   assert.deepEqual(merged.routeAddresses, [POOL_A, POOL_B, ASSET_A, ASSET_B])
   assert.deepEqual(merged.classificationReasons, ['EARN_POOL_MATCH', 'NON_HUB_ASSET_PATH_MATCH'])
   assert.equal(merged.classificationReason, 'EARN_POOL_MATCH+NON_HUB_ASSET_PATH_MATCH')
+  assert.deepEqual(merged.wakeSources, ['MANAGED_WSS_EARN_SWAP', 'SEQUENCER_FEED'])
+  assert.equal(merged.wakeSource, 'MULTI_SOURCE_MARKET_EVENT')
   assert.equal(merged.coalescedWakeCount, 1)
 })
 

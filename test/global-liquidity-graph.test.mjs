@@ -11,6 +11,7 @@ import {
   selectAffectedAtomicSwapCycles,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
+import { buildGlobalWakeFromEarnEvent } from '../src/feed-signal-coalescer.mjs'
 import { loadRobinhoodHubUniswapCatalog } from '../src/robinhood-uniswap-catalog.mjs'
 
 const USDG = '0x0000000000000000000000000000000000000001'
@@ -165,6 +166,24 @@ test('dependency-aware event traversal keeps only its bounded best materialized 
       }),
     /requires at least one wake dependency/,
   )
+})
+
+test('an exact Earn pool event reaches cross-protocol Global route search', () => {
+  const graph = fixture()
+  const wake = buildGlobalWakeFromEarnEvent(
+    { eventPool: BPT, sourceReceivedAt: '2026-09-15T00:00:00.000Z' },
+    { wakeSource: 'MANAGED_WSS_EARN_SWAP' },
+  )
+  const selected = selectAffectedAtomicSwapCycles(graph, USDG, {
+    wakeAddresses: wake.routeAddresses,
+    maximumHops: 4,
+    maximumCycles: 128,
+    maximumSelected: 8,
+  })
+
+  assert.ok(selected.touchedCycles > 0)
+  assert.ok(selected.selected.every((item) => item.matchedDependencies.includes(BPT)))
+  assert.ok(selected.selected.some((item) => new Set(item.cycle.edges.map((edge) => edge.venue)).size > 1))
 })
 
 test('historical PLTR competitor fixture is reachable after removing every token label', () => {

@@ -18,13 +18,17 @@ increase. The single wallet/nonce owner and the existing final live gates must r
 ## Decision
 
 - Start one resident Global event-search child with the unified watcher. It receives bounded JSON-line requests and
-  begins read-only preflight directly from the Sequencer Feed callback, independently of the serial strategy scheduler.
+  begins read-only preflight directly from reviewed market-event callbacks, independently of the serial strategy
+  scheduler. Accepted sources are the shared Sequencer Feed, the existing canonical Earn Vault WSS subscription and
+  the existing public Earn-log recovery backstop. No additional subscription is created.
 - Remove every signing credential, authorization reference and live-arm variable from the child environment, force an
   empty config-file fallback, remove managed HTTP/WSS endpoints, and cap its V8 heap at 128 MiB. The worker has no
   mutation command and invokes preflight with persistence disabled. It uses the official public reader only, so it
   cannot race the signer's durable paid-RPC budget file.
-- Keep one request in flight. Events arriving while it is busy are merged by pool, asset, sequence and source time;
-  the latest dependency union is dispatched next.
+- Keep one request in flight. Events arriving while it is busy are merged by pool, asset, sequence, source identity and
+  source time; the latest dependency union is dispatched next. A canonical Earn swap projects only its exact changed
+  pool addresses into the protocol-agnostic graph, so it may discover either same-Earn or cross-protocol cycles without
+  assuming token names or venue count.
 - Cache only the canonical catalog-derived graph by catalog identity. Dynamic funding, quote and simulation evidence
   remains fixed-block and is reacquired for each request. The worker treats a missing or six-hour-stale catalog as
   unavailable instead of refreshing it itself; the legacy Global child remains the only catalog writer, and the
@@ -46,5 +50,6 @@ for both USDG and WETH event roots.
 
 This is not yet a complete canonical pool-state service. V3 ticks, V4 hook state and all Earn dynamic state are still
 read on demand, periodic recovery still uses a one-shot child, and the worker remains a child of the credential-bearing
-service even though its environment and entrypoint expose no signing path. A separate least-privilege service and
-replayable state journal remain later hardening work.
+service even though its environment and entrypoint expose no signing path. While Sequencer Feed is unavailable,
+Uniswap-only events are found by periodic Global recovery rather than a dedicated live event stream. A separate
+least-privilege service and replayable state journal remain later hardening work.

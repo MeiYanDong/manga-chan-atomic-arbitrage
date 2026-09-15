@@ -49,6 +49,8 @@ function sanitizeSignal(signal) {
     routeAddresses: merged.routeAddresses,
     classificationReasons: merged.classificationReasons,
     classificationReason: merged.classificationReason,
+    wakeSources: merged.wakeSources,
+    wakeSource: merged.wakeSource,
     duplicateMessages: merged.duplicateMessages,
     overlappingFrame: merged.overlappingFrame,
     outOfOrderFrame: merged.outOfOrderFrame,
