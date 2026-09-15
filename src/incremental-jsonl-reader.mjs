@@ -59,7 +59,7 @@ function leadingAuditEvent(line) {
 export class IncrementalJsonlEventReader {
   /**
    * @param {string} file
-   * @param {{events?: Iterable<string>, chunkBytes?: number, maxLineBytes?: number}} [options]
+   * @param {{events?: Iterable<string>, chunkBytes?: number, maxLineBytes?: number, projectRecord?: ((record: Record<string, any>) => unknown)}} [options]
    */
   constructor(file, options = {}) {
     if (typeof file !== 'string' || file.length === 0) throw new Error('JSONL file path is required')
@@ -76,6 +76,10 @@ export class IncrementalJsonlEventReader {
       64 * 1024 * 1024,
     )
     this.eventPattern = new RegExp(`"event"\\s*:\\s*"(?:${events.map(escapeRegularExpression).join('|')})"`)
+    if (options.projectRecord !== undefined && typeof options.projectRecord !== 'function') {
+      throw new Error('JSONL record projector must be a function')
+    }
+    this.projectRecord = options.projectRecord || null
     this.device = null
     this.inode = null
     this.offset = 0
@@ -138,7 +142,8 @@ export class IncrementalJsonlEventReader {
     if (!record || typeof record !== 'object' || !this.events.has(record.event)) {
       throw new Error('safety JSONL record event does not match its accepted prefilter')
     }
-    this.records.push(record)
+    const projected = this.projectRecord ? this.projectRecord(record) : record
+    if (projected !== null && projected !== undefined) this.records.push(projected)
   }
 
   consume(chunk) {

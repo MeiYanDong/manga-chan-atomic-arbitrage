@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Stream the append-only trading ledgers into a field-minimized business-report projection instead of loading and
+  parsing the complete audit history on every refresh. The original ledgers remain authoritative and unchanged; the
+  reporter retains only failed-Gas evidence, the latest wallet verification, the active authorization's Global funnel,
+  confirmed Earn receipts and completed legacy collections. Oversized or malformed safety-relevant rows still fail
+  closed, while the known signer-free legacy wake is streamed past. This fixes the production-observed 128 MiB report
+  cgroup OOM without granting signer access, increasing the memory limit or changing execution accounting.
 - Connect the signer-free board's multi-source V4 discovery universe to Global through a small, versioned and
   group-readable `global-universe.json` projection instead of copying the roughly 40 MB source catalog into the signer.
   The projection retains a high-priority tranche, rotates bounded long-tail coverage, verifies PoolKeys, topology hash,

@@ -15,6 +15,7 @@ import {
 } from '../src/business-operations.mjs'
 import { buildAgentDailyProfitSnapshot, buildAgentMarketValuation } from '../src/agent-daily-profit.mjs'
 import { readBusinessBoardSnapshot, resolveBusinessBoardProjection } from '../src/business-board-snapshot.mjs'
+import { readBusinessReportInputs } from '../src/business-report-input.mjs'
 import { isSecureSystemdCredential } from '../src/journal.mjs'
 import { requestLoopbackJson } from '../src/loopback-json-client.mjs'
 import { collectPortfolioSnapshot, createPortfolioClients, readBasePublicHeartbeat } from '../src/portfolio-monitor.mjs'
@@ -206,6 +207,11 @@ async function currentBoardProjection() {
 
 async function currentBusinessSnapshot(delivery = deliveryState()) {
   const runtime = readJson(path.join(RUN_DIR, 'dual-watch-state.json'))
+  const arm = readJson(path.join(RUN_DIR, 'dual-watch-arm.json'))
+  const reportInputs = readBusinessReportInputs({
+    runDirectory: RUN_DIR,
+    authorizationId: arm?.authorizationId || null,
+  })
   const processAlive = processIsAlive(Number(runtime?.pid))
   const robinhoodServiceStatus = publicRuntimeStatus(runtime, processAlive)
   const [board, portfolio] = await Promise.all([
@@ -219,14 +225,12 @@ async function currentBusinessSnapshot(delivery = deliveryState()) {
   ])
   return buildBusinessSnapshot({
     now: new Date(),
-    arm: readJson(path.join(RUN_DIR, 'dual-watch-arm.json')),
+    arm,
     runtime,
     usdgState: readJson(path.join(RUN_DIR, 'generic-state.json')),
     wethState: readJson(path.join(RUN_DIR, 'weth-state.json')),
     universalState: readJson(path.join(RUN_DIR, 'universal-state.json')),
-    auditRecords: readJsonLines(path.join(RUN_DIR, 'audit.jsonl')),
-    collectionRecords: readJsonLines(path.join(RUN_DIR, 'legacy-collection-audit.jsonl')),
-    earnOnHoodRecords: readJsonLines(path.join(RUN_DIR, 'earnonhood-audit.jsonl')),
+    ...reportInputs,
     projectRegistry: readJson(PROJECT_HISTORY_PATH)?.entries || [],
     board,
     delivery,

@@ -466,7 +466,13 @@ the board user receives no direct access to strategy state.
 
 ## Business dashboard and Feishu reporting
 
-The business reporter is a one-shot projection and notification service, not part of the signing lane. Enter the
+The business reporter is a one-shot projection and notification service, not part of the signing lane. It streams the
+append-only strategy ledgers and retains only the business fields it consumes; do not replace that boundary with a
+whole-file `readFile` or increase `MemoryMax` to hide ledger growth. The source ledgers remain untouched and are still
+the audit source of truth. A malformed or oversized safety-relevant record must fail the report closed without stopping
+the signer.
+
+Enter the
 custom-bot webhook through encrypted standard input; never put its value in argv, an environment file, a release archive
 or a shell history entry:
 
@@ -505,13 +511,18 @@ not change the Base execution service, signer RPC or nonce owner. The default of
 not used by this production projection because the release-host verification returned JSON-RPC `-32016` on the bounded
 contract reads, while the configured public reader completed the same fixed-block seven-account snapshot. Validate that
 `/run/atomic-cycle-portfolio/heartbeat.json` is `0640`, the Base executor identity matches the registry, and the business
-snapshot reports `7` monitored objects. Do not grant access to `/var/lib/atomic-cycle-engine` and do not restart either
+snapshot reports `8` monitored objects. Do not grant access to `/var/lib/atomic-cycle-engine` and do not restart either
 trading service merely to install this reporter drop-in.
 
-Acceptance requires Feishu response code `0`, one fsynced `DELIVERED` receipt for the previous Beijing day, a mode-0640
+Acceptance requires Feishu response code `0`, one fsynced `DELIVERED` receipt for the previous Beijing day, a mode-0644
 sanitized snapshot and an enabled next timer trigger. Inspect metadata and selected non-secret fields; never print or
 decrypt the webhook into logs. The board rejects the business snapshot after 15 minutes, so an old panel cannot silently
 appear current.
+
+After a report-runtime change, run the one-shot under its unchanged 128 MiB cgroup and require `Result=success`,
+`ExecMainStatus=0`, a newer sanitized snapshot timestamp and bounded `MemoryPeak`. A successful local unit test is not a
+production readback. Keep the timer and path unit disabled after an OOM until one manual one-shot succeeds; the live
+watcher and critical-health timer remain independent.
 
 The service retries every five minutes after 09:05 Beijing time until that period has a durable success receipt. A
 failure exits non-zero and may alert, but it cannot stop, re-arm or mutate the watcher. The custom-bot API cannot provide
