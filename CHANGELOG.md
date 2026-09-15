@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Let only high-confidence market events (priority 80 or above) precede an overdue periodic recovery job, and only
+  while the oldest recovery deadline is less than 30 seconds late. Event work never moves that deadline; at the hard
+  bound recovery wins. Runtime evidence now reports the policy, bound and actual deferrals. Production v0.17.14 showed
+  a filtered event waiting 43.79 seconds while startup recovery occupied the sole signer lane. This reduces avoidable
+  queue latency without concurrent signing, nonce relaxation, lower profit floors or unbounded recovery starvation.
 - Normalize the completed immutable release tree after extraction, dependency installation and production build, then
   fail closed before symlink promotion if any regular file or directory remains group/world writable. This closes the
   gap observed while promoting v0.17.13: source archives preserve their stored mode bits, so `umask 0022` alone did not

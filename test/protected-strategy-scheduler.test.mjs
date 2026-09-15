@@ -6,9 +6,12 @@ import { ProtectedStrategyScheduler } from '../src/protected-strategy-scheduler.
 const POOL_A = '0x000000000000000000000000000000000000000a'
 const POOL_B = '0x000000000000000000000000000000000000000b'
 
-function scheduler(startedAt = 1_000) {
+function scheduler(startedAt = 1_000, options = {}) {
   return new ProtectedStrategyScheduler({
     startedAt,
+    priorityEventFloor: 80,
+    maximumPeriodicDeferralMs: 250,
+    ...options,
     lanes: [
       { id: 'EARN', periodMs: 1_000, minimumIntervalMs: 0 },
       { id: 'GLOBAL', periodMs: 2_000, minimumIntervalMs: 100 },
@@ -16,21 +19,57 @@ function scheduler(startedAt = 1_000) {
   })
 }
 
-test('overdue periodic coverage runs before a continuous event backlog', () => {
+test('high-priority work may briefly precede overdue recovery while low-priority work cannot', () => {
   const work = scheduler()
-  work.enqueueEvent('EARN', { reason: 'FILTERED_SEQUENCER_FEED', priority: 100, signal: { eventPool: POOL_A } })
-  work.enqueueEvent('GLOBAL', { reason: 'FILTERED_SEQUENCER_FEED', priority: 50, signal: { eventPool: POOL_B } })
+  work.enqueueEvent('EARN', {
+    reason: 'FILTERED_SEQUENCER_FEED',
+    priority: 100,
+    enqueuedAt: 1_000,
+    signal: { eventPool: POOL_A },
+  })
+  work.enqueueEvent('GLOBAL', {
+    reason: 'PUBLIC_RECOVERY_EVENT',
+    priority: 50,
+    enqueuedAt: 1_000,
+    signal: { eventPool: POOL_B },
+  })
 
   const first = work.claimNext(1_000)
   const second = work.claimNext(1_001)
-  assert.deepEqual([first.laneId, first.kind, second.laneId, second.kind], ['EARN', 'PERIODIC', 'GLOBAL', 'PERIODIC'])
-
   const third = work.claimNext(1_002)
-  assert.deepEqual([third.laneId, third.kind, third.reason], ['EARN', 'EVENT', 'FILTERED_SEQUENCER_FEED'])
-  assert.equal(
-    work.snapshot().lanes.find((lane) => lane.id === 'GLOBAL').pendingEvent.reason,
-    'FILTERED_SEQUENCER_FEED',
-  )
+  const fourth = work.claimNext(1_102)
+  assert.deepEqual([first.laneId, first.kind], ['EARN', 'EVENT'])
+  assert.deepEqual(first.deferredPeriodic, {
+    laneId: 'EARN',
+    scheduledAt: 1_000,
+    latenessMs: 0,
+    maximumDeferralMs: 250,
+  })
+  assert.deepEqual([second.laneId, second.kind], ['EARN', 'PERIODIC'])
+  assert.deepEqual([third.laneId, third.kind], ['GLOBAL', 'PERIODIC'])
+  assert.deepEqual([fourth.laneId, fourth.kind, fourth.reason], ['GLOBAL', 'EVENT', 'PUBLIC_RECOVERY_EVENT'])
+  assert.equal(work.snapshot().priorityEventDeferrals, 1)
+})
+
+test('the maximum deferral becomes a hard recovery deadline', () => {
+  const work = scheduler()
+  work.enqueueEvent('EARN', {
+    reason: 'MANAGED_WSS_EARN_SWAP',
+    priority: 90,
+    enqueuedAt: 1_000,
+    signal: { eventPool: POOL_A },
+  })
+  assert.equal(work.claimNext(1_249).kind, 'EVENT')
+
+  work.enqueueEvent('EARN', {
+    reason: 'MANAGED_WSS_EARN_SWAP',
+    priority: 90,
+    enqueuedAt: 1_250,
+    signal: { eventPool: POOL_A },
+  })
+  const recovery = work.claimNext(1_250)
+  assert.deepEqual([recovery.laneId, recovery.kind, recovery.latenessMs], ['EARN', 'PERIODIC', 250])
+  assert.equal(work.snapshot().lanes[0].pendingEvent.reason, 'MANAGED_WSS_EARN_SWAP')
 })
 
 test('event work never resets its lane periodic deadline', () => {

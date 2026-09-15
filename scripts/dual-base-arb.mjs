@@ -140,6 +140,8 @@ const MAX_BOARD_SNAPSHOT_BYTES = 16 * 1024 * 1024
 const STARTUP_RPC_ATTEMPTS = 5
 const STARTUP_RPC_RETRY_DELAY_MS = 1_000
 const UNKNOWN_RECONCILE_RETRY_MS = 5_000
+const STRATEGY_PRIORITY_EVENT_FLOOR = 80
+const STRATEGY_MAX_PERIODIC_DEFERRAL_MS = 30_000
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RUNTIME_CONFIG = loadRuntimeConfig()
@@ -2904,6 +2906,8 @@ async function watchDual() {
     const startedAt = new Date().toISOString()
     const strategyScheduler = new ProtectedStrategyScheduler({
       startedAt: Date.parse(startedAt),
+      priorityEventFloor: STRATEGY_PRIORITY_EVENT_FLOOR,
+      maximumPeriodicDeferralMs: STRATEGY_MAX_PERIODIC_DEFERRAL_MS,
       lanes: [
         { id: 'EARN', periodMs: RUNTIME_CONFIG.earnWatchPeriodicMs, minimumIntervalMs: 0 },
         {
@@ -3427,6 +3431,8 @@ async function watchDual() {
             claimedAt: new Date(scheduledWork.claimedAt).toISOString(),
             latenessMs: scheduledWork.latenessMs ?? null,
             waitMs: scheduledWork.waitMs ?? null,
+            deferredPeriodicLane: scheduledWork.deferredPeriodic?.laneId || null,
+            periodicLatenessAtDeferralMs: scheduledWork.deferredPeriodic?.latenessMs ?? null,
             nextPeriodicAt: new Date(scheduledWork.nextPeriodicAt).toISOString(),
           })
           if (scheduledWork.laneId === 'EARN') {

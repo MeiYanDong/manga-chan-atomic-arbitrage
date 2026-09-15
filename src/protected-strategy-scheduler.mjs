@@ -30,13 +30,21 @@ function sourceTimestamp(signal, fallback) {
 
 /**
  * One scheduler protects recovery coverage while keeping the signing lane serial.
- * Event dispatches never move a periodic deadline. A claimed periodic job moves
- * only its own deadline, so a busy market cannot postpone another strategy.
+ * High-confidence market events may briefly precede an overdue recovery job, but
+ * only until its hard lateness bound. Event dispatches never move a periodic
+ * deadline, so a busy market cannot postpone recovery indefinitely.
  */
 export class ProtectedStrategyScheduler {
-  constructor({ lanes, startedAt = Date.now() }) {
+  constructor({ lanes, startedAt = Date.now(), priorityEventFloor = 80, maximumPeriodicDeferralMs = 30_000 }) {
     if (!Array.isArray(lanes) || lanes.length === 0) throw new Error('at least one strategy lane is required')
     const initialTimestamp = finiteTimestamp(startedAt, 'startedAt')
+    const normalizedPriorityEventFloor = Number(priorityEventFloor)
+    if (!Number.isFinite(normalizedPriorityEventFloor)) throw new Error('priorityEventFloor must be finite')
+    this.priorityEventFloor = normalizedPriorityEventFloor
+    this.maximumPeriodicDeferralMs = positiveDuration(maximumPeriodicDeferralMs, 'maximumPeriodicDeferralMs', {
+      allowZero: true,
+    })
+    this.priorityEventDeferrals = 0
     this.lanes = new Map()
     lanes.forEach((definition, order) => {
       const id = String(definition?.id || '')
@@ -100,10 +108,29 @@ export class ProtectedStrategyScheduler {
     const periodic = [...this.lanes.values()]
       .filter((lane) => timestamp >= lane.nextPeriodicAt)
       .sort((left, right) => left.nextPeriodicAt - right.nextPeriodicAt || left.order - right.order)[0]
+    const eventLane = [...this.lanes.values()]
+      .filter(
+        (lane) =>
+          lane.pendingEvent &&
+          (lane.lastStartedAt === null || timestamp - lane.lastStartedAt >= lane.minimumIntervalMs),
+      )
+      .sort(
+        (left, right) =>
+          right.pendingEvent.priority - left.pendingEvent.priority ||
+          left.pendingEvent.enqueuedAt - right.pendingEvent.enqueuedAt ||
+          left.order - right.order,
+      )[0]
+    const periodicLatenessMs = periodic ? Math.max(0, timestamp - periodic.nextPeriodicAt) : null
+    const priorityEventMayPrecedePeriodic = Boolean(
+      periodic &&
+      eventLane &&
+      eventLane.pendingEvent.priority >= this.priorityEventFloor &&
+      periodicLatenessMs < this.maximumPeriodicDeferralMs,
+    )
 
-    if (periodic) {
+    if (periodic && !priorityEventMayPrecedePeriodic) {
       const scheduledAt = periodic.nextPeriodicAt
-      const latenessMs = Math.max(0, timestamp - scheduledAt)
+      const latenessMs = periodicLatenessMs
       periodic.lastStartedAt = timestamp
       periodic.nextPeriodicAt = timestamp + periodic.periodMs
       periodic.periodicRuns += 1
@@ -119,22 +146,18 @@ export class ProtectedStrategyScheduler {
         nextPeriodicAt: periodic.nextPeriodicAt,
       })
     }
-
-    const eventLane = [...this.lanes.values()]
-      .filter(
-        (lane) =>
-          lane.pendingEvent &&
-          (lane.lastStartedAt === null || timestamp - lane.lastStartedAt >= lane.minimumIntervalMs),
-      )
-      .sort(
-        (left, right) =>
-          right.pendingEvent.priority - left.pendingEvent.priority ||
-          left.pendingEvent.enqueuedAt - right.pendingEvent.enqueuedAt ||
-          left.order - right.order,
-      )[0]
     if (!eventLane) return null
 
     const pending = eventLane.pendingEvent
+    const deferredPeriodic = priorityEventMayPrecedePeriodic
+      ? {
+          laneId: periodic.id,
+          scheduledAt: periodic.nextPeriodicAt,
+          latenessMs: periodicLatenessMs,
+          maximumDeferralMs: this.maximumPeriodicDeferralMs,
+        }
+      : null
+    if (deferredPeriodic) this.priorityEventDeferrals += 1
     eventLane.pendingEvent = null
     eventLane.lastStartedAt = timestamp
     eventLane.eventRuns += 1
@@ -147,6 +170,7 @@ export class ProtectedStrategyScheduler {
       scheduledAt: pending.enqueuedAt,
       waitMs: Math.max(0, timestamp - pending.enqueuedAt),
       nextPeriodicAt: eventLane.nextPeriodicAt,
+      deferredPeriodic,
     })
   }
 
@@ -179,7 +203,10 @@ export class ProtectedStrategyScheduler {
 
   snapshot() {
     return {
-      policy: 'OVERDUE_PERIODIC_THEN_PRIORITY_EVENT_SINGLE_SIGNER_LANE',
+      policy: 'BOUNDED_PRIORITY_EVENT_THEN_HARD_PERIODIC_DEADLINE_SINGLE_SIGNER_LANE_V2',
+      priorityEventFloor: this.priorityEventFloor,
+      maximumPeriodicDeferralMs: this.maximumPeriodicDeferralMs,
+      priorityEventDeferrals: this.priorityEventDeferrals,
       lanes: [...this.lanes.keys()].map((laneId) => this.laneSnapshot(laneId)),
       lastClaim: this.lastClaim,
     }

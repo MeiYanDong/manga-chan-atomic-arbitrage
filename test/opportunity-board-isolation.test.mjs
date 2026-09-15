@@ -666,6 +666,10 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualSource, /classifyEarnFeedMatches/)
   assert.match(dualSource, /ProtectedStrategyScheduler/)
   assert.match(dualWatchSource, /id: 'EARN',[\s\S]*id: 'GLOBAL'/)
+  assert.match(dualWatchSource, /priorityEventFloor: STRATEGY_PRIORITY_EVENT_FLOOR/)
+  assert.match(dualWatchSource, /maximumPeriodicDeferralMs: STRATEGY_MAX_PERIODIC_DEFERRAL_MS/)
+  assert.match(dualSource, /const STRATEGY_PRIORITY_EVENT_FLOOR = 80/)
+  assert.match(dualSource, /const STRATEGY_MAX_PERIODIC_DEFERRAL_MS = 30_000/)
   assert.match(dualWatchSource, /strategyScheduler\.enqueueEvent\('EARN'/)
   assert.match(dualWatchSource, /strategyScheduler\.enqueueEvent\('GLOBAL'/)
   assert.match(
