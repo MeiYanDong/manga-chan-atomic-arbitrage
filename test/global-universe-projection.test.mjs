@@ -196,3 +196,23 @@ test('projection overlay is route-equivalent to the same complete bounded V4 inp
     enumerateAtomicSwapCycles(completeGraph, USDG, { maximumHops: 3 }).map((item) => item.id),
   )
 })
+
+test('counts an identical projection already present in a refreshed base catalog exactly once', () => {
+  const universe = projection()
+  const merged = mergeGlobalUniverseProjection({
+    earnPools: [],
+    uniswap: {
+      v2Pools: [],
+      v3Pools: [],
+      v4Pools: universe.v4Pools.map((poolValue) => ({ ...poolValue })),
+    },
+    projection: universe,
+    maximumAssets: GLOBAL_GRAPH_POLICY.maximumAssets,
+    maximumSwapEdges: GLOBAL_GRAPH_POLICY.maximumSwapEdges,
+  })
+
+  assert.equal(merged.universe.admittedTargets, 1)
+  assert.equal(merged.universe.admittedPools, 2)
+  assert.equal(merged.universe.capacityRejectedTargets, 0)
+  assert.equal(merged.uniswap.v4Pools.length, 2)
+})

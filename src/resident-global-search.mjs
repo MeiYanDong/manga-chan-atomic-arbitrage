@@ -6,6 +6,7 @@ import { redactSensitiveText } from './policy.mjs'
 export const GLOBAL_SEARCH_WORKER_POLICY = 'RESIDENT_SIGNER_FREE_EVENT_SEARCH_V1'
 export const GLOBAL_SEARCH_PROTOCOL_VERSION = 1
 export const GLOBAL_CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1_000
+export const GLOBAL_PARTIAL_CATALOG_RETRY_MS = 5 * 60 * 1_000
 
 const MAXIMUM_LINE_BYTES = 1_000_000
 const RESTART_DELAY_MS = 1_000
@@ -19,20 +20,42 @@ function validRequestId(value) {
   return /^[A-Za-z0-9:_-]{1,160}$/.test(String(value || ''))
 }
 
+function validCatalogReadEvidence(evidence) {
+  const requestedPairs = Number(evidence?.requestedPairs)
+  const requestedV3FeeQueries = Number(evidence?.requestedV3FeeQueries)
+  const v2TransportErrors = Number(evidence?.v2TransportErrors)
+  const v3TransportErrors = Number(evidence?.v3TransportErrors)
+  if (
+    ![requestedPairs, requestedV3FeeQueries, v2TransportErrors, v3TransportErrors].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    ) ||
+    v2TransportErrors > requestedPairs ||
+    v3TransportErrors > requestedV3FeeQueries
+  ) {
+    return false
+  }
+  const complete = v2TransportErrors + v3TransportErrors === 0
+  return evidence?.complete === complete && evidence?.status === (complete ? 'COMPLETE' : 'PARTIAL')
+}
+
 export function classifyGlobalCatalogAccess(catalog, { readOnly = false, now = Date.now() } = {}) {
   const generatedAt = Date.parse(catalog?.generatedAt)
   const age = now - generatedAt
-  const fresh =
+  const current =
     catalog?.schemaVersion === 1 &&
     Array.isArray(catalog?.earn?.pools) &&
     Array.isArray(catalog?.uniswap?.v2Pools) &&
     Array.isArray(catalog?.uniswap?.v3Pools) &&
     Array.isArray(catalog?.uniswap?.v4Pools) &&
+    validCatalogReadEvidence(catalog?.uniswap?.readEvidence) &&
     Number.isFinite(now) &&
     Number.isFinite(generatedAt) &&
     age >= -MAXIMUM_CATALOG_CLOCK_SKEW_MS &&
     age <= GLOBAL_CATALOG_MAX_AGE_MS
-  if (fresh) return 'CACHE'
+  if (current) {
+    if (catalog.uniswap.readEvidence.complete || readOnly || age <= GLOBAL_PARTIAL_CATALOG_RETRY_MS) return 'CACHE'
+    return 'REFRESH'
+  }
   return readOnly ? 'UNAVAILABLE' : 'REFRESH'
 }
 

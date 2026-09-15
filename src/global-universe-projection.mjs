@@ -444,20 +444,21 @@ export function mergeGlobalUniverseProjection({
   let admittedPools = 0
   let capacityRejectedTargets = 0
   for (const target of projection.targets.map((item) => key(item.token))) {
-    const group = (groups.get(target) || []).filter((pool) => !byPoolId.has(key(pool.poolId)))
+    const group = groups.get(target) || []
     if (group.length === 0) continue
+    const missing = group.filter((pool) => !byPoolId.has(key(pool.poolId)))
     const nextAssets = new Set(capacity.assets)
-    for (const pool of group) {
+    for (const pool of missing) {
       nextAssets.add(key(pool.token0))
       nextAssets.add(key(pool.token1))
     }
-    if (nextAssets.size > assetsLimit || capacity.directedEdges + group.length * 2 > edgesLimit) {
+    if (nextAssets.size > assetsLimit || capacity.directedEdges + missing.length * 2 > edgesLimit) {
       capacityRejectedTargets += 1
       continue
     }
     capacity.assets = nextAssets
-    capacity.directedEdges += group.length * 2
-    for (const pool of group) byPoolId.set(key(pool.poolId), pool)
+    capacity.directedEdges += missing.length * 2
+    for (const pool of missing) byPoolId.set(key(pool.poolId), pool)
     admittedTargets += 1
     admittedPools += group.length
   }

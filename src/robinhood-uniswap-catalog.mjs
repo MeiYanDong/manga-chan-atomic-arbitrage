@@ -1,5 +1,7 @@
 import { getAddress } from 'viem'
 
+import { redactSensitiveText } from './policy.mjs'
+
 export const ROBINHOOD_UNISWAP_V2_FACTORY = getAddress('0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f')
 export const ROBINHOOD_UNISWAP_V3_FACTORY = getAddress('0x1f7d7550B1b028f7571E69A784071F0205FD2EfA')
 export const ROBINHOOD_UNISWAP_V4_POOL_MANAGER = getAddress('0x8366a39CC670B4001A1121B8F6A443A643e40951')
@@ -127,6 +129,10 @@ function uniqueAddresses(values) {
   return [...new Map(values.map((value) => [key(getAddress(value)), getAddress(value)])).values()]
 }
 
+function safeError(error) {
+  return redactSensitiveText(error instanceof Error ? error.message : String(error)).slice(0, 240)
+}
+
 /**
  * Discover canonical V2/V3 pools only for asset-to-hub pairs. This bounded
  * coverage connects every Earn asset/BPT to USDG and WETH without the O(n^2)
@@ -174,7 +180,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
         source: 'CANONICAL_UNISWAP_V2_FACTORY_GET_PAIR_WITH_NONZERO_RESERVES',
       }
     } catch (error) {
-      return { error: String(error), ...pair }
+      return { error: safeError(error), ...pair }
     }
   })
 
@@ -207,7 +213,7 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
         source: 'CANONICAL_UNISWAP_V3_FACTORY_GET_POOL_WITH_ACTIVE_LIQUIDITY',
       }
     } catch (error) {
-      return { error: String(error), ...query }
+      return { error: safeError(error), ...query }
     }
   })
 
@@ -215,6 +221,8 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
     ...v2Results.filter((item) => item?.error || item?.rejected).map((item) => ({ venue: 'UNISWAP_V2', ...item })),
     ...v3Results.filter((item) => item?.error || item?.rejected).map((item) => ({ venue: 'UNISWAP_V3', ...item })),
   ]
+  const v2TransportErrors = v2Results.filter((item) => item?.error).length
+  const v3TransportErrors = v3Results.filter((item) => item?.error).length
   const admittedAssets = new Set(assets.map(key))
   const v4ByPoolId = new Map()
   for (const source of [...ROBINHOOD_REVIEWED_V4_BOOTSTRAP, ...(options.additionalV4Pools || [])]) {
@@ -250,7 +258,15 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
   }
   return {
     blockNumber: BigInt(blockNumber).toString(),
-    coverage: 'ALL_EARN_ASSETS_AND_BPTS_TO_SETTLEMENT_HUBS_PLUS_PERSISTED_CHAIN_ATTESTED_V4_HISTORY',
+    coverage: 'ALL_EARN_ASSETS_AND_BPTS_TO_SETTLEMENT_HUBS_PLUS_REVIEWED_V4_BOOTSTRAP',
+    readEvidence: {
+      status: v2TransportErrors + v3TransportErrors === 0 ? 'COMPLETE' : 'PARTIAL',
+      complete: v2TransportErrors + v3TransportErrors === 0,
+      requestedPairs: pairs.length,
+      requestedV3FeeQueries: v3Queries.length,
+      v2TransportErrors,
+      v3TransportErrors,
+    },
     assets,
     hubs,
     v2Pools: v2Results.filter((item) => item && !item.error && !item.rejected),

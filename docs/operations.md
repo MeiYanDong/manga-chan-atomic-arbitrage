@@ -170,6 +170,15 @@ the shared `manga-board` group, and not writable by group or world. Both `manga-
 and runtime search universe can diverge. Missing, stale, malformed, over-bound, permission-unsafe or hash-invalid
 projections fail closed to the reviewed bootstrap/base catalog and never grant execution authority.
 
+The six-hour base catalog and the rotating projection have different lifetimes. The base catalog contains canonical
+Earn topology, Earn-asset-to-USDG/WETH V2/V3 reads and only the reviewed V4 bootstrap. The current board projection is
+merged in memory for that search round; never persist its assets or pools back into `global-catalog.json`. Otherwise an
+old rotation can consume the next rotation's bounded capacity and can amplify V2/V3 discovery into an unbounded
+long-tail RPC fanout. Every base refresh records requested-call and transport-failure counts. A malformed evidence
+record is not a valid cache; a transport-partial catalog remains readable by the signer-free worker but the sole writer
+retries it after five minutes. Until a complete read exists, a negative result stays evidence-partial and must not be
+reported as proven no-profit.
+
 The global route set includes both same-venue and cross-venue simple cycles. A route still must close in the same
 settlement asset, use two to four distinct pools, avoid repeated intermediate assets, fit the per-wake route budget and
 remain all-cost positive. Event wakes fund-check only seeds and event-touched assets; startup and five-minute recovery
@@ -214,7 +223,9 @@ environment has no signing authorization, managed endpoint or live arm; it uses 
 keeps at most one request in flight. A complete negative result can suppress an identical queued read, but a positive
 result is only a hint and always returns through the existing latest-block signer gates. The worker never writes or
 refreshes `global-catalog.json`: a missing, malformed or six-hour-stale catalog returns that wake to the bounded legacy
-child, which remains the sole catalog writer. Worker crash, timeout or protocol failure degrades that request only.
+child, which remains the sole catalog writer. A transport-partial cache follows the same path after its five-minute
+writer retry interval; the read-only worker may use the best current partial graph but cannot upgrade its negative
+result to complete evidence. Worker crash, timeout or protocol failure degrades that request only.
 The worker accepts exact dependency wakes from the shared Sequencer Feed, the already-running canonical Earn Vault WSS
 subscription and the existing public Earn-log backstop. Earn events are projected as changed pool addresses and can
 therefore wake same-Earn or cross-protocol routes in the unified graph. This fan-out performs no extra source request and

@@ -299,6 +299,14 @@ test('includes only receipt-gated universal executions in the operating totals',
     lastResult: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED',
     graph: {
       settlementAdmission: { admitted: 1 },
+      catalogReadEvidence: {
+        status: 'COMPLETE',
+        complete: true,
+        requestedPairs: 14,
+        requestedV3FeeQueries: 56,
+        v2TransportErrors: 0,
+        v3TransportErrors: 0,
+      },
       universe: {
         status: 'CURRENT',
         selectedTargets: 128,
@@ -357,6 +365,13 @@ test('includes only receipt-gated universal executions in the operating totals',
   assert.equal(snapshot.strategy.global.searchableSettlementAssets, 2)
   assert.equal(snapshot.strategy.global.fundedSettlementAssets, 1)
   assert.equal(snapshot.strategy.global.fundingBlocked, false)
+  assert.deepEqual(snapshot.strategy.global.catalogEvidence, {
+    status: 'COMPLETE',
+    complete: true,
+    requestedPairs: 14,
+    requestedV3FeeQueries: 56,
+    transportFailures: 0,
+  })
   assert.deepEqual(snapshot.strategy.global.universe, {
     status: 'CURRENT',
     selectedTargets: 128,

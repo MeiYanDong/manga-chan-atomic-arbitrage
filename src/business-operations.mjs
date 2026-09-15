@@ -362,6 +362,20 @@ export function buildBusinessSnapshot({
               globalWorkset?.fundedSettlementAssets ?? runtime?.global?.graph?.settlementAdmission?.admitted,
             ),
             fundingBlocked: typeof globalWorkset?.fundingBlocked === 'boolean' ? globalWorkset.fundingBlocked : null,
+            catalogEvidence: runtime?.global?.graph?.catalogReadEvidence
+              ? {
+                  status: runtime.global.graph.catalogReadEvidence.status || 'UNKNOWN',
+                  complete: runtime.global.graph.catalogReadEvidence.complete === true,
+                  requestedPairs: countOrNull(runtime.global.graph.catalogReadEvidence.requestedPairs),
+                  requestedV3FeeQueries: countOrNull(runtime.global.graph.catalogReadEvidence.requestedV3FeeQueries),
+                  transportFailures:
+                    countOrNull(runtime.global.graph.catalogReadEvidence.v2TransportErrors) === null ||
+                    countOrNull(runtime.global.graph.catalogReadEvidence.v3TransportErrors) === null
+                      ? null
+                      : Number(runtime.global.graph.catalogReadEvidence.v2TransportErrors) +
+                        Number(runtime.global.graph.catalogReadEvidence.v3TransportErrors),
+                }
+              : null,
             universe: runtime?.global?.graph?.universe
               ? {
                   status: runtime.global.graph.universe.status || 'UNKNOWN',
