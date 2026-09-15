@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Serve the sanitized operating snapshot for `/api/v1/business` directly from Nginx after an atomic, world-readable
+  publication by the signer-free business reporter. Portfolio, capital and receipt evidence no longer wait behind the
+  4,714-candidate market scanner's Node event loop; timestamps remain in the payload, and this adds no signer, RPC,
+  transaction or write endpoint.
 - Retry the dual watcher arm's coherent chain/deployment/nonce/principal baseline only when RPC classification proves a
   transient state-readiness or transport failure. The whole baseline is reacquired at a fresh fixed block, while a
   pending nonce, missing principal, foreign runtime or any business invariant still fails immediately. Signing material
