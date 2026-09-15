@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Isolate catalog chain-head and canonical Earn identity reads on a non-batched official-public client and retry only
+  transient failures three times with bounded backoff. This closes the production-observed viem missing-batch-item
+  crash before partial-query reconciliation, while preserving the prior atomic snapshot if all retries fail. Persist
+  retry counts without error bodies or endpoints. The maintenance process still receives no signer, managed RPC, WSS,
+  transaction or economic authority.
 - Preserve recently verified Uniswap V2/V3 topology when an exact pair or fee query fails with a classified transient
   public-RPC error. A catalog generation may reuse only the matching pool existence evidence for up to six hours;
   current successful reads replace it immediately, deterministic negatives remove it, and malformed or expired

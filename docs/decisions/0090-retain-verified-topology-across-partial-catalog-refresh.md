@@ -28,6 +28,9 @@ remain in the search graph indefinitely.
 - Bound retained evidence to six hours, equal to the catalog access lifetime. Reject malformed, future-dated or stale
   pool evidence when any search process reads the snapshot.
 - Persist fresh, retained and expired counts and validate them against the actual pool arrays before using the cache.
+- Read the chain head and canonical Earn identity through a dedicated, non-batched official-public client. Retry only
+  classified transient failures three times with bounded backoff; a deterministic invariant fails immediately and an
+  exhausted retry preserves the preceding atomic catalog.
 - Keep partial read evidence partial even when topology is retained. Retention restores discovery continuity, not proof
   of current liquidity, price, funding or profit.
 - Preserve the existing execution boundary: exact current-state quote, Gas, balance, nonce, simulation, signed-raw,

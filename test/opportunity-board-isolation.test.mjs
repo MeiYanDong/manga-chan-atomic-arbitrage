@@ -784,6 +784,19 @@ test('generic and dual systemd services isolate the board and mutually exclude s
     'partial catalog topology must be merged before the atomic publication boundary',
   )
   assert.match(globalCatalogRefresh, /schemaVersion: 2/)
+  assert.match(globalCatalogRefresh, /loadEarnOnHoodOnchainCatalog\(catalogPublicClient, blockNumber\)/)
+  assert.match(globalCatalogRefresh, /maintenanceReadEvidence/)
+  const catalogPublicClientStart = globalSource.indexOf('const catalogPublicClient = createPublicClient')
+  const catalogPublicClientEnd = globalSource.indexOf('const erc20Abi', catalogPublicClientStart)
+  const catalogPublicClient = globalSource.slice(catalogPublicClientStart, catalogPublicClientEnd)
+  assert.ok(catalogPublicClientStart >= 0, 'catalog maintenance requires a dedicated public critical-read client')
+  assert.match(catalogPublicClient, /http\(PUBLIC_RPC, \{ timeout: 30_000, retryCount: 0 \}\)/)
+  assert.doesNotMatch(catalogPublicClient, /RPC_URL|batch/)
+  const catalogCommand = globalSource.slice(
+    globalSource.indexOf('async function catalogRefresh'),
+    globalSource.indexOf('function executionFunctionName'),
+  )
+  assert.match(catalogCommand, /catalogCriticalRead\('CHAIN_HEAD', \(\) => catalogPublicClient\.getBlock\(\)\)/)
   const globalGraphLoadStart = globalSource.indexOf('async function loadGlobalGraph')
   const globalGraphLoadEnd = globalSource.indexOf('async function catalogRefresh', globalGraphLoadStart)
   const globalGraphLoad = globalSource.slice(globalGraphLoadStart, globalGraphLoadEnd)

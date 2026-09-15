@@ -8,6 +8,7 @@ V2/V3 pool disappear from Global discovery.
 ## Acceptance criteria
 
 - each exact V2 pair and V3 pair-fee query is reconciled independently;
+- public chain-head and canonical Earn identity reads avoid JSON-RPC batches and retry only transient failures;
 - only transiently failed queries may reuse prior topology;
 - deterministic absence, zero liquidity and invariant failures never retain a prior pool;
 - retained evidence expires after six hours and cannot be future-dated beyond the clock-skew bound;
