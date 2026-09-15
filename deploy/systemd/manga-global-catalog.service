@@ -1,0 +1,44 @@
+[Unit]
+Description=MANGA signer-free public Global liquidity catalog maintenance
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=manga-chan-arb
+Group=manga-chan-arb
+WorkingDirectory=/opt/manga-chan-arbitrage/current
+EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
+EnvironmentFile=-/etc/manga-chan-arbitrage/catalog.env
+Environment=MANGA_CONFIG_FILE=/etc/manga-chan-arbitrage/catalog.env
+Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
+Environment=MANGA_GLOBAL_UNIVERSE_PATH=/run/manga-opportunity-board-feed/global-universe.json
+Environment=MANGA_RPC_URL=https://rpc.mainnet.chain.robinhood.com
+Environment=GLOBAL_LIVE_ARM=0
+Environment=EARN_LIVE_ARM=0
+Environment=NODE_OPTIONS=--max-old-space-size=256
+ExecStart=/usr/bin/env GLOBAL_CATALOG_REFRESH_ALLOWED=1 node scripts/global-arb.mjs catalog-refresh
+TimeoutStartSec=6min
+UMask=0077
+MemoryHigh=320M
+MemoryMax=384M
+TasksMax=48
+CPUWeight=25
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=-/run/manga-opportunity-board-feed/global-universe.json
+ReadWritePaths=/var/lib/manga-chan-arbitrage

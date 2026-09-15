@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted for implementation on 2026-09-15.
+Accepted for implementation on 2026-09-15. The five-minute inline writer-retry detail is superseded by ADR 0088;
+catalog content and evidence decisions remain active.
 
 ## Context
 
@@ -25,7 +26,7 @@ Morpho liquidity or universal-executor inventory also entered the generic error 
 - Record a validated `COMPLETE` or `PARTIAL` read-evidence object with requested V2/V3 work and transport-failure
   counts. Do not retain provider URLs or credentialized errors.
 - A read-only resident worker may consume a current partial cache but cannot refresh it or call a negative complete.
-  The sole writer retries a partial catalog after five minutes rather than retaining a transient failure for six hours.
+  Writer scheduling is defined by ADR 0088 and never runs in the search or signing process.
 - Feed catalog completeness into Global readiness. Incomplete negative evidence cannot become a complete
   `NO_EXACT_NET_OPPORTUNITY` result.
 - Type absence of Morpho liquidity and protected universal-executor inventory as `NO_ATOMIC_FUNDING`, then map it to a

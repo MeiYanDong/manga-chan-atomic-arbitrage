@@ -61,6 +61,17 @@ printf 'MANGA_RELEASE_SHA=%s\n' "${release_sha}" > "${config_dir}/release.env.tm
 chown root:"${service_group}" "${config_dir}/release.env.tmp"
 chmod 0640 "${config_dir}/release.env.tmp"
 mv "${config_dir}/release.env.tmp" "${config_dir}/release.env"
+# The catalog maintainer must not inherit authenticated RPC, WSS or signing
+# configuration. Copy only the reviewed topology seed setting into its own
+# allowlisted file so optional settlement assets stay aligned with a fresh
+# authorization without expanding the maintenance process's authority.
+catalog_env_tmp=$(mktemp "${config_dir}/catalog.env.XXXXXX")
+if [[ -f ${config_dir}/live.env ]]; then
+  awk -F= '$1 == "GLOBAL_EXTRA_SETTLEMENT_ASSETS" { print }' "${config_dir}/live.env" > "${catalog_env_tmp}"
+fi
+chown root:"${service_group}" "${catalog_env_tmp}"
+chmod 0640 "${catalog_env_tmp}"
+mv "${catalog_env_tmp}" "${config_dir}/catalog.env"
 ln -sfn "${release_dir}" "${prefix}/current.next"
 mv -Tf "${prefix}/current.next" "${prefix}/current"
 install -o root -g root -m 0644 deploy/systemd/manga-chan-watcher.service /etc/systemd/system/manga-chan-watcher.service
@@ -75,6 +86,8 @@ install -o root -g root -m 0644 deploy/systemd/manga-legacy-collect.service /etc
 install -o root -g root -m 0644 deploy/systemd/manga-chan-alert@.service /etc/systemd/system/manga-chan-alert@.service
 install -o root -g root -m 0644 deploy/systemd/manga-critical-health.service /etc/systemd/system/manga-critical-health.service
 install -o root -g root -m 0644 deploy/systemd/manga-critical-health.timer /etc/systemd/system/manga-critical-health.timer
+install -o root -g root -m 0644 deploy/systemd/manga-global-catalog.service /etc/systemd/system/manga-global-catalog.service
+install -o root -g root -m 0644 deploy/systemd/manga-global-catalog.timer /etc/systemd/system/manga-global-catalog.timer
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-board.service /etc/systemd/system/manga-opportunity-board.service
 install -o root -g root -m 0644 deploy/systemd/manga-opportunity-census.service /etc/systemd/system/manga-opportunity-census.service
 install -o root -g root -m 0644 deploy/systemd/manga-business-report.service /etc/systemd/system/manga-business-report.service

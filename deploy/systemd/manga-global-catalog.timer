@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the MANGA Global base catalog outside the live execution path
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=15min
+AccuracySec=15s
+RandomizedDelaySec=15s
+Persistent=true
+Unit=manga-global-catalog.service
+
+[Install]
+WantedBy=timers.target

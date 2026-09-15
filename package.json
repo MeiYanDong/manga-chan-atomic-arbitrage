@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.17.2",
+  "version": "0.17.3",
   "description": "Typed cross-protocol atomic-arbitrage executors and opportunity intelligence on Robinhood Chain",
   "license": "MIT",
   "private": false,
@@ -126,7 +126,7 @@
     "global:preflight": "node scripts/global-arb.mjs preflight",
     "global:execute": "node scripts/global-arb.mjs execute",
     "global:reconcile": "node scripts/global-arb.mjs reconcile",
-    "global:catalog:refresh": "node scripts/global-arb.mjs catalog-refresh",
+    "global:catalog:refresh": "GLOBAL_CATALOG_REFRESH_ALLOWED=1 node scripts/global-arb.mjs catalog-refresh",
     "global:fork-test": "node scripts/universal-mainnet-fork-test.mjs"
   },
   "dependencies": {

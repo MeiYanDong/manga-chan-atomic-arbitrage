@@ -6,7 +6,21 @@ import { redactSensitiveText } from './policy.mjs'
 export const GLOBAL_SEARCH_WORKER_POLICY = 'RESIDENT_SIGNER_FREE_EVENT_SEARCH_V1'
 export const GLOBAL_SEARCH_PROTOCOL_VERSION = 1
 export const GLOBAL_CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1_000
-export const GLOBAL_PARTIAL_CATALOG_RETRY_MS = 5 * 60 * 1_000
+export const GLOBAL_CATALOG_REFRESH_INTERVAL_MS = 15 * 60 * 1_000
+export const GLOBAL_CATALOG_MAINTENANCE_POLICY = Object.freeze({
+  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V1',
+  refreshIntervalMs: GLOBAL_CATALOG_REFRESH_INTERVAL_MS,
+  maximumAgeMs: GLOBAL_CATALOG_MAX_AGE_MS,
+  writer: 'DEDICATED_SYSTEMD_ONESHOT',
+  readPath: 'ATOMIC_CACHE_ONLY',
+  rpc: 'OFFICIAL_PUBLIC_ONLY',
+})
+
+export function assertGlobalCatalogMaintenanceBoundary(environment = process.env) {
+  if (environment.GLOBAL_CATALOG_REFRESH_ALLOWED !== '1') {
+    throw new Error('global catalog refresh requires the explicit maintenance command boundary')
+  }
+}
 
 const MAXIMUM_LINE_BYTES = 1_000_000
 const RESTART_DELAY_MS = 1_000
@@ -38,7 +52,7 @@ function validCatalogReadEvidence(evidence) {
   return evidence?.complete === complete && evidence?.status === (complete ? 'COMPLETE' : 'PARTIAL')
 }
 
-export function classifyGlobalCatalogAccess(catalog, { readOnly = false, now = Date.now() } = {}) {
+export function classifyGlobalCatalogAccess(catalog, { now = Date.now() } = {}) {
   const generatedAt = Date.parse(catalog?.generatedAt)
   const age = now - generatedAt
   const current =
@@ -52,11 +66,7 @@ export function classifyGlobalCatalogAccess(catalog, { readOnly = false, now = D
     Number.isFinite(generatedAt) &&
     age >= -MAXIMUM_CATALOG_CLOCK_SKEW_MS &&
     age <= GLOBAL_CATALOG_MAX_AGE_MS
-  if (current) {
-    if (catalog.uniswap.readEvidence.complete || readOnly || age <= GLOBAL_PARTIAL_CATALOG_RETRY_MS) return 'CACHE'
-    return 'REFRESH'
-  }
-  return readOnly ? 'UNAVAILABLE' : 'REFRESH'
+  return current ? 'CACHE' : 'UNAVAILABLE'
 }
 
 function sanitizeSignal(signal) {
