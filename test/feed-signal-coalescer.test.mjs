@@ -100,3 +100,10 @@ test('coalescing fails closed on an unbounded classification reason', () => {
     /classification reason exceeds its character bound/,
   )
 })
+
+test('coalescing retains every resident search result reference without embedding results', () => {
+  const merged = mergePendingMarketSignals({ searchResultId: 'global-search-1' }, { searchResultId: 'global-search-2' })
+  assert.deepEqual(merged.searchResultIds, ['global-search-1', 'global-search-2'])
+  assert.equal(merged.searchResultId, 'global-search-2')
+  assert.equal('searchResult' in merged, false)
+})

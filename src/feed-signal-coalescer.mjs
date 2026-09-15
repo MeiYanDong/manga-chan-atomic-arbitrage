@@ -83,6 +83,9 @@ export function mergePendingMarketSignals(current, next, options = {}) {
     throw new Error('coalesced market signal exceeds its classification-reason bound')
   }
   const eventPools = unionValues(left.eventPools, [left.eventPool], right.eventPools, [right.eventPool])
+  const searchResultIds = unionValues(left.searchResultIds, [left.searchResultId], right.searchResultIds, [
+    right.searchResultId,
+  ])
   const sourceReceivedAt = earliestTime(
     left.sourceReceivedAt,
     left.receivedAt,
@@ -125,6 +128,8 @@ export function mergePendingMarketSignals(current, next, options = {}) {
     routeAddresses: unionValues(left.routeAddresses, right.routeAddresses),
     eventPools,
     eventPool: eventPools[0] || null,
+    searchResultIds,
+    searchResultId: searchResultIds.at(-1) || null,
     classificationReasons,
     classificationReason:
       classificationReasons.length <= 1 ? classificationReasons[0] || null : classificationReasons.join('+'),
@@ -132,6 +137,7 @@ export function mergePendingMarketSignals(current, next, options = {}) {
     overlappingFrame: Boolean(left.overlappingFrame || right.overlappingFrame),
     outOfOrderFrame: Boolean(left.outOfOrderFrame || right.outOfOrderFrame),
     sequenceGap: Boolean(left.sequenceGap || right.sequenceGap),
+    requiresLegacyGlobalSearch: Boolean(left.requiresLegacyGlobalSearch || right.requiresLegacyGlobalSearch),
     coalescedWakeCount: Number(options.coalescedWakeCount ?? right.coalescedWakeCount ?? 0),
   }
 }

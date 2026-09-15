@@ -347,6 +347,128 @@ export function enumerateAtomicSwapCycles(graph, settlementToken, options = {}) 
   return cycles.sort((left, right) => left.id.localeCompare(right.id))
 }
 
+function normalizedWakeAddresses(values) {
+  const result = new Set()
+  for (const value of values || []) {
+    try {
+      result.add(key(address(value, 'wake dependency')))
+    } catch {
+      throw new Error('wake dependency has an invalid address')
+    }
+  }
+  if (result.size === 0) throw new Error('affected cycle selection requires at least one wake dependency')
+  return result
+}
+
+function matchedCycleDependencies(path, wakeAddresses) {
+  const matches = new Set()
+  for (const edge of path) {
+    for (const value of [edge.pool, edge.hooks, edge.tokenIn, edge.tokenOut]) {
+      if (value && wakeAddresses.has(key(value))) matches.add(key(value))
+    }
+  }
+  return matches
+}
+
+function materializeCycle(settlement, path) {
+  return {
+    id: `GLOBAL_SWAP_CYCLE_${keccak256(toHex(stableStringify(path.map((item) => item.id)))).slice(2, 18)}`,
+    settlementToken: settlement,
+    edges: [...path],
+  }
+}
+
+function affectedCycleOrder(left, right) {
+  return (
+    right.matchedDependencyCount - left.matchedDependencyCount ||
+    left.cycle.edges.length - right.cycle.edges.length ||
+    left.opportunityKind.localeCompare(right.opportunityKind) ||
+    left.cycle.id.localeCompare(right.cycle.id)
+  )
+}
+
+/**
+ * Traverse the same bounded cycle universe as enumerateAtomicSwapCycles while
+ * retaining only the best routes touched by this event. The counters still
+ * cover the complete bounded traversal, so callers can distinguish a small
+ * selected workset from the number of routes that were actually considered.
+ *
+ * This is deliberately topology-only. It performs no quote, simulation,
+ * signing or broadcast and therefore cannot grant execution authority.
+ */
+export function selectAffectedAtomicSwapCycles(graph, settlementToken, options = {}) {
+  const settlement = address(settlementToken, 'settlement token')
+  const wakeAddresses = normalizedWakeAddresses(options.wakeAddresses)
+  const maximumHops = finiteInteger(
+    options.maximumHops ?? GLOBAL_GRAPH_POLICY.maximumCycleHops,
+    'maximum cycle hops',
+    2,
+  )
+  const maximumCycles = finiteInteger(options.maximumCycles ?? GLOBAL_GRAPH_POLICY.maximumCycles, 'maximum cycles', 1)
+  const maximumSelected = finiteInteger(options.maximumSelected ?? 8, 'maximum selected cycles', 1)
+  if (maximumHops > GLOBAL_GRAPH_POLICY.maximumCycleHops) throw new Error('cycle hop bound exceeded')
+  if (maximumSelected > 256) throw new Error('selected cycle bound exceeded')
+
+  let totalCycles = 0
+  let touchedCycles = 0
+  let visitedEdges = 0
+  const selected = []
+  const walk = (current, path, usedPools, usedTokens) => {
+    if (path.length >= maximumHops) return
+    for (const edge of graph.adjacency.get(key(current)) || []) {
+      visitedEdges += 1
+      const edgePoolIdentity = `${edge.venue}:${edge.poolId || key(edge.pool)}`
+      if (!edge.executable || usedPools.has(edgePoolIdentity)) continue
+      const nextPath = [...path, edge]
+      if (key(edge.tokenOut) === key(settlement)) {
+        if (nextPath.length >= 2) {
+          totalCycles += 1
+          if (totalCycles > maximumCycles) throw new Error('global cycle enumeration bound exceeded')
+          const matchedDependencies = matchedCycleDependencies(nextPath, wakeAddresses)
+          if (matchedDependencies.size > 0) {
+            touchedCycles += 1
+            const cycle = materializeCycle(settlement, nextPath)
+            const opportunityKind = `${new Set(nextPath.map((item) => item.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${nextPath.length}_HOP_ATOMIC_SWAP_CYCLE`
+            selected.push({
+              cycle,
+              opportunityKind,
+              matchedDependencyCount: matchedDependencies.size,
+              matchedDependencies: [...matchedDependencies].sort(),
+            })
+            selected.sort(affectedCycleOrder)
+            if (selected.length > maximumSelected) selected.pop()
+          }
+        }
+        continue
+      }
+      if (usedTokens.has(key(edge.tokenOut))) continue
+      walk(
+        edge.tokenOut,
+        nextPath,
+        new Set([...usedPools, edgePoolIdentity]),
+        new Set([...usedTokens, key(edge.tokenOut)]),
+      )
+    }
+  }
+  walk(settlement, [], new Set(), new Set([key(settlement)]))
+  return {
+    cycles: selected.map((item) => item.cycle),
+    selected: selected.map((item) => ({
+      cycle: item.cycle,
+      opportunityKind: item.opportunityKind,
+      matchedDependencyCount: item.matchedDependencyCount,
+      matchedDependencies: item.matchedDependencies,
+    })),
+    totalCycles,
+    touchedCycles,
+    visitedEdges,
+    maximumHops,
+    maximumCycles,
+    maximumSelected,
+    coverage: 'COMPLETE_BOUNDED_TOPOLOGY_TRAVERSAL',
+  }
+}
+
 // Retain the old export for downstream readers while removing its former
 // cross-venue-only semantics. New code should use enumerateAtomicSwapCycles.
 export const enumerateCrossVenueCycles = enumerateAtomicSwapCycles

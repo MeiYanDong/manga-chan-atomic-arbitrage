@@ -8,6 +8,7 @@ import {
   enumerateAtomicSwapCycles,
   enumerateCrossVenueCycles,
   fundingCapability,
+  selectAffectedAtomicSwapCycles,
   selectBoundedManagedCandidates,
 } from '../src/global-liquidity-graph.mjs'
 import { loadRobinhoodHubUniswapCatalog } from '../src/robinhood-uniswap-catalog.mjs'
@@ -103,6 +104,67 @@ test('enumerates a same-venue multi-pool cycle without named-route assumptions',
   )
   assert.ok(triangle)
   assert.equal(new Set(triangle.edges.map((edge) => edge.pool.toLowerCase())).size, 3)
+})
+
+test('dependency-aware event traversal preserves the exact bounded cycle universe and ranking', () => {
+  const graph = fixture()
+  const complete = enumerateAtomicSwapCycles(graph, USDG, { maximumHops: 4, maximumCycles: 128 })
+  const touched = complete.filter((cycle) =>
+    cycle.edges.some((edge) =>
+      [edge.pool, edge.hooks, edge.tokenIn, edge.tokenOut]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase() === STOCK.toLowerCase()),
+    ),
+  )
+  const expected = touched
+    .map((cycle) => ({
+      cycle,
+      kind: `${new Set(cycle.edges.map((edge) => edge.venue)).size === 1 ? 'SAME_VENUE' : 'CROSS_VENUE'}_${cycle.edges.length}_HOP_ATOMIC_SWAP_CYCLE`,
+    }))
+    .sort(
+      (left, right) =>
+        left.cycle.edges.length - right.cycle.edges.length ||
+        left.kind.localeCompare(right.kind) ||
+        left.cycle.id.localeCompare(right.cycle.id),
+    )
+    .slice(0, 3)
+
+  const selected = selectAffectedAtomicSwapCycles(graph, USDG, {
+    wakeAddresses: [STOCK],
+    maximumHops: 4,
+    maximumCycles: 128,
+    maximumSelected: 3,
+  })
+  assert.equal(selected.totalCycles, complete.length)
+  assert.equal(selected.touchedCycles, touched.length)
+  assert.deepEqual(
+    selected.selected.map((item) => [item.cycle.id, item.opportunityKind]),
+    expected.map((item) => [item.cycle.id, item.kind]),
+  )
+  assert.ok(selected.selected.every((item) => item.matchedDependencies.includes(STOCK)))
+  assert.equal(selected.coverage, 'COMPLETE_BOUNDED_TOPOLOGY_TRAVERSAL')
+})
+
+test('dependency-aware event traversal keeps only its bounded best materialized routes', () => {
+  const graph = fixture()
+  const selected = selectAffectedAtomicSwapCycles(graph, USDG, {
+    wakeAddresses: [STOCK, V4],
+    maximumHops: 4,
+    maximumCycles: 128,
+    maximumSelected: 1,
+  })
+  assert.equal(selected.cycles.length, 1)
+  assert.ok(selected.touchedCycles >= selected.cycles.length)
+  assert.equal(selected.selected[0].matchedDependencyCount, 2)
+  assert.throws(
+    () =>
+      selectAffectedAtomicSwapCycles(graph, USDG, {
+        wakeAddresses: [],
+        maximumHops: 4,
+        maximumCycles: 128,
+      }),
+    /requires at least one wake dependency/,
+  )
 })
 
 test('historical PLTR competitor fixture is reachable after removing every token label', () => {

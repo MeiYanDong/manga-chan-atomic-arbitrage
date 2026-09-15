@@ -97,6 +97,7 @@ import { GENERIC_USDG, GENERIC_WETH, assertDualBoardIdentity } from '../src/gene
 import { assertPrivateFile, buildMutationPlan, persistSignedRaw } from '../src/journal.mjs'
 import { readSafetyAuditRecords } from '../src/incremental-jsonl-reader.mjs'
 import { ProtectedStrategyScheduler } from '../src/protected-strategy-scheduler.mjs'
+import { classifyGlobalSearchHandoff, ResidentGlobalSearchClient } from '../src/resident-global-search.mjs'
 import { ManagedEarnEventSource } from '../src/managed-earn-event-source.mjs'
 import { SequencerFeedWakeClient } from '../src/sequencer-feed.mjs'
 import { loadUniversalContractArtifact } from '../src/universal-contract-artifact.mjs'
@@ -2521,6 +2522,7 @@ async function executeGlobalWatcherWake({
   feed,
   scheduledAt,
   claimedAt,
+  preparedSearchResult = null,
 }) {
   appendAudit('global_watch_wake', {
     authorizationId: arm.authorizationId,
@@ -2550,11 +2552,24 @@ async function executeGlobalWatcherWake({
     },
   }
   writeProtectedJson(DUAL_WATCH_STATE_PATH, nextState)
+  const handoff = classifyGlobalSearchHandoff(preparedSearchResult)
   appendAudit('global_watch_exact_preflight_started', {
     authorizationId: arm.authorizationId,
     wakeReason,
+    preflightSource:
+      handoff.mode === 'REUSE_READ_ONLY_RESULT'
+        ? 'RESIDENT_SIGNER_FREE_WORKER_REUSED'
+        : handoff.mode === 'LIVE_REVALIDATION'
+          ? 'RESIDENT_POSITIVE_THEN_BOUNDED_SIGNER_CHILD'
+          : preparedSearchResult
+            ? 'RESIDENT_INCOMPLETE_THEN_BOUNDED_SIGNER_CHILD'
+            : 'BOUNDED_SIGNER_CHILD',
   })
-  const result = await runGlobalShared(arm, signal, wakeReason, { scheduledAt, claimedAt })
+  const preparedSnapshot = handoff.snapshot
+  const result =
+    handoff.mode === 'REUSE_READ_ONLY_RESULT'
+      ? { status: preparedSnapshot.status, ...preparedSnapshot }
+      : await runGlobalShared(arm, signal, wakeReason, { scheduledAt, claimedAt })
   const feedPolicy = applyGlobalFeedWatchPolicy(feed)
   const nextDeployments = refreshDeploymentLedgers(deployments)
   const usage = assertDualAuthorization(arm, nextDeployments)
@@ -2738,6 +2753,7 @@ async function watchDual() {
   let startupRpcRetries = 0
   let sequencerFeed = null
   let managedEarnEventSource = null
+  let globalSearchWorker = null
   const persistStopRequested = () => {
     if (!watchState) return
     watchState = { ...watchState, status: 'STOPPED_BY_SIGNAL', updatedAt: new Date().toISOString() }
@@ -2903,7 +2919,7 @@ async function watchDual() {
       },
       global: {
         status: 'STARTING',
-        triggerMode: 'FILTERED_ORDERED_FEED_OR_PERIODIC_RECOVERY',
+        triggerMode: 'RESIDENT_SIGNER_FREE_EVENT_SEARCH_OR_PERIODIC_RECOVERY_THEN_SINGLE_SIGNER_REVALIDATION',
         executor: arm.global.executor,
         fundingPolicy: arm.global.fundingPolicy,
         settlementPolicy: arm.global.settlementPolicy,
@@ -2915,6 +2931,7 @@ async function watchDual() {
         lastTransaction: null,
         rpc: null,
         feed: null,
+        searchWorker: null,
       },
     }
     writeProtectedJson(DUAL_WATCH_STATE_PATH, watchState)
@@ -2941,6 +2958,7 @@ async function watchDual() {
     let earnEventCursor = startup.wallet.blockNumber
     let lastEarnEventPollAt = 0
     let lastManagedEarnStartAttemptAt = 0
+    const readyGlobalSearchResults = new Map()
     const enqueueEarnMarketWake = (wakeReason, signal) => {
       strategyScheduler.enqueueEvent('EARN', {
         reason: wakeReason,
@@ -2948,12 +2966,62 @@ async function watchDual() {
         priority: wakeReason === 'FILTERED_SEQUENCER_FEED' ? 100 : wakeReason === 'MANAGED_WSS_EARN_SWAP' ? 90 : 50,
       })
     }
-    const enqueueGlobalFeedWake = (signal) => {
+    const enqueueLegacyGlobalFeedWake = (signal, reason = 'FILTERED_SEQUENCER_FEED') => {
       strategyScheduler.enqueueEvent('GLOBAL', {
-        reason: 'FILTERED_SEQUENCER_FEED',
-        signal,
+        reason,
+        signal: { ...signal, requiresLegacyGlobalSearch: true },
         priority: 75,
       })
+    }
+    globalSearchWorker = new ResidentGlobalSearchClient({
+      scriptPath: path.join(ROOT, 'scripts', 'global-search-worker.mjs'),
+      cwd: ROOT,
+      environment: process.env,
+      timeoutMs: RUNTIME_CONFIG.globalWatchChildTimeoutMs,
+      onResult: ({ requestId, signal, result, durationMs, superseded }) => {
+        const snapshot = result?.snapshot || null
+        const positive = snapshot?.status === 'EXACT_NET_POSITIVE'
+        appendAudit('global_search_worker_result', {
+          authorizationId: arm.authorizationId,
+          requestId,
+          status: snapshot?.status || result?.status || 'UNKNOWN',
+          decisionClassification: snapshot?.decisionClassification || null,
+          evidenceCoverage: snapshot?.evidenceCoverage || null,
+          durationMs,
+          superseded,
+          selected: positive,
+          lifecycle: snapshot?.lifecycle || null,
+          workset: snapshot?.workset || null,
+        })
+        if (superseded && !positive) return
+        readyGlobalSearchResults.set(requestId, result)
+        while (readyGlobalSearchResults.size > 16) {
+          readyGlobalSearchResults.delete(readyGlobalSearchResults.keys().next().value)
+        }
+        strategyScheduler.enqueueEvent('GLOBAL', {
+          reason: positive ? 'RESIDENT_GLOBAL_SEARCH_POSITIVE' : 'RESIDENT_GLOBAL_SEARCH_RESULT',
+          signal: { ...signal, searchResultId: requestId, searchResultIds: [requestId] },
+          priority: positive ? 85 : 75,
+        })
+      },
+      onFailure: ({ signal, reason }) => {
+        appendAudit('global_search_worker_degraded', {
+          authorizationId: arm.authorizationId,
+          reason,
+          fallback: 'BOUNDED_GLOBAL_CHILD',
+        })
+        enqueueLegacyGlobalFeedWake(signal, 'RESIDENT_GLOBAL_SEARCH_FALLBACK')
+      },
+    })
+    if (!globalSearchWorker.start()) {
+      appendAudit('global_search_worker_degraded', {
+        authorizationId: arm.authorizationId,
+        reason: globalSearchWorker.snapshot().lastError,
+        fallback: 'BOUNDED_GLOBAL_CHILD',
+      })
+    }
+    const enqueueGlobalFeedWake = (signal) => {
+      if (!globalSearchWorker.enqueue(signal)) enqueueLegacyGlobalFeedWake(signal)
     }
     let activeGlobalFeedPolicy = globalFeedWatchPolicy()
     managedEarnEventSource = new ManagedEarnEventSource({
@@ -3039,6 +3107,10 @@ async function watchDual() {
         const currentArm = readJson(DUAL_WATCH_ARM_PATH)
         deployments = refreshDeploymentLedgers(deployments)
         const currentUsage = assertDualAuthorization(currentArm, deployments)
+        watchState = {
+          ...watchState,
+          global: { ...watchState.global, searchWorker: globalSearchWorker?.snapshot() || null },
+        }
         const unresolvedNow = latestUnresolved()
         if (unresolvedNow) {
           const now = Date.now()
@@ -3286,6 +3358,16 @@ async function watchDual() {
             deployments = earnRun.deployments
           } else {
             phase = 'GLOBAL'
+            const searchResultIds = scheduledWork.signal?.searchResultIds || []
+            const preparedResults = searchResultIds
+              .map((requestId) => ({ requestId, result: readyGlobalSearchResults.get(requestId) }))
+              .filter((item) => item.result)
+            for (const requestId of searchResultIds) readyGlobalSearchResults.delete(requestId)
+            const preparedSearchResult = scheduledWork.signal?.requiresLegacyGlobalSearch
+              ? null
+              : preparedResults.find((item) => item.result?.snapshot?.status === 'EXACT_NET_POSITIVE')?.result ||
+                preparedResults.at(-1)?.result ||
+                null
             const globalRun = await executeGlobalWatcherWake({
               arm: currentArm,
               watchState,
@@ -3296,6 +3378,7 @@ async function watchDual() {
               feed: sequencerFeed,
               scheduledAt: scheduledWork.scheduledAt,
               claimedAt: scheduledWork.claimedAt,
+              preparedSearchResult,
             })
             watchState = globalRun.watchState
             deployments = globalRun.deployments
@@ -3645,6 +3728,7 @@ async function watchDual() {
     })
     return watchState
   } finally {
+    globalSearchWorker?.stop()
     managedEarnEventSource?.stop()
     sequencerFeed?.stop()
     process.removeListener('SIGTERM', requestStop)
