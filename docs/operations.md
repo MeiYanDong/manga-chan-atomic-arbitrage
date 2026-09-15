@@ -344,9 +344,13 @@ installer moves `current`, use an explicit board restart, verify both the proces
 `MANGA_RELEASE_SHA`, wait for `/healthz` to become healthy, refresh the sanitized snapshot, and only then restore the
 timer:
 
-`install-release.sh` only accepts an immutable 40-character commit identity and rebuilds type, UI, contract artifacts
-and the secret scan. The full unit and deterministic contract suites belong to the required GitHub `quality` gate;
-record its successful run URL before production. Do not deploy a commit whose CI receipt is missing, pending or failed.
+`bootstrap-release.sh` first verifies the downloaded archive checksum, extracts the candidate release's own installer and
+then runs that installer. Always use it for a full release promotion: invoking `install-release.sh` through the old
+`/opt/manga-chan-arbitrage/current` symlink cannot install a systemd unit that exists only in the candidate release.
+The candidate `install-release.sh` accepts an immutable 40-character commit identity and rebuilds type, UI, contract
+artifacts and the secret scan. The full unit and deterministic contract suites belong to the required GitHub `quality`
+gate; record its successful run URL before production. Do not deploy a commit whose CI receipt is missing, pending or
+failed.
 Repeating those memory-heavy suites on the 2 GB production host can starve Nginx and the board without adding a new
 merge gate.
 
@@ -354,7 +358,7 @@ merge gate.
 sudo systemctl stop manga-business-report.timer
 sudo systemctl stop manga-business-report.path
 sudo systemctl stop manga-opportunity-board.service
-sudo ./deploy/install-release.sh /path/to/release.tar.gz <40-char-commit-sha>
+sudo ./deploy/bootstrap-release.sh /path/to/release.tar.gz <40-char-commit-sha> <64-char-archive-sha256>
 sudo systemctl restart manga-opportunity-board.service
 # Verify /proc/<board-node-pid>/cwd and MANGA_RELEASE_SHA against the intended release.
 curl --fail --silent --show-error http://127.0.0.1:8788/healthz

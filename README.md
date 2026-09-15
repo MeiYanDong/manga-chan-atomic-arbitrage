@@ -46,6 +46,7 @@ authorization v13. See
 [ADR 0064](docs/decisions/0064-sequencer-wake-relevance-and-per-wake-rpc-budget.md) and
 [ADR 0070](docs/decisions/0070-same-venue-cycles-and-dynamic-settlement-admission.md) plus
 [ADR 0085](docs/decisions/0085-versioned-global-universe-projection.md) and
+[ADR 0089](docs/decisions/0089-streaming-global-recovery-workset.md) plus
 [the global live stories](docs/stories/global-cross-protocol-live.md). The bounded audit reader and managed Earn event
 recovery are defined by [ADR 0080](docs/decisions/0080-bounded-audit-runtime-and-managed-earn-events.md).
 

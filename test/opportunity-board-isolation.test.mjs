@@ -259,6 +259,7 @@ test('competitor census is a public-RPC receipt reader without a signer lane', (
 
 test('release installer rebuilds artifacts without repeating CI contract suites on production', () => {
   const installer = fs.readFileSync(path.join(root, 'deploy', 'install-release.sh'), 'utf8')
+  const bootstrap = fs.readFileSync(path.join(root, 'deploy', 'bootstrap-release.sh'), 'utf8')
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 
   assert.match(installer, /^npm ci --no-audit --no-fund$/m)
@@ -270,6 +271,11 @@ test('release installer rebuilds artifacts without repeating CI contract suites 
   assert.doesNotMatch(packageJson.scripts['release:build'], /npm test|test:contract/)
   assert.match(packageJson.scripts.check, /npm test/)
   assert.match(packageJson.scripts.check, /test:contract/)
+  assert.match(bootstrap, /sha256sum "\$\{archive\}"/)
+  assert.match(bootstrap, /candidate_installer=\$\{bootstrap_dir\}\/deploy\/install-release\.sh/)
+  assert.match(bootstrap, /bash -n "\$\{candidate_installer\}"/)
+  assert.match(bootstrap, /bash "\$\{candidate_installer\}" "\$\{archive\}" "\$\{release_sha\}"/)
+  assert.doesNotMatch(bootstrap, /\/opt\/manga-chan-arbitrage\/current/)
 })
 
 test('business reporter can read ledgers but cannot sign or write trading state', () => {
