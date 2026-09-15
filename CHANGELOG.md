@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Let the protocol-agnostic Global graph wake from the existing canonical Earn Vault WSS stream and public Earn-log
+  recovery backstop, in addition to Sequencer Feed. Each reviewed Earn swap contributes only its exact changed-pool
+  dependencies; source provenance survives bounded coalescing and appears in lifecycle evidence. This creates no new
+  subscription, paid-RPC debit, signer or transaction authority: the resident worker remains public-RPC-only and every
+  positive hint still returns through the sole signer's latest-state, quote, Gas, balance, nonce, simulation,
+  authorization and receipt gates. Uniswap-only events still rely on Sequencer Feed or periodic Global recovery.
 - Begin Global event search immediately in a resident, credential-stripped read-only worker instead of waiting behind
   the serial Earn/signer scheduler. Busy events retain the full pool/asset/sequence union; worker failure falls back to
   the prior bounded child, complete-evidence negative results may avoid duplicate reads, and every positive remains

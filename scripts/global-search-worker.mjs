@@ -18,6 +18,8 @@ function applySignal(signal) {
   assign('GLOBAL_WAKE_LAST_SEQUENCE_NUMBER', signal.lastSequenceNumber)
   assign('GLOBAL_WAKE_ROUTE_ADDRESSES', (signal.routeAddresses || []).join(','))
   assign('GLOBAL_WAKE_CLASSIFICATION', signal.classificationReason)
+  assign('GLOBAL_WAKE_SOURCE', signal.wakeSource)
+  assign('GLOBAL_WAKE_SOURCES', (signal.wakeSources || []).join(','))
   assign('GLOBAL_WAKE_REASON', 'RESIDENT_SIGNER_FREE_EVENT_SEARCH')
   assign('GLOBAL_WAKE_ENQUEUED_AT', signal.sourceReceivedAt || signal.receivedAt)
   assign('GLOBAL_WAKE_CLAIMED_AT', new Date().toISOString())

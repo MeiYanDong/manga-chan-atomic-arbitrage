@@ -99,9 +99,15 @@ test('resident worker coalesces a busy event tail and returns bounded result ref
     onFailure: (failure) => failures.push(failure),
   })
   assert.equal(client.start(), true)
-  assert.equal(client.enqueue({ routeAddresses: [POOL_A], firstSequenceNumber: 1 }), true)
-  assert.equal(client.enqueue({ routeAddresses: [POOL_B], firstSequenceNumber: 2 }), true)
-  assert.equal(client.enqueue({ routeAddresses: [POOL_C], firstSequenceNumber: 3 }), true)
+  assert.equal(client.enqueue({ routeAddresses: [POOL_A], firstSequenceNumber: 1, wakeSource: 'SEQUENCER_FEED' }), true)
+  assert.equal(
+    client.enqueue({ routeAddresses: [POOL_B], firstSequenceNumber: 2, wakeSource: 'MANAGED_WSS_EARN_SWAP' }),
+    true,
+  )
+  assert.equal(
+    client.enqueue({ routeAddresses: [POOL_C], firstSequenceNumber: 3, wakeSource: 'PUBLIC_EARN_LOG_BACKSTOP' }),
+    true,
+  )
   assert.equal(fake.requests.length, 1)
 
   fake.children[0].stdout.write(
@@ -116,6 +122,8 @@ test('resident worker coalesces a busy event tail and returns bounded result ref
   assert.deepEqual(fake.requests[1].signal.routeAddresses, [POOL_B, POOL_C])
   assert.equal(fake.requests[1].signal.firstSequenceNumber, 2)
   assert.equal(fake.requests[1].signal.lastSequenceNumber, 3)
+  assert.deepEqual(fake.requests[1].signal.wakeSources, ['MANAGED_WSS_EARN_SWAP', 'PUBLIC_EARN_LOG_BACKSTOP'])
+  assert.equal(fake.requests[1].signal.wakeSource, 'MULTI_SOURCE_MARKET_EVENT')
 
   fake.children[0].stdout.write(
     `${encodeGlobalSearchResult(fake.requests[1].requestId, {

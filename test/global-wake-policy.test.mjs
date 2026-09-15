@@ -6,6 +6,8 @@ import {
   buildGlobalFeedWatchPolicy,
   classifyEarnFeedMatches,
   classifyGlobalFeedMatches,
+  globalWakeLifecycleIdentity,
+  globalWakeSourceList,
 } from '../src/global-wake-policy.mjs'
 
 const PROTOCOL = '0x0000000000000000000000000000000000000001'
@@ -18,6 +20,62 @@ const HOOK = '0x0000000000000000000000000000000000000006'
 const WETH = '0x0000000000000000000000000000000000000011'
 const ASSET = '0x0000000000000000000000000000000000000012'
 const OTHER_ASSET = '0x0000000000000000000000000000000000000013'
+
+test('distinguishes sequencer, reviewed market-event and periodic lifecycle evidence', () => {
+  const sequencer = globalWakeLifecycleIdentity({
+    feedSequenceNumber: '9007199254740993',
+    feedLastSequenceNumber: '9007199254740994',
+    routeDependencyCount: 1,
+    configuredWakeSource: 'MANAGED_WSS_EARN_SWAP',
+    claimedAt: '2026-09-15T00:00:00.000Z',
+  })
+  assert.deepEqual(sequencer, {
+    source: 'SEQUENCER_FEED',
+    eventId: 'ROBINHOOD_SEQUENCER:9007199254740993:9007199254740994',
+    firstSequenceNumber: '9007199254740993',
+    lastSequenceNumber: '9007199254740994',
+  })
+
+  const market = globalWakeLifecycleIdentity({
+    routeDependencyCount: 2,
+    configuredWakeSource: 'MANAGED_WSS_EARN_SWAP',
+    claimedAt: '2026-09-15T00:00:00.000Z',
+  })
+  assert.equal(market.source, 'MANAGED_WSS_EARN_SWAP')
+  assert.equal(market.eventId, 'ROBINHOOD_EVENT:MANAGED_WSS_EARN_SWAP:2026-09-15T00:00:00.000Z')
+
+  const fallbackSource = globalWakeLifecycleIdentity({
+    routeDependencyCount: 1,
+    configuredWakeSource: 'not-safe',
+    preflightStartedAt: '2026-09-15T00:00:01.000Z',
+  })
+  assert.equal(fallbackSource.source, 'MARKET_EVENT')
+
+  const recovery = globalWakeLifecycleIdentity({
+    routeDependencyCount: 0,
+    configuredWakeSource: 'MANAGED_WSS_EARN_SWAP',
+    preflightStartedAt: '2026-09-15T00:00:02.000Z',
+  })
+  assert.equal(recovery.source, 'PERIODIC_RECOVERY')
+  assert.equal(recovery.eventId, 'ROBINHOOD_RECOVERY:2026-09-15T00:00:02.000Z')
+})
+
+test('retains a bounded reviewed source set behind a coalesced lifecycle label', () => {
+  assert.deepEqual(
+    globalWakeSourceList('SEQUENCER_FEED,MANAGED_WSS_EARN_SWAP,SEQUENCER_FEED', 'MULTI_SOURCE_MARKET_EVENT'),
+    ['MANAGED_WSS_EARN_SWAP', 'SEQUENCER_FEED'],
+  )
+  assert.deepEqual(globalWakeSourceList('', 'PERIODIC_RECOVERY'), ['PERIODIC_RECOVERY'])
+  assert.throws(() => globalWakeSourceList('not-safe', 'MARKET_EVENT'), /global wake source list is invalid/)
+  assert.throws(
+    () =>
+      globalWakeSourceList(
+        Array.from({ length: 9 }, (_, index) => `SOURCE_${index}`),
+        'MARKET_EVENT',
+      ),
+    /exceeds its bound/,
+  )
+})
 
 function policy() {
   return buildGlobalFeedWatchPolicy(
