@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Recover only the logical call omitted from a malformed official-public JSON-RPC batch by retrying that call directly
+  against the same public endpoint. The catalog process still has no managed RPC or signer, and HTTP denial,
+  throttling, deterministic RPC errors and EVM reverts do not fan out. Extend bounded topology continuity to Earn:
+  schema v3 retains an exact previously verified pool for at most six hours only when that pool's current fixed-block
+  state read fails as `NETWORK`, `THROTTLED` or `STATE_NOT_READY`. Fresh state wins, deterministic rejection removes
+  the old pool, retention counts are validated on every read, and every quote, Gas estimate, balance, nonce,
+  simulation, submission and receipt remains current-state. This addresses production v0.17.6 completing with only 16
+  Earn pools and zero V2/V3 pools after omitted public-batch responses; it restores discovery evidence, not profit or
+  transaction authority.
 - Isolate catalog chain-head and canonical Earn identity reads on a non-batched official-public client and retry only
   transient failures three times with bounded backoff. This closes the production-observed viem missing-batch-item
   crash before partial-query reconciliation, while preserving the prior atomic snapshot if all retries fail. Persist

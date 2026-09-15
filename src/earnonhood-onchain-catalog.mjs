@@ -8,6 +8,7 @@ import {
   EARN_VAULT,
   EARN_WETH,
 } from './earnonhood-routes.mjs'
+import { RpcErrorClass, classifyRpcError } from './policy.mjs'
 
 const EXPECTED_STATIC_SWAP_FEE = 3_000_000_000_000_000n
 const NORMALIZED_WEIGHT_ONE = 1_000_000_000_000_000_000n
@@ -15,6 +16,10 @@ const MULTICALL3 = getAddress('0xcA11bde05977b3631167028862bE2a173976CA11')
 const MULTICALL3_RUNTIME_CODE_HASH = '0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891'
 const MULTICALL_SUBCALL_LIMIT = 12
 const PERMIT2 = getAddress('0x000000000022D473030F116dDEE9F6B43aC78BA3')
+export const EARN_PARTIAL_CATALOG_RETENTION_POLICY = Object.freeze({
+  version: 'FAILED_TRANSIENT_POOL_READ_LAST_VERIFIED_V1',
+  maximumAgeMs: 6 * 60 * 60 * 1_000,
+})
 
 const factoryAbi = [
   {
@@ -169,8 +174,17 @@ export function buildEarnOnHoodCatalogFromOnchain({ records, blockNumber, factor
   const sourcePools = []
   const rejected = []
   for (const record of records) {
+    if (record?.error) {
+      rejected.push({
+        address: record.address || null,
+        name: record.name || 'UNKNOWN',
+        reason: publicError(record.error),
+        rpcClass: record.rpcClass || RpcErrorClass.INVARIANT,
+        phase: record.phase || 'UNKNOWN',
+      })
+      continue
+    }
     try {
-      if (record?.error) throw new Error(record.error)
       const address = getAddress(record.address)
       const immutableData = record.immutableData
       const dynamicData = record.dynamicData
@@ -223,6 +237,8 @@ export function buildEarnOnHoodCatalogFromOnchain({ records, blockNumber, factor
         address: record?.address || null,
         name: record?.name || 'UNKNOWN',
         reason: publicError(error),
+        rpcClass: RpcErrorClass.INVARIANT,
+        phase: 'NORMALIZATION',
       })
     }
   }
@@ -238,6 +254,91 @@ export function buildEarnOnHoodCatalogFromOnchain({ records, blockNumber, factor
     blockNumber: BigInt(blockNumber).toString(),
     factory: EARN_OMNIPOOL_FACTORY,
     factoryDisabled,
+  }
+}
+
+function retainEarnPool(pool, previousGeneratedAt, generatedAt) {
+  const lastVerifiedAt = String(pool?.lastVerifiedAt || previousGeneratedAt || '')
+  const verifiedAt = Date.parse(lastVerifiedAt)
+  const currentAt = Date.parse(generatedAt)
+  if (
+    !Number.isFinite(verifiedAt) ||
+    !Number.isFinite(currentAt) ||
+    currentAt - verifiedAt < -60_000 ||
+    currentAt - verifiedAt > EARN_PARTIAL_CATALOG_RETENTION_POLICY.maximumAgeMs ||
+    !Array.isArray(pool?.tokens) ||
+    pool.tokens.length < 2 ||
+    pool.tokens.length > EARN_ROUTE_DISCOVERY_POLICY.maximumTokensPerPool
+  ) {
+    return null
+  }
+  try {
+    return {
+      ...pool,
+      address: getAddress(pool.address),
+      tokens: pool.tokens.map((token) => ({ ...token, address: getAddress(token.address) })),
+      lastVerifiedAt,
+      catalogObservation: 'RETAINED_AFTER_CURRENT_TRANSIENT_POOL_READ_FAILURE',
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Retain only a previously verified Earn pool whose exact current pool-state
+ * read failed transiently. Factory membership and every execution quote stay
+ * current-state; deterministic pool rejection removes the old topology.
+ */
+export function mergeEarnOnHoodPartialCatalog(current, previous, options = {}) {
+  if (!current || !Array.isArray(current.pools) || !Array.isArray(current.rejected)) {
+    throw new Error('current Earn catalog is invalid')
+  }
+  const generatedAt = String(options.generatedAt || new Date().toISOString())
+  if (!Number.isFinite(Date.parse(generatedAt))) throw new Error('Earn catalog merge timestamp is invalid')
+  const previousGeneratedAt = String(options.previousGeneratedAt || '')
+  const transientClasses = new Set([RpcErrorClass.NETWORK, RpcErrorClass.THROTTLED, RpcErrorClass.STATE_NOT_READY])
+  const failedPoolAddresses = new Set(
+    current.rejected
+      .filter(
+        (item) =>
+          item?.phase === 'POOL_STATE' && transientClasses.has(item.rpcClass) && typeof item.address === 'string',
+      )
+      .map((item) => key(item.address)),
+  )
+  const pools = current.pools.map((pool) => ({
+    ...pool,
+    lastVerifiedAt: generatedAt,
+    catalogObservation: 'CURRENT_FIXED_BLOCK_POOL_READ',
+  }))
+  const seen = new Set(pools.map((pool) => key(pool.address)))
+  let retainedPools = 0
+  let expiredPools = 0
+  if (previous?.source === current.source) {
+    for (const pool of Array.isArray(previous.pools) ? previous.pools : []) {
+      const address = key(pool?.address)
+      if (!failedPoolAddresses.has(address) || seen.has(address)) continue
+      const retained = retainEarnPool(pool, previousGeneratedAt, generatedAt)
+      if (retained) {
+        pools.push(retained)
+        seen.add(address)
+        retainedPools += 1
+      } else expiredPools += 1
+    }
+  }
+  return {
+    ...current,
+    pools,
+    readEvidence: {
+      ...(current.readEvidence || {}),
+      topologyRetention: {
+        policy: EARN_PARTIAL_CATALOG_RETENTION_POLICY.version,
+        previousCatalogBlock: previous?.blockNumber ? String(previous.blockNumber) : null,
+        freshPools: current.pools.length,
+        retainedPools,
+        expiredPools,
+      },
+    },
   }
 }
 
@@ -299,7 +400,15 @@ export async function loadEarnOnHoodOnchainCatalog(client, blockNumber, options 
   const poolReads = addresses.map((address, index) => {
     const [immutableResult, dynamicResult, nameResult] = poolResults.slice(index * 3, index * 3 + 3)
     const failed = [immutableResult, dynamicResult].find((result) => result?.status !== 'success')
-    if (failed) return { address, error: publicError(failed.error || 'weighted pool read failed') }
+    if (failed) {
+      const error = failed.error || 'weighted pool read failed'
+      return {
+        address,
+        error: publicError(error),
+        rpcClass: classifyRpcError(error),
+        phase: 'POOL_STATE',
+      }
+    }
     return {
       address,
       immutableData: immutableResult.result,

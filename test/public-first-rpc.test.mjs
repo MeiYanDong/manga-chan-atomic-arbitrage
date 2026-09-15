@@ -3,7 +3,11 @@ import { createServer } from 'node:http'
 import test from 'node:test'
 import { createPublicClient, defineChain } from 'viem'
 
-import { publicFirstRpcTransport, shouldFallbackToManagedRpc } from '../src/public-first-rpc.mjs'
+import {
+  publicBatchWithDirectRetryTransport,
+  publicFirstRpcTransport,
+  shouldFallbackToManagedRpc,
+} from '../src/public-first-rpc.mjs'
 
 const chain = defineChain({
   id: 4_663,
@@ -201,6 +205,31 @@ test('falls back only for the logical call omitted from a malformed public batch
   assert.equal(fallbackBodies.length, 1)
   assert.equal(Array.isArray(fallbackBodies[0]), true)
   assert.equal(fallbackBodies[0].length, 1)
+})
+
+test('public-only catalog transport retries an omitted batch item directly on the same endpoint', async (context) => {
+  const bodies = []
+  const endpoint = await listen(async (request, response) => {
+    const body = await requestBody(request)
+    bodies.push(body)
+    const complete = rpcResponse(body)
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(Array.isArray(complete) ? complete.slice(0, 1) : complete))
+  })
+  context.after(endpoint.close)
+
+  const client = createPublicClient({
+    chain,
+    transport: publicBatchWithDirectRetryTransport(endpoint.url, { batchWaitMs: 5 }),
+  })
+  const [blockNumber, gasPrice] = await Promise.all([client.getBlockNumber(), client.getGasPrice()])
+
+  assert.equal(blockNumber, 42n)
+  assert.equal(gasPrice, 1_000_000_000n)
+  assert.equal(bodies.length, 2)
+  assert.equal(Array.isArray(bodies[0]), true)
+  assert.equal(bodies[0].length, 2)
+  assert.equal(Array.isArray(bodies[1]), false)
 })
 
 test('does not switch providers for a deterministic EVM revert', async (context) => {

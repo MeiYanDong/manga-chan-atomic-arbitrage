@@ -19,14 +19,32 @@ function rpcEndpoint(value, label) {
   return endpoint.href
 }
 
+function batchTransportConfig(options) {
+  const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE
+  const batchWaitMs = options.batchWaitMs ?? DEFAULT_BATCH_WAIT_MS
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
+    throw new RangeError('RPC batch size must be an integer from 1 to 1000')
+  }
+  if (!Number.isSafeInteger(batchWaitMs) || batchWaitMs < 0 || batchWaitMs > 1_000) {
+    throw new RangeError('RPC batch wait must be an integer from 0 to 1000 milliseconds')
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
+    throw new RangeError('RPC timeout must be an integer from 1 to 120000 milliseconds')
+  }
+  return {
+    batch: { batchSize, wait: batchWaitMs },
+    timeout: timeoutMs,
+    retryCount: 0,
+  }
+}
+
 /** @param {any} error */
-export function shouldFallbackToManagedRpc(error) {
+export function shouldRetryPublicBatchItemDirect(error) {
   const seen = new Set()
   let current = error
   for (let depth = 0; depth < 6 && current && typeof current === 'object' && !seen.has(current); depth += 1) {
     seen.add(current)
-    if (current.name === 'TimeoutError' || current.name === 'SocketClosedError') return true
-    if (current.name === 'ResponseBodyTooLargeError') return true
     if (
       current.name === 'TypeError' &&
       MISSING_BATCH_ITEM_MESSAGE.test(String(current.message || '')) &&
@@ -34,6 +52,20 @@ export function shouldFallbackToManagedRpc(error) {
     ) {
       return true
     }
+    current = current.cause
+  }
+  return false
+}
+
+/** @param {any} error */
+export function shouldFallbackToManagedRpc(error) {
+  if (shouldRetryPublicBatchItemDirect(error)) return true
+  const seen = new Set()
+  let current = error
+  for (let depth = 0; depth < 6 && current && typeof current === 'object' && !seen.has(current); depth += 1) {
+    seen.add(current)
+    if (current.name === 'TimeoutError' || current.name === 'SocketClosedError') return true
+    if (current.name === 'ResponseBodyTooLargeError') return true
     if (current.name === 'HttpRequestError') {
       const status = Number(current.status)
       if (!Number.isFinite(status) || RETRYABLE_HTTP_STATUSES.has(status) || status >= 500) return true
@@ -67,23 +99,7 @@ export function shouldFallbackToManagedRpc(error) {
 export function publicFirstRpcTransport(publicRpcUrl, managedRpcUrl, options = {}) {
   const primaryUrl = rpcEndpoint(publicRpcUrl, 'public')
   const secondaryUrl = managedRpcUrl ? rpcEndpoint(managedRpcUrl, 'managed fallback') : null
-  const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE
-  const batchWaitMs = options.batchWaitMs ?? DEFAULT_BATCH_WAIT_MS
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
-    throw new RangeError('RPC batch size must be an integer from 1 to 1000')
-  }
-  if (!Number.isSafeInteger(batchWaitMs) || batchWaitMs < 0 || batchWaitMs > 1_000) {
-    throw new RangeError('RPC batch wait must be an integer from 0 to 1000 milliseconds')
-  }
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
-    throw new RangeError('RPC timeout must be an integer from 1 to 120000 milliseconds')
-  }
-  const transportConfig = {
-    batch: { batchSize, wait: batchWaitMs },
-    timeout: timeoutMs,
-    retryCount: 0,
-  }
+  const transportConfig = batchTransportConfig(options)
   const primary = http(primaryUrl, {
     ...transportConfig,
     key: 'public-rpc-primary',
@@ -102,5 +118,37 @@ export function publicFirstRpcTransport(publicRpcUrl, managedRpcUrl, options = {
     rank: false,
     retryCount: 0,
     shouldThrow: (error) => !shouldFallbackToManagedRpc(error),
+  })
+}
+
+/**
+ * Keep a public-only maintenance process batched under normal operation, but
+ * retry only a response omitted from a malformed batch as one direct request
+ * to the same official endpoint. HTTP denials, throttling and deterministic
+ * RPC/EVM errors remain partial evidence and are not fanned out.
+ *
+ * @param {string} publicRpcUrl
+ * @param {{batchSize?: number, batchWaitMs?: number, timeoutMs?: number}} [options]
+ */
+export function publicBatchWithDirectRetryTransport(publicRpcUrl, options = {}) {
+  const primaryUrl = rpcEndpoint(publicRpcUrl, 'public')
+  const transportConfig = batchTransportConfig(options)
+  const primary = http(primaryUrl, {
+    ...transportConfig,
+    key: 'public-rpc-batched-primary',
+    name: 'Public RPC batched primary',
+  })
+  const direct = http(primaryUrl, {
+    timeout: transportConfig.timeout,
+    retryCount: 0,
+    key: 'public-rpc-direct-recovery',
+    name: 'Public RPC direct missing-item recovery',
+  })
+  return fallback([primary, direct], {
+    key: 'public-batch-direct-recovery',
+    name: 'Public batch with direct missing-item recovery',
+    rank: false,
+    retryCount: 0,
+    shouldThrow: (error) => !shouldRetryPublicBatchItemDirect(error),
   })
 }
