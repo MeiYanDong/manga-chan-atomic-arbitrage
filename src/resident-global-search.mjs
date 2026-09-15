@@ -1,22 +1,48 @@
 import { spawn } from 'node:child_process'
 
+import { retryReadOnly } from './event-driven-shadow.mjs'
 import { mergePendingMarketSignals } from './feed-signal-coalescer.mjs'
-import { redactSensitiveText } from './policy.mjs'
+import { isTransientRpcError, redactSensitiveText } from './policy.mjs'
 import { ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY } from './robinhood-uniswap-catalog.mjs'
 
 export const GLOBAL_SEARCH_WORKER_POLICY = 'RESIDENT_SIGNER_FREE_EVENT_SEARCH_V1'
 export const GLOBAL_SEARCH_PROTOCOL_VERSION = 1
 export const GLOBAL_CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1_000
 export const GLOBAL_CATALOG_REFRESH_INTERVAL_MS = 15 * 60 * 1_000
+export const GLOBAL_CATALOG_CRITICAL_READ_POLICY = Object.freeze({
+  version: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
+  attempts: 3,
+  delayMs: 1_000,
+  transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
+})
 export const GLOBAL_CATALOG_MAINTENANCE_POLICY = Object.freeze({
-  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V2',
+  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V3',
   refreshIntervalMs: GLOBAL_CATALOG_REFRESH_INTERVAL_MS,
   maximumAgeMs: GLOBAL_CATALOG_MAX_AGE_MS,
   writer: 'DEDICATED_SYSTEMD_ONESHOT',
   readPath: 'ATOMIC_CACHE_ONLY',
   rpc: 'OFFICIAL_PUBLIC_ONLY',
   partialRefresh: ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.version,
+  criticalRead: GLOBAL_CATALOG_CRITICAL_READ_POLICY.version,
 })
+
+/**
+ * @param {() => Promise<any>} operation
+ * @param {{onRetry?: (error: unknown, attempt: number) => void}} [options]
+ */
+export async function readGlobalCatalogCritical(operation, { onRetry } = {}) {
+  let retries = 0
+  const value = await retryReadOnly(operation, {
+    attempts: GLOBAL_CATALOG_CRITICAL_READ_POLICY.attempts,
+    delayMs: GLOBAL_CATALOG_CRITICAL_READ_POLICY.delayMs,
+    shouldRetry: isTransientRpcError,
+    onRetry: (error, attempt) => {
+      retries += 1
+      onRetry?.(error, attempt)
+    },
+  })
+  return { value, retries }
+}
 
 export function assertGlobalCatalogMaintenanceBoundary(environment = process.env) {
   if (environment.GLOBAL_CATALOG_REFRESH_ALLOWED !== '1') {

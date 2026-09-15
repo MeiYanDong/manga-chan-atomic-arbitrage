@@ -91,7 +91,12 @@ import {
 } from '../src/policy.mjs'
 import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 import { RpcEvidence, instrumentRpcTransport, withRpcEvidence } from '../src/rpc-evidence.mjs'
-import { assertGlobalCatalogMaintenanceBoundary, classifyGlobalCatalogAccess } from '../src/resident-global-search.mjs'
+import {
+  assertGlobalCatalogMaintenanceBoundary,
+  classifyGlobalCatalogAccess,
+  GLOBAL_CATALOG_CRITICAL_READ_POLICY,
+  readGlobalCatalogCritical,
+} from '../src/resident-global-search.mjs'
 import {
   loadRobinhoodHubUniswapCatalog,
   mergeRobinhoodPartialCatalog,
@@ -210,6 +215,13 @@ const discoveryClient = createPublicClient({
     }),
     'DISCOVERY_CLIENT',
   ),
+})
+// Catalog identity reads never inherit MANGA_RPC_URL and do not use JSON-RPC
+// batching. A malformed or incomplete public batch must not abort the whole
+// maintenance generation before its exact-query reconciliation can run.
+const catalogPublicClient = createPublicClient({
+  chain,
+  transport: http(PUBLIC_RPC, { timeout: 30_000, retryCount: 0 }),
 })
 const erc20Abi = parseAbi([
   'function balanceOf(address) view returns (uint256)',
@@ -470,9 +482,27 @@ function weightedAllocations(principal, pool) {
   return allocations
 }
 
-async function refreshGlobalCatalog(blockNumber) {
+async function catalogCriticalRead(label, operation) {
+  return readGlobalCatalogCritical(operation, {
+    onRetry: (error, attempt) => {
+      console.error(
+        stringify({
+          status: 'GLOBAL_CATALOG_CRITICAL_READ_RETRY',
+          label,
+          attempt,
+          rpcClass: classifyRpcError(error),
+        }),
+      )
+    },
+  })
+}
+
+async function refreshGlobalCatalog(blockNumber, headRetries = 0) {
   const previous = readJson(GLOBAL_CATALOG_PATH)
-  const earn = await loadEarnOnHoodOnchainCatalog(discoveryClient, blockNumber)
+  const earnRead = await catalogCriticalRead('EARN_CANONICAL_CATALOG', () =>
+    loadEarnOnHoodOnchainCatalog(catalogPublicClient, blockNumber),
+  )
+  const earn = earnRead.value
   const earnAssets = earn.pools.flatMap((pool) => [pool.address, ...pool.tokens.map((token) => token.address)])
   const universeState = readGlobalUniverseState()
   // The rotating V4 handoff is an overlay, not durable base-catalog state.
@@ -486,6 +516,11 @@ async function refreshGlobalCatalog(blockNumber) {
     generatedAt,
     previousGeneratedAt: previous?.generatedAt,
   })
+  const maintenanceReadEvidence = {
+    policy: GLOBAL_CATALOG_CRITICAL_READ_POLICY.version,
+    headRetries,
+    earnCatalogRetries: earnRead.retries,
+  }
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
     schemaVersion: 2,
     generatedAt,
@@ -493,8 +528,9 @@ async function refreshGlobalCatalog(blockNumber) {
     earn: { ...earn, rejected: earn.rejected.slice(0, 128) },
     uniswap: { ...uniswap, rejected: uniswap.rejected.slice(0, 128) },
     universe: universeState.evidence,
+    maintenanceReadEvidence,
   })
-  return { earn, uniswap, generatedAt, universe: universeState.evidence }
+  return { earn, uniswap, generatedAt, universe: universeState.evidence, maintenanceReadEvidence }
 }
 
 function readGlobalUniverseState() {
@@ -561,8 +597,12 @@ async function catalogRefresh() {
   assertGlobalCatalogMaintenanceBoundary()
   const release = acquireLock(GLOBAL_CATALOG_LOCK_PATH, 'global-catalog-maintenance')
   try {
-    const block = await discoveryClient.getBlock()
-    const { earn, uniswap, universe } = await refreshGlobalCatalog(block.number)
+    const blockRead = await catalogCriticalRead('CHAIN_HEAD', () => catalogPublicClient.getBlock())
+    const block = blockRead.value
+    const { earn, uniswap, universe, maintenanceReadEvidence } = await refreshGlobalCatalog(
+      block.number,
+      blockRead.retries,
+    )
     const output = {
       status: 'GLOBAL_CATALOG_REFRESHED',
       evidence: 'CANONICAL_EARN_FACTORY_VAULT_AND_UNISWAP_FACTORY_READS',
@@ -574,6 +614,7 @@ async function catalogRefresh() {
       coverage: uniswap.coverage,
       readEvidence: uniswap.readEvidence,
       topologyRetention: uniswap.readEvidence.topologyRetention,
+      maintenanceReadEvidence,
       universe,
     }
     console.log(stringify(output))

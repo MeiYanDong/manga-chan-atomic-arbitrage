@@ -5,6 +5,7 @@ import { PassThrough, Writable } from 'node:stream'
 import test from 'node:test'
 
 import {
+  GLOBAL_CATALOG_CRITICAL_READ_POLICY,
   GLOBAL_CATALOG_MAINTENANCE_POLICY,
   assertGlobalCatalogMaintenanceBoundary,
   buildGlobalSearchWorkerEnvironment,
@@ -12,12 +13,41 @@ import {
   classifyGlobalSearchHandoff,
   encodeGlobalSearchResult,
   parseGlobalSearchRequest,
+  readGlobalCatalogCritical,
   ResidentGlobalSearchClient,
 } from '../src/resident-global-search.mjs'
 
 const POOL_A = '0x000000000000000000000000000000000000000a'
 const POOL_B = '0x000000000000000000000000000000000000000b'
 const POOL_C = '0x000000000000000000000000000000000000000c'
+
+test('catalog critical reads retry transient public failures but never retry an invariant', async () => {
+  let transientCalls = 0
+  const retries = []
+  const recovered = await readGlobalCatalogCritical(
+    async () => {
+      transientCalls += 1
+      if (transientCalls < 3) {
+        const error = Object.assign(new Error('temporary RPC transport failure'), { rpcClass: 'NETWORK' })
+        throw error
+      }
+      return { blockNumber: 123n }
+    },
+    { onRetry: (_error, attempt) => retries.push(attempt) },
+  )
+  assert.deepEqual(recovered, { value: { blockNumber: 123n }, retries: 2 })
+  assert.deepEqual(retries, [1, 2])
+
+  let invariantCalls = 0
+  await assert.rejects(
+    readGlobalCatalogCritical(async () => {
+      invariantCalls += 1
+      throw new Error('canonical factory identity mismatch')
+    }),
+    /canonical factory identity mismatch/,
+  )
+  assert.equal(invariantCalls, 1)
+})
 
 test('catalog access keeps every search path on the last atomic maintenance snapshot', () => {
   const now = Date.parse('2026-09-15T00:00:00.000Z')
@@ -189,13 +219,20 @@ test('catalog access keeps every search path on the last atomic maintenance snap
   )
   assert.equal(classifyGlobalCatalogAccess(null, { now }), 'UNAVAILABLE')
   assert.deepEqual(GLOBAL_CATALOG_MAINTENANCE_POLICY, {
-    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V2',
+    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V3',
     refreshIntervalMs: 15 * 60 * 1_000,
     maximumAgeMs: 6 * 60 * 60 * 1_000,
     writer: 'DEDICATED_SYSTEMD_ONESHOT',
     readPath: 'ATOMIC_CACHE_ONLY',
     rpc: 'OFFICIAL_PUBLIC_ONLY',
     partialRefresh: 'FAILED_TRANSIENT_QUERY_LAST_VERIFIED_V1',
+    criticalRead: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
+  })
+  assert.deepEqual(GLOBAL_CATALOG_CRITICAL_READ_POLICY, {
+    version: 'DIRECT_PUBLIC_CRITICAL_READ_RETRY_V1',
+    attempts: 3,
+    delayMs: 1_000,
+    transport: 'OFFICIAL_PUBLIC_NON_BATCHED',
   })
 })
 
