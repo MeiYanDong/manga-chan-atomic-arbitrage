@@ -778,6 +778,12 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const globalCatalogRefreshEnd = globalSource.indexOf('function readGlobalUniverseState', globalCatalogRefreshStart)
   const globalCatalogRefresh = globalSource.slice(globalCatalogRefreshStart, globalCatalogRefreshEnd)
   assert.doesNotMatch(globalCatalogRefresh, /universeAssets|additionalV4Pools/)
+  assert.match(globalCatalogRefresh, /mergeRobinhoodPartialCatalog\(refreshedUniswap, previous\?\.uniswap/)
+  assert.ok(
+    globalCatalogRefresh.indexOf('mergeRobinhoodPartialCatalog') < globalCatalogRefresh.indexOf('writeProtectedJson'),
+    'partial catalog topology must be merged before the atomic publication boundary',
+  )
+  assert.match(globalCatalogRefresh, /schemaVersion: 2/)
   const globalGraphLoadStart = globalSource.indexOf('async function loadGlobalGraph')
   const globalGraphLoadEnd = globalSource.indexOf('async function catalogRefresh', globalGraphLoadStart)
   const globalGraphLoad = globalSource.slice(globalGraphLoadStart, globalGraphLoadEnd)

@@ -92,7 +92,12 @@ import {
 import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 import { RpcEvidence, instrumentRpcTransport, withRpcEvidence } from '../src/rpc-evidence.mjs'
 import { assertGlobalCatalogMaintenanceBoundary, classifyGlobalCatalogAccess } from '../src/resident-global-search.mjs'
-import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
+import {
+  loadRobinhoodHubUniswapCatalog,
+  mergeRobinhoodPartialCatalog,
+  ROBINHOOD_USDG,
+  ROBINHOOD_WETH,
+} from '../src/robinhood-uniswap-catalog.mjs'
 import {
   GLOBAL_UNIVERSE_POLICY,
   mergeGlobalUniverseProjection,
@@ -466,18 +471,23 @@ function weightedAllocations(principal, pool) {
 }
 
 async function refreshGlobalCatalog(blockNumber) {
+  const previous = readJson(GLOBAL_CATALOG_PATH)
   const earn = await loadEarnOnHoodOnchainCatalog(discoveryClient, blockNumber)
   const earnAssets = earn.pools.flatMap((pool) => [pool.address, ...pool.tokens.map((token) => token.address)])
   const universeState = readGlobalUniverseState()
   // The rotating V4 handoff is an overlay, not durable base-catalog state.
   // Persisting it here makes the same PoolKeys look duplicated on the next
   // read and lets an old rotation consume the current graph's capacity.
-  const uniswap = await loadRobinhoodHubUniswapCatalog(discoveryClient, earnAssets, blockNumber, {
+  const refreshedUniswap = await loadRobinhoodHubUniswapCatalog(discoveryClient, earnAssets, blockNumber, {
     hubs: SETTLEMENT_SEEDS,
   })
   const generatedAt = new Date().toISOString()
+  const uniswap = mergeRobinhoodPartialCatalog(refreshedUniswap, previous?.uniswap, {
+    generatedAt,
+    previousGeneratedAt: previous?.generatedAt,
+  })
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt,
     blockNumber: BigInt(blockNumber).toString(),
     earn: { ...earn, rejected: earn.rejected.slice(0, 128) },
@@ -563,6 +573,7 @@ async function catalogRefresh() {
       v4Pools: uniswap.v4Pools.length,
       coverage: uniswap.coverage,
       readEvidence: uniswap.readEvidence,
+      topologyRetention: uniswap.readEvidence.topologyRetention,
       universe,
     }
     console.log(stringify(output))

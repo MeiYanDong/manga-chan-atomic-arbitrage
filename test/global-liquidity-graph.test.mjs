@@ -13,7 +13,11 @@ import {
   selectRecoveryAtomicSwapCycles,
 } from '../src/global-liquidity-graph.mjs'
 import { buildGlobalWakeFromEarnEvent } from '../src/feed-signal-coalescer.mjs'
-import { loadRobinhoodHubUniswapCatalog } from '../src/robinhood-uniswap-catalog.mjs'
+import {
+  loadRobinhoodHubUniswapCatalog,
+  mergeRobinhoodPartialCatalog,
+  ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY,
+} from '../src/robinhood-uniswap-catalog.mjs'
 
 const USDG = '0x0000000000000000000000000000000000000001'
 const WETH = '0x0000000000000000000000000000000000000002'
@@ -341,6 +345,121 @@ test('catalog exposes incomplete transport evidence without retaining credential
   assert.equal(catalog.readEvidence.v2TransportErrors, 3)
   assert.equal(catalog.readEvidence.v3TransportErrors, 12)
   assert.ok(catalog.rejected.every((item) => !String(item.error || '').includes('secret')))
+})
+
+test('partial catalog refresh retains only exact transiently failed queries inside the evidence lifetime', () => {
+  const previous = {
+    blockNumber: '100',
+    v2Pools: [{ address: EARN_POOL, token0: USDG, token1: STOCK, reserve0: '1', reserve1: '2' }],
+    v3Pools: [{ address: V3_A, token0: USDG, token1: STOCK, fee: 500, liquidity: '3' }],
+  }
+  const current = {
+    blockNumber: '200',
+    v2Pools: [],
+    v3Pools: [],
+    v4Pools: [],
+    rejected: [
+      { venue: 'UNISWAP_V2', token0: STOCK, token1: USDG, error: 'temporary', rpcClass: 'NETWORK' },
+      { venue: 'UNISWAP_V3', token0: STOCK, token1: USDG, fee: 500, error: 'temporary', rpcClass: 'THROTTLED' },
+      { venue: 'UNISWAP_V3', token0: STOCK, token1: USDG, fee: 3_000, reason: 'zero active liquidity' },
+    ],
+    readEvidence: {
+      status: 'PARTIAL',
+      complete: false,
+      requestedPairs: 1,
+      requestedV3FeeQueries: 4,
+      v2TransportErrors: 1,
+      v3TransportErrors: 1,
+    },
+  }
+  const merged = mergeRobinhoodPartialCatalog(current, previous, {
+    generatedAt: '2026-09-15T00:05:00.000Z',
+    previousGeneratedAt: '2026-09-15T00:00:00.000Z',
+  })
+
+  assert.equal(merged.v2Pools.length, 1)
+  assert.equal(merged.v3Pools.length, 1)
+  assert.ok(
+    [...merged.v2Pools, ...merged.v3Pools].every(
+      (pool) =>
+        pool.lastVerifiedAt === '2026-09-15T00:00:00.000Z' &&
+        pool.catalogObservation === 'RETAINED_AFTER_CURRENT_TRANSIENT_QUERY_FAILURE',
+    ),
+  )
+  assert.deepEqual(merged.readEvidence.topologyRetention, {
+    policy: ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.version,
+    previousCatalogBlock: '100',
+    freshV2Pools: 0,
+    freshV3Pools: 0,
+    retainedV2Pools: 1,
+    retainedV3Pools: 1,
+    expiredV2Pools: 0,
+    expiredV3Pools: 0,
+  })
+})
+
+test('catalog retention does not preserve deterministic negatives, stale pools, or duplicate a fresh result', () => {
+  const previous = {
+    blockNumber: '100',
+    v2Pools: [{ address: EARN_POOL, token0: USDG, token1: STOCK, reserve0: '1', reserve1: '2' }],
+    v3Pools: [{ address: V3_A, token0: USDG, token1: STOCK, fee: 500, liquidity: '3' }],
+  }
+  const base = {
+    blockNumber: '200',
+    v2Pools: [],
+    v3Pools: [],
+    v4Pools: [],
+    readEvidence: {
+      status: 'PARTIAL',
+      complete: false,
+      requestedPairs: 1,
+      requestedV3FeeQueries: 4,
+      v2TransportErrors: 1,
+      v3TransportErrors: 1,
+    },
+  }
+  const deterministic = mergeRobinhoodPartialCatalog(
+    {
+      ...base,
+      rejected: [
+        { venue: 'UNISWAP_V2', token0: USDG, token1: STOCK, error: 'reverted', rpcClass: 'INVARIANT' },
+        { venue: 'UNISWAP_V3', token0: USDG, token1: STOCK, fee: 500, error: 'reverted', rpcClass: 'INVARIANT' },
+      ],
+    },
+    previous,
+    { generatedAt: '2026-09-15T00:05:00.000Z', previousGeneratedAt: '2026-09-15T00:00:00.000Z' },
+  )
+  assert.equal(deterministic.v2Pools.length, 0)
+  assert.equal(deterministic.v3Pools.length, 0)
+
+  const expired = mergeRobinhoodPartialCatalog(
+    {
+      ...base,
+      rejected: [
+        { venue: 'UNISWAP_V2', token0: USDG, token1: STOCK, error: 'timeout', rpcClass: 'NETWORK' },
+        { venue: 'UNISWAP_V3', token0: USDG, token1: STOCK, fee: 500, error: 'timeout', rpcClass: 'NETWORK' },
+      ],
+    },
+    previous,
+    { generatedAt: '2026-09-15T07:00:00.001Z', previousGeneratedAt: '2026-09-15T00:00:00.000Z' },
+  )
+  assert.equal(expired.v2Pools.length, 0)
+  assert.equal(expired.v3Pools.length, 0)
+  assert.equal(expired.readEvidence.topologyRetention.expiredV2Pools, 1)
+  assert.equal(expired.readEvidence.topologyRetention.expiredV3Pools, 1)
+
+  const fresh = mergeRobinhoodPartialCatalog(
+    {
+      ...base,
+      v2Pools: [{ address: EARN_POOL, token0: USDG, token1: STOCK, reserve0: '4', reserve1: '5' }],
+      rejected: [{ venue: 'UNISWAP_V2', token0: USDG, token1: STOCK, error: 'timeout', rpcClass: 'NETWORK' }],
+    },
+    previous,
+    { generatedAt: '2026-09-15T00:05:00.000Z', previousGeneratedAt: '2026-09-15T00:00:00.000Z' },
+  )
+  assert.equal(fresh.v2Pools.length, 1)
+  assert.equal(fresh.v2Pools[0].reserve0, '4')
+  assert.equal(fresh.v2Pools[0].catalogObservation, 'CURRENT_FIXED_BLOCK_READ')
 })
 
 test('Permit2-incompatible Earn tokens disable only their input edges and add hyperedge', () => {

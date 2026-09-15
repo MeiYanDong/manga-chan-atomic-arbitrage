@@ -2,18 +2,20 @@ import { spawn } from 'node:child_process'
 
 import { mergePendingMarketSignals } from './feed-signal-coalescer.mjs'
 import { redactSensitiveText } from './policy.mjs'
+import { ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY } from './robinhood-uniswap-catalog.mjs'
 
 export const GLOBAL_SEARCH_WORKER_POLICY = 'RESIDENT_SIGNER_FREE_EVENT_SEARCH_V1'
 export const GLOBAL_SEARCH_PROTOCOL_VERSION = 1
 export const GLOBAL_CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1_000
 export const GLOBAL_CATALOG_REFRESH_INTERVAL_MS = 15 * 60 * 1_000
 export const GLOBAL_CATALOG_MAINTENANCE_POLICY = Object.freeze({
-  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V1',
+  version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V2',
   refreshIntervalMs: GLOBAL_CATALOG_REFRESH_INTERVAL_MS,
   maximumAgeMs: GLOBAL_CATALOG_MAX_AGE_MS,
   writer: 'DEDICATED_SYSTEMD_ONESHOT',
   readPath: 'ATOMIC_CACHE_ONLY',
   rpc: 'OFFICIAL_PUBLIC_ONLY',
+  partialRefresh: ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.version,
 })
 
 export function assertGlobalCatalogMaintenanceBoundary(environment = process.env) {
@@ -34,7 +36,8 @@ function validRequestId(value) {
   return /^[A-Za-z0-9:_-]{1,160}$/.test(String(value || ''))
 }
 
-function validCatalogReadEvidence(evidence) {
+function validCatalogReadEvidence(catalog, now) {
+  const evidence = catalog?.uniswap?.readEvidence
   const requestedPairs = Number(evidence?.requestedPairs)
   const requestedV3FeeQueries = Number(evidence?.requestedV3FeeQueries)
   const v2TransportErrors = Number(evidence?.v2TransportErrors)
@@ -49,19 +52,58 @@ function validCatalogReadEvidence(evidence) {
     return false
   }
   const complete = v2TransportErrors + v3TransportErrors === 0
-  return evidence?.complete === complete && evidence?.status === (complete ? 'COMPLETE' : 'PARTIAL')
+  if (evidence?.complete !== complete || evidence?.status !== (complete ? 'COMPLETE' : 'PARTIAL')) return false
+  if (catalog?.schemaVersion === 1) return true
+  if (catalog?.schemaVersion !== 2) return false
+  const retention = evidence.topologyRetention
+  const counts = [
+    retention?.freshV2Pools,
+    retention?.freshV3Pools,
+    retention?.retainedV2Pools,
+    retention?.retainedV3Pools,
+    retention?.expiredV2Pools,
+    retention?.expiredV3Pools,
+  ].map(Number)
+  const v2Pools = catalog.uniswap.v2Pools
+  const v3Pools = catalog.uniswap.v3Pools
+  const observedPools = [...v2Pools, ...v3Pools]
+  const validPoolEvidence = observedPools.every((pool) => {
+    const verifiedAt = Date.parse(String(pool?.lastVerifiedAt || ''))
+    const age = now - verifiedAt
+    return (
+      ['CURRENT_FIXED_BLOCK_READ', 'RETAINED_AFTER_CURRENT_TRANSIENT_QUERY_FAILURE'].includes(
+        pool?.catalogObservation,
+      ) &&
+      Number.isFinite(verifiedAt) &&
+      age >= -MAXIMUM_CATALOG_CLOCK_SKEW_MS &&
+      age <= ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.maximumAgeMs
+    )
+  })
+  const observedFreshV2 = v2Pools.filter((pool) => pool.catalogObservation === 'CURRENT_FIXED_BLOCK_READ').length
+  const observedFreshV3 = v3Pools.filter((pool) => pool.catalogObservation === 'CURRENT_FIXED_BLOCK_READ').length
+  const observedRetainedV2 = v2Pools.length - observedFreshV2
+  const observedRetainedV3 = v3Pools.length - observedFreshV3
+  return (
+    retention?.policy === ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY.version &&
+    counts.every((value) => Number.isSafeInteger(value) && value >= 0) &&
+    counts[0] === observedFreshV2 &&
+    counts[1] === observedFreshV3 &&
+    counts[2] === observedRetainedV2 &&
+    counts[3] === observedRetainedV3 &&
+    validPoolEvidence
+  )
 }
 
 export function classifyGlobalCatalogAccess(catalog, { now = Date.now() } = {}) {
   const generatedAt = Date.parse(catalog?.generatedAt)
   const age = now - generatedAt
   const current =
-    catalog?.schemaVersion === 1 &&
+    [1, 2].includes(catalog?.schemaVersion) &&
     Array.isArray(catalog?.earn?.pools) &&
     Array.isArray(catalog?.uniswap?.v2Pools) &&
     Array.isArray(catalog?.uniswap?.v3Pools) &&
     Array.isArray(catalog?.uniswap?.v4Pools) &&
-    validCatalogReadEvidence(catalog?.uniswap?.readEvidence) &&
+    validCatalogReadEvidence(catalog, now) &&
     Number.isFinite(now) &&
     Number.isFinite(generatedAt) &&
     age >= -MAXIMUM_CATALOG_CLOCK_SKEW_MS &&

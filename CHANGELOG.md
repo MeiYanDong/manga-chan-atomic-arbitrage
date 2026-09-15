@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Preserve recently verified Uniswap V2/V3 topology when an exact pair or fee query fails with a classified transient
+  public-RPC error. A catalog generation may reuse only the matching pool existence evidence for up to six hours;
+  current successful reads replace it immediately, deterministic negatives remove it, and malformed or expired
+  evidence fails closed. Catalog schema v2 records fresh, retained and expired counts, while every executable quote,
+  Gas estimate, balance, nonce, simulation and submission still requires current-state validation. This repairs the
+  production-observed partial refresh that replaced 29 V2 and 59 V3 pools with zero without granting any signing,
+  capital, RPC, Gas or profit authority.
 - Stream the complete bounded Global recovery traversal into a deterministic block-rotated reservoir instead of
   materializing, hashing and sorting every discovered cycle. The runtime still counts the full topology and preserves
   four-hop coverage, but each settlement asset retains at most the authorized per-wake route budget before quoting.
