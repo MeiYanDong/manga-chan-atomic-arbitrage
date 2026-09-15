@@ -76,9 +76,10 @@ function addAsset(assets, token) {
   return normalized.address
 }
 
-function addSwapEdge(edges, adjacency, edge) {
+function addSwapEdge(edges, edgeIds, adjacency, edge) {
   const normalized = { ...edge, id: edgeId(edge), executable: edge.executable !== false }
-  if (edges.some((item) => item.id === normalized.id)) return
+  if (edgeIds.has(normalized.id)) return
+  edgeIds.add(normalized.id)
   edges.push(normalized)
   const adjacent = adjacency.get(key(normalized.tokenIn)) || []
   adjacent.push(normalized)
@@ -93,6 +94,7 @@ function addSwapEdge(edges, adjacency, edge) {
 export function buildUnifiedLiquidityGraph(input) {
   const assets = new Map()
   const edges = []
+  const edgeIds = new Set()
   const adjacency = new Map()
   const hyperedges = []
   const rejected = []
@@ -135,7 +137,7 @@ export function buildUnifiedLiquidityGraph(input) {
         if (!tokenRecord.permit2Compatible) continue
         for (const tokenOut of tokens) {
           if (tokenIn === tokenOut) continue
-          addSwapEdge(edges, adjacency, {
+          addSwapEdge(edges, edgeIds, adjacency, {
             venue: 'EARN',
             pool,
             tokenIn,
@@ -197,8 +199,8 @@ export function buildUnifiedLiquidityGraph(input) {
           common.fee = finiteInteger(source.fee, 'V4 fee')
           if (!/^0x[0-9a-f]{64}$/i.test(common.poolId)) throw new Error('V4 pool id is invalid')
         }
-        addSwapEdge(edges, adjacency, { ...common, tokenIn: token0, tokenOut: token1 })
-        addSwapEdge(edges, adjacency, { ...common, tokenIn: token1, tokenOut: token0 })
+        addSwapEdge(edges, edgeIds, adjacency, { ...common, tokenIn: token0, tokenOut: token1 })
+        addSwapEdge(edges, edgeIds, adjacency, { ...common, tokenIn: token1, tokenOut: token0 })
       } catch (error) {
         reject(venue, source, error)
       }

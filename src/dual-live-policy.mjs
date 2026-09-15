@@ -14,6 +14,7 @@ import {
   GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
 } from './global-liquidity-graph.mjs'
 import { GLOBAL_ROUTE_WORKSET_POLICY } from './global-route-selection.mjs'
+import { GLOBAL_UNIVERSE_POLICY } from './global-universe-projection.mjs'
 import {
   GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
   GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
@@ -30,13 +31,14 @@ import { errorText, isGenericOpportunityMiss } from './policy.mjs'
 
 export const DUAL_AUTHORIZATION_LIFETIME = 'UNTIL_REVOKED'
 export const DUAL_PRINCIPAL_POLICY = 'ARM_PRINCIPAL_PLUS_CONFIRMED_GROSS_PROFIT_UP_TO_IMMUTABLE_CAP'
-export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v12'
+export const DUAL_AUTHORIZATION_POLICY_VERSION = 'dual-base-loopback-escalation-v13'
 export const DUAL_WATCH_EXIT_STATUS = Object.freeze({
   UNKNOWN: 70,
   INVARIANT: 71,
   NONCE_CONFLICT: 72,
   TEMPORARY_FAILURE: 75,
 })
+const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V12 = 'dual-base-loopback-escalation-v12'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V11 = 'dual-base-loopback-escalation-v11'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10 = 'dual-base-loopback-escalation-v10'
 const LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9 = 'dual-base-loopback-escalation-v9'
@@ -434,6 +436,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
     arm.mode !== 'AUTO_POLICY' ||
     ![
       DUAL_AUTHORIZATION_POLICY_VERSION,
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V12,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V11,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9,
@@ -454,6 +457,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
   }
   if (
     [
+      LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V12,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V11,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V10,
       LEGACY_DUAL_AUTHORIZATION_POLICY_VERSION_V9,
@@ -479,6 +483,7 @@ export function evaluateDualAuthorizationBudget(arm, usage) {
       arm.global?.maximumSettlementFundingChecksPerWake !== GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE ||
       arm.global?.maximumSettlementAssetsPerWake !== GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE ||
       arm.global?.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
+      arm.global?.universePolicy !== GLOBAL_UNIVERSE_POLICY.version ||
       arm.global?.graphPolicy !== GLOBAL_GRAPH_POLICY.version ||
       arm.global?.routePolicy !== GLOBAL_ATOMIC_ROUTE_POLICY ||
       arm.global?.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||

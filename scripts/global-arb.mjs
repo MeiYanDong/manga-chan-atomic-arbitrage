@@ -55,12 +55,14 @@ import {
 } from '../src/global-route-selection.mjs'
 import {
   assessSettlementFunding,
+  classifyGlobalSearchReadiness,
   enumerateV3ValuationRoutes,
   GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
   GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
   GLOBAL_SETTLEMENT_ADMISSION_POLICY,
   globalSettlementSeeds,
   rankDynamicSettlementCandidates,
+  selectSettlementSearchRoots,
   selectSettlementFundingCandidates,
 } from '../src/global-settlement-assets.mjs'
 import { loadEarnOnHoodOnchainCatalog } from '../src/earnonhood-onchain-catalog.mjs'
@@ -92,6 +94,11 @@ import { RpcEvidence, instrumentRpcTransport, withRpcEvidence } from '../src/rpc
 import { classifyGlobalCatalogAccess } from '../src/resident-global-search.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import {
+  GLOBAL_UNIVERSE_POLICY,
+  mergeGlobalUniverseProjection,
+  readGlobalUniverseFile,
+} from '../src/global-universe-projection.mjs'
+import {
   loadUniversalContractArtifact,
   materializeUniversalRuntime,
   verifyUniversalRuntimeEvidence,
@@ -121,7 +128,9 @@ const AUDIT_PATH = path.join(RUN_DIR, 'audit.jsonl')
 const GLOBAL_SNAPSHOT_PATH = path.join(RUN_DIR, 'global-opportunity.json')
 const GLOBAL_CATALOG_PATH = path.join(RUN_DIR, 'global-catalog.json')
 const GLOBAL_RPC_BUDGET_PATH = path.join(RUN_DIR, 'global-rpc-fallback-budget.json')
-const SOURCE_CATALOG_PATH = path.join(RUN_DIR, 'source-catalog.json')
+const GLOBAL_UNIVERSE_PATH = runtime.globalUniversePath
+  ? path.resolve(runtime.globalUniversePath)
+  : path.join(RUN_DIR, 'global-universe.json')
 const SIGNED_DIR = path.join(RUN_DIR, 'signed')
 const WALLET_LOCK_PATH = path.join(RUN_DIR, 'wallet.lock')
 const DUAL_LOCK_PATH = path.join(RUN_DIR, 'dual-watch.lock')
@@ -458,11 +467,17 @@ function weightedAllocations(principal, pool) {
 async function refreshGlobalCatalog(blockNumber) {
   const earn = await loadEarnOnHoodOnchainCatalog(discoveryClient, blockNumber)
   const earnAssets = earn.pools.flatMap((pool) => [pool.address, ...pool.tokens.map((token) => token.address)])
-  const sourceCatalog = readJson(SOURCE_CATALOG_PATH)
-  const uniswap = await loadRobinhoodHubUniswapCatalog(discoveryClient, earnAssets, blockNumber, {
-    hubs: SETTLEMENT_SEEDS,
-    additionalV4Pools: Array.isArray(sourceCatalog?.pools) ? sourceCatalog.pools : [],
-  })
+  const universeState = readGlobalUniverseState()
+  const universeAssets = universeState.projection?.assets || []
+  const uniswap = await loadRobinhoodHubUniswapCatalog(
+    discoveryClient,
+    [...earnAssets, ...universeAssets],
+    blockNumber,
+    {
+      hubs: SETTLEMENT_SEEDS,
+      additionalV4Pools: universeState.projection?.v4Pools || [],
+    },
+  )
   const generatedAt = new Date().toISOString()
   writeProtectedJson(GLOBAL_CATALOG_PATH, {
     schemaVersion: 1,
@@ -470,8 +485,27 @@ async function refreshGlobalCatalog(blockNumber) {
     blockNumber: BigInt(blockNumber).toString(),
     earn: { ...earn, rejected: earn.rejected.slice(0, 128) },
     uniswap: { ...uniswap, rejected: uniswap.rejected.slice(0, 128) },
+    universe: universeState.evidence,
   })
-  return { earn, uniswap, generatedAt }
+  return { earn, uniswap, generatedAt, universe: universeState.evidence }
+}
+
+function readGlobalUniverseState() {
+  const { projection, status } = readGlobalUniverseFile(GLOBAL_UNIVERSE_PATH)
+  return {
+    status,
+    projection: status === 'CURRENT' ? projection : null,
+    evidence: {
+      status,
+      policy: GLOBAL_UNIVERSE_POLICY.version,
+      topologyHash: status === 'CURRENT' ? projection.topologyHash : null,
+      sourceCatalogHash: status === 'CURRENT' ? projection.sourceCatalogHash : null,
+      safeHead: status === 'CURRENT' ? projection.safeHead : null,
+      selectedTargets: status === 'CURRENT' ? projection.targets.length : 0,
+      selectedPools: status === 'CURRENT' ? projection.v4Pools.length : 0,
+      evidence: status === 'CURRENT' ? 'BOUNDED_BOARD_DERIVED_TOPOLOGY' : 'BASE_CATALOG_ONLY',
+    },
+  }
 }
 
 async function loadGlobalGraph(blockNumber) {
@@ -485,8 +519,23 @@ async function loadGlobalGraph(blockNumber) {
     throw error
   }
   const source = catalogAccess === 'CACHE' ? cached : await refreshGlobalCatalog(blockNumber)
-  const { earn, uniswap } = source
-  const catalogIdentity = `${source.generatedAt || 'UNKNOWN'}:${source.blockNumber || earn.blockNumber || 'UNKNOWN'}:${uniswap.blockNumber || 'UNKNOWN'}`
+  const { earn } = source
+  const universeState = readGlobalUniverseState()
+  const merged = universeState.projection
+    ? mergeGlobalUniverseProjection({
+        earnPools: earn.pools,
+        uniswap: source.uniswap,
+        projection: universeState.projection,
+        maximumAssets: GLOBAL_GRAPH_POLICY.maximumAssets,
+        maximumSwapEdges: GLOBAL_GRAPH_POLICY.maximumSwapEdges,
+      })
+    : { uniswap: source.uniswap, universe: { ...universeState.evidence, admittedTargets: 0, admittedPools: 0 } }
+  const uniswap = merged.uniswap
+  const universe = {
+    ...universeState.evidence,
+    ...merged.universe,
+  }
+  const catalogIdentity = `${source.generatedAt || 'UNKNOWN'}:${source.blockNumber || earn.blockNumber || 'UNKNOWN'}:${uniswap.blockNumber || 'UNKNOWN'}:${universe.topologyHash || 'BASE_ONLY'}`
   if (residentGraphCache?.catalogIdentity === catalogIdentity) return residentGraphCache.value
   const graph = buildUnifiedLiquidityGraph({
     earnPools: earn.pools,
@@ -494,14 +543,14 @@ async function loadGlobalGraph(blockNumber) {
     v3Pools: uniswap.v3Pools,
     v4Pools: uniswap.v4Pools,
   })
-  const value = { earn, uniswap, graph }
+  const value = { earn, uniswap, graph, universe }
   residentGraphCache = { catalogIdentity, value }
   return value
 }
 
 async function catalogRefresh() {
   const block = await discoveryClient.getBlock()
-  const { earn, uniswap } = await refreshGlobalCatalog(block.number)
+  const { earn, uniswap, universe } = await refreshGlobalCatalog(block.number)
   const output = {
     status: 'GLOBAL_CATALOG_REFRESHED',
     evidence: 'CANONICAL_EARN_FACTORY_VAULT_AND_UNISWAP_FACTORY_READS',
@@ -511,6 +560,7 @@ async function catalogRefresh() {
     v3Pools: uniswap.v3Pools.length,
     v4Pools: uniswap.v4Pools.length,
     coverage: uniswap.coverage,
+    universe,
   }
   console.log(stringify(output))
   return output
@@ -763,6 +813,10 @@ async function discoverDynamicSettlementAssets({ client, graph, deployment, bloc
     rejected,
     admittedCount: admitted.length,
     fundedCount: checked.filter((candidate) => !candidate.rejected).length,
+    fundingEvidenceComplete:
+      valuationCandidates.length > 0 &&
+      checked.length === valuationCandidates.length &&
+      checked.every((candidate) => !candidate.rejected || candidate.outcome === EvaluationOutcome.POLICY_FILTERED),
     selectedForFunding: fundingCandidates.length,
     valuationEligibleForFunding: valuationCandidates.length,
     admissionScope: fundingWorkset.admissionScope,
@@ -840,6 +894,7 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
   })
   return {
     ...selected,
+    settlementToken,
     totalRoutes: bpt.length + cycleSelection.totalCycles,
     touchedRoutes:
       eventWakeAddresses.length > 0
@@ -859,17 +914,19 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
 }
 
 async function discoverExactCandidates({ client = discoveryClient, deployment, block, lifecycle, rpcEvidence }) {
-  const { earn, uniswap, graph } = await withRpcEvidence(rpcEvidence, 'CATALOG_GRAPH', () =>
+  const { earn, uniswap, graph, universe } = await withRpcEvidence(rpcEvidence, 'CATALOG_GRAPH', () =>
     loadGlobalGraph(block.number),
   )
   lifecycle.setVersions({
-    catalogVersion: `EARN:${earn.blockNumber || 'UNKNOWN'}|UNISWAP:${uniswap.blockNumber || 'UNKNOWN'}`,
+    catalogVersion: `EARN:${earn.blockNumber || 'UNKNOWN'}|UNISWAP:${uniswap.blockNumber || 'UNKNOWN'}|UNIVERSE:${universe.topologyHash || 'BASE_ONLY'}`,
     graphVersion: graph.commitment,
   })
   lifecycle.mark('CATALOG_GRAPH_READY', {
     assetCount: graph.assets.size,
     edgeCount: graph.edges.length,
     hyperedgeCount: graph.hyperedges.length,
+    universeStatus: universe.status,
+    universePools: universe.admittedPools || 0,
   })
   const evaluations = []
   const routeCoverage = []
@@ -881,29 +938,45 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
     admittedCount: settlementAdmission.admittedCount,
     rejectedCount: settlementAdmission.rejected.length,
   })
-  const unboundedWorksets = settlementAdmission.admitted.map(({ token }) =>
-    selectRouteDefinitions(graph, token, block.number),
+  const admittedByToken = new Map(settlementAdmission.admitted.map((profile) => [profile.token.toLowerCase(), profile]))
+  const searchRoots = selectSettlementSearchRoots(graph, {
+    seeds: SETTLEMENT_SEEDS,
+    admitted: settlementAdmission.admitted,
+  })
+  const topologyWorksets = searchRoots.map((token) => selectRouteDefinitions(graph, token, block.number))
+  const unboundedWorksets = topologyWorksets.filter((workset) =>
+    admittedByToken.has(workset.settlementToken.toLowerCase()),
   )
   const routeWorksets =
     wakeAddressSet().size > 0
       ? applyGlobalEventRouteBudget(unboundedWorksets, GLOBAL_EVENT_MAX_ROUTES_PER_WAKE)
       : applyGlobalRecoveryRouteBudget(unboundedWorksets, runtime.globalMaxRoutesPerWake)
-  lifecycle.mark('ROUTES_SELECTED', {
-    routeCount: routeWorksets.reduce((total, workset) => total + workset.routes.length, 0),
-    dependencyCount: wakeAddressSet().size,
-  })
-  for (const [settlementIndex, profile] of settlementAdmission.admitted.entries()) {
-    const settlementToken = profile.token
-    const { decimals, morphoLiquidity, inventory } = profile
-    const selectedRoutes = routeWorksets[settlementIndex]
+  const fundedWorksets = new Map(routeWorksets.map((workset) => [workset.settlementToken.toLowerCase(), workset]))
+  for (const topology of topologyWorksets) {
+    const settlementToken = topology.settlementToken
+    const profile = admittedByToken.get(settlementToken.toLowerCase()) || null
+    const funded = fundedWorksets.get(settlementToken.toLowerCase()) || null
     routeCoverage.push({
       settlementToken,
-      ...selectedRoutes,
+      ...topology,
       routes: undefined,
-      selectedRoutes: selectedRoutes.routes.length,
-      morphoLiquidity,
-      inventory,
+      searchableRoutes: topology.routes.length,
+      selectedRoutes: funded?.routes.length || 0,
+      fundingStatus: profile ? 'ATOMIC_FUNDING_AVAILABLE' : 'NO_ATOMIC_FUNDING',
+      morphoLiquidity: profile?.morphoLiquidity || 0n,
+      inventory: profile?.inventory || 0n,
     })
+  }
+  lifecycle.mark('ROUTES_SELECTED', {
+    searchableRouteCount: topologyWorksets.reduce((total, workset) => total + workset.routes.length, 0),
+    fundedRouteCount: routeWorksets.reduce((total, workset) => total + workset.routes.length, 0),
+    dependencyCount: wakeAddressSet().size,
+  })
+  for (const profile of settlementAdmission.admitted) {
+    const settlementToken = profile.token
+    const { decimals, morphoLiquidity, inventory } = profile
+    const selectedRoutes = fundedWorksets.get(settlementToken.toLowerCase())
+    if (!selectedRoutes) continue
     const fundingSources = [
       { fundingMode: 'MORPHO_FLASH', available: morphoLiquidity },
       { fundingMode: 'EXECUTOR_INVENTORY', available: inventory },
@@ -1059,7 +1132,7 @@ async function discoverExactCandidates({ client = discoveryClient, deployment, b
     evaluatedCount: evaluations.length,
     grossPositiveCount: evaluations.filter((item) => item.status === 'GROSS_POSITIVE').length,
   })
-  return { earn, uniswap, graph, evaluations, routeCoverage, settlementAdmission }
+  return { earn, uniswap, graph, universe, evaluations, routeCoverage, settlementAdmission }
 }
 
 async function exactNetEvaluation(candidate, deployment, block, gasPrice, graph) {
@@ -1237,13 +1310,36 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
       fallbackOutcome: EvaluationOutcome.STATE_UNAVAILABLE,
     })
     const evaluation = managedCandidates.length > 0 ? exactOutcomes : discoveryOutcomes
+    const searchableRouteCount = discovery.routeCoverage.reduce(
+      (total, item) => total + Number(item.searchableRoutes || 0),
+      0,
+    )
+    const fundedRouteCount = discovery.routeCoverage.reduce(
+      (total, item) => total + Number(item.selectedRoutes || 0),
+      0,
+    )
+    const readiness = classifyGlobalSearchReadiness({
+      selected: Boolean(selected),
+      searchableRouteCount,
+      fundedCount: discovery.settlementAdmission.fundedCount,
+      fundingEvidenceComplete: discovery.settlementAdmission.fundingEvidenceComplete,
+      evaluationValid: evaluation.valid,
+      evaluationCoverage: evaluation.coverage,
+    })
+    const { fundingBlocked } = readiness
+    const snapshotStatus = readiness.status
+    const decisionCoverage = readiness.evidenceCoverage
     const workset = {
       policy: GLOBAL_ROUTE_WORKSET_POLICY,
       wakeKind: routeAddresses.size > 0 ? 'EVENT' : 'RECOVERY',
       totalRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.totalRoutes || 0), 0),
       touchedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.touchedRoutes || 0), 0),
-      selectedRoutes: discovery.routeCoverage.reduce((total, item) => total + Number(item.selectedRoutes || 0), 0),
-      settlementAssets: discovery.routeCoverage.length,
+      searchableRoutes: searchableRouteCount,
+      fundedRoutes: fundedRouteCount,
+      selectedRoutes: fundedRouteCount,
+      searchableSettlementAssets: discovery.routeCoverage.length,
+      fundedSettlementAssets: discovery.settlementAdmission.admittedCount,
+      fundingBlocked,
     }
     const timing = {
       preflightStartedAt,
@@ -1255,14 +1351,14 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
     }
     lifecycle.mark('DECIDED', {
       decisionClassification: selected ? EvaluationOutcome.PROFITABLE : evaluation.decisionClassification,
-      evidenceCoverage: evaluation.coverage,
+      evidenceCoverage: decisionCoverage,
     })
     const snapshot = {
       schemaVersion: 2,
       generatedAt: new Date().toISOString(),
-      status: selected ? 'EXACT_NET_POSITIVE' : 'NO_EXACT_NET_OPPORTUNITY',
+      status: snapshotStatus,
       decisionClassification: selected ? EvaluationOutcome.PROFITABLE : evaluation.decisionClassification,
-      evidenceCoverage: evaluation.coverage,
+      evidenceCoverage: decisionCoverage,
       evidence: 'PUBLIC_FIRST_BATCHED_STATE_QUOTES_WITH_MANAGED_TRANSPORT_FALLBACK_THEN_MANAGED_EXACT_SIMULATION',
       lifecycle: lifecycle.snapshot(),
       graph: {
@@ -1277,6 +1373,7 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
         v3Pools: discovery.uniswap.v3Pools.length,
         v4Pools: discovery.uniswap.v4Pools.length,
         coverage: discovery.uniswap.coverage,
+        universe: discovery.universe,
         settlementAssets: discovery.settlementAdmission.admitted.map((item) => item.token),
         settlementAdmission: {
           policy: discovery.settlementAdmission.policy,
@@ -1288,6 +1385,7 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
           valuationEligibleForFunding: discovery.settlementAdmission.valuationEligibleForFunding,
           fundingChecked: discovery.settlementAdmission.candidates.length,
           funded: discovery.settlementAdmission.fundedCount,
+          fundingEvidenceComplete: discovery.settlementAdmission.fundingEvidenceComplete,
           admitted: discovery.settlementAdmission.admittedCount,
           rejected: discovery.settlementAdmission.rejected.length,
           deferred: discovery.settlementAdmission.deferred,
@@ -1303,7 +1401,7 @@ export async function globalPreflight({ print = true, persist = true } = {}) {
       evaluation: {
         taxonomy: Object.values(EvaluationOutcome),
         decisionClassification: selected ? EvaluationOutcome.PROFITABLE : evaluation.decisionClassification,
-        coverage: evaluation.coverage,
+        coverage: decisionCoverage,
         discovery: discoveryOutcomes,
         exact: exactOutcomes,
       },
@@ -1808,6 +1906,7 @@ function assertSharedAuthorization(deployment) {
     Number(arm.global.managedFallbackRecoveryLogicalCallCap) !== GLOBAL_MANAGED_FALLBACK_RECOVERY_LOGICAL_CALL_CAP ||
     arm.global.feedPolicy !== GLOBAL_FEED_MATCH_POLICY ||
     arm.global.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||
+    arm.global.universePolicy !== GLOBAL_UNIVERSE_POLICY.version ||
     arm.global.graphPolicy !== GLOBAL_GRAPH_POLICY.version ||
     arm.global.routePolicy !== GLOBAL_ATOMIC_ROUTE_POLICY ||
     arm.global.settlementPolicy !== GLOBAL_SETTLEMENT_ADMISSION_POLICY ||
@@ -1861,7 +1960,7 @@ async function execute() {
       throw error
     }
     if (!prepared.selected) {
-      const output = { status: 'NO_EXACT_NET_OPPORTUNITY', ...prepared.snapshot }
+      const output = prepared.snapshot
       console.log(stringify(output))
       return output
     }

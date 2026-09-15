@@ -89,6 +89,9 @@ test('opportunity board stays signer-free while isolating the bounded managed ev
   assert.match(source, /NOT_RUN_EXACT_EXECUTOR_PREFLIGHT_REQUIRED/)
   assert.doesNotMatch(source, /GENERIC_EXECUTOR_NOT_DEPLOYED/)
   assert.match(source, /respondJsonFile\(response, this\.sourceCatalogPath\)/)
+  assert.match(source, /respondJsonFile\(response, this\.globalUniversePath\)/)
+  assert.match(source, /buildGlobalUniverseProjection\(\{/)
+  assert.match(source, /writeStableJsonAtomic\(this\.globalUniversePath, projection\)/)
   assert.match(source, /sourceCatalog: null,[\s\S]*sourceCatalogHash: this\.latestSourceCatalogHash/)
   assert.match(source, /writeStableJsonAtomic\(this\.snapshotPath, reconciled\.snapshot\)/)
   assert.match(source, /buildBusinessBoardSnapshot\(/)
@@ -190,6 +193,10 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
   )
   assert.match(
     unit,
+    /^Environment=MANGA_BOARD_GLOBAL_UNIVERSE_PATH=\/run\/manga-opportunity-board-feed\/global-universe\.json$/m,
+  )
+  assert.match(
+    unit,
     /^Environment=MANGA_BOARD_BUSINESS_SNAPSHOT=\/var\/lib\/manga-business-report\/business-snapshot\.json$/m,
   )
   assert.match(
@@ -201,6 +208,10 @@ test('systemd unit keeps the board in a separate loopback-only identity without 
 
   const example = fs.readFileSync(path.join(root, 'deploy', 'opportunity-board.env.example'), 'utf8')
   assert.match(example, /^MANGA_BOARD_HOST=127\.0\.0\.1$/m)
+  assert.match(
+    example,
+    /^MANGA_BOARD_GLOBAL_UNIVERSE_PATH=\/run\/manga-opportunity-board-feed\/global-universe\.json$/m,
+  )
   assert.match(example, /^MANGA_BOARD_EVENT_POLL_MS=60000$/m)
   assert.match(example, /^MANGA_BOARD_CHAIN_CATALOG_START_BLOCK=45000000$/m)
   assert.match(example, /^MANGA_BOARD_RPC_BATCH_SIZE=1$/m)
@@ -508,6 +519,10 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualWatcher, /^MemoryHigh=448M$/m)
   assert.match(dualWatcher, /^MemoryMax=512M$/m)
   for (const unit of [dualWatcher, dualArm]) {
+    assert.match(
+      unit,
+      /^Environment=MANGA_GLOBAL_UNIVERSE_PATH=\/run\/manga-opportunity-board-feed\/global-universe\.json$/m,
+    )
     assert.match(unit, /^Environment=EARN_WATCH_ENABLED=1$/m)
     assert.match(unit, /^Environment=EARN_WATCH_EVENT_POLL_MS=60000$/m)
     assert.match(unit, /^Environment=EARN_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=40000$/m)

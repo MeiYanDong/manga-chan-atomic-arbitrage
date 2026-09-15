@@ -88,6 +88,8 @@ test('global execution evidence is translated without hiding unknown race attrib
   assert.equal(globalWakeKindLabel('EVENT'), '市场事件即时触发')
   assert.equal(globalWakeKindLabel('RECOVERY'), '周期完整性扫描')
   assert.equal(globalExecutionOutcome('NO_EXACT_NET_OPPORTUNITY'), '精确报价后没有净利润过线')
+  assert.equal(globalExecutionOutcome('NO_EXECUTABLE_FUNDING'), '图上存在闭环，但当前没有可原子调用的本金')
+  assert.equal(globalExecutionOutcome('EVALUATION_INCOMPLETE_NO_SIGNATURE'), '本轮证据不完整，未签名且不能判定无机会')
   assert.equal(globalExecutionOutcome('NO_SIGNATURE_RPC_BUDGET_EXHAUSTED'), '读取额度不足，本轮未签名')
   assert.equal(globalExecutionOutcome('VALID_NON_PROFITABLE'), '有效报价均未达到净利润门槛')
   assert.equal(globalExecutionOutcome('RPC_ERROR'), '报价读取异常，不能据此判断没有机会')

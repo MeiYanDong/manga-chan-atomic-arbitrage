@@ -62,6 +62,7 @@ import {
   GLOBAL_MAX_MANAGED_CANDIDATES_PER_WAKE,
 } from '../src/global-liquidity-graph.mjs'
 import { GLOBAL_ROUTE_WORKSET_POLICY } from '../src/global-route-selection.mjs'
+import { GLOBAL_UNIVERSE_POLICY, readGlobalUniverseFile } from '../src/global-universe-projection.mjs'
 import {
   GLOBAL_EVENT_MAX_ROUTES_PER_WAKE,
   GLOBAL_FEED_MATCH_POLICY,
@@ -155,6 +156,9 @@ const DUAL_WATCH_STATE_PATH = path.join(RUN_DIR, 'dual-watch-state.json')
 const EARN_AUDIT_PATH = path.join(RUN_DIR, 'earnonhood-audit.jsonl')
 const UNIVERSAL_STATE_PATH = path.join(RUN_DIR, 'universal-state.json')
 const GLOBAL_CATALOG_PATH = path.join(RUN_DIR, 'global-catalog.json')
+const GLOBAL_UNIVERSE_PATH = RUNTIME_CONFIG.globalUniversePath
+  ? path.resolve(RUNTIME_CONFIG.globalUniversePath)
+  : path.join(RUN_DIR, 'global-universe.json')
 const SIGNED_TX_DIR = path.join(RUN_DIR, 'signed')
 
 const chain = defineChain({
@@ -1070,6 +1074,7 @@ function assertDualAuthorization(arm, deployments, { currentSignedAttempt = null
     !RUNTIME_CONFIG.globalWatchEnabled ||
     arm.global?.enabled !== true ||
     arm.global.fundingPolicy !== 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY' ||
+    arm.global.universePolicy !== GLOBAL_UNIVERSE_POLICY.version ||
     arm.global.feedPolicy !== GLOBAL_FEED_MATCH_POLICY ||
     arm.global.routeWorksetPolicy !== GLOBAL_ROUTE_WORKSET_POLICY ||
     arm.global.submissionPolicy !== 'DIRECT_SEQUENCER_THEN_SAME_RAW_MANAGED_FALLBACK' ||
@@ -2175,6 +2180,7 @@ async function armDualWatcher() {
         sourceHash: deployments.universal.state.sourceHash,
         runtimeCodeHash: deployments.universal.state.runtimeCodeHash,
         fundingPolicy: 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY',
+        universePolicy: GLOBAL_UNIVERSE_POLICY.version,
         settlementSeeds: globalSettlementSeeds(
           [GENERIC_USDG, GENERIC_WETH],
           RUNTIME_CONFIG.globalExtraSettlementAssets,
@@ -2299,6 +2305,7 @@ async function armDualWatcher() {
       global: {
         executor: arm.global.executor,
         fundingPolicy: arm.global.fundingPolicy,
+        universePolicy: arm.global.universePolicy,
         settlementPolicy: arm.global.settlementPolicy,
         settlementSeeds: arm.global.settlementSeeds,
         maximumSettlementAssetsPerWake: arm.global.maximumSettlementAssetsPerWake,
@@ -2483,15 +2490,32 @@ function reconcileSharedMutation(arm, mutation) {
 }
 
 function globalFeedWatchPolicy() {
-  return buildGlobalFeedWatchPolicy(readJson(GLOBAL_CATALOG_PATH), {
-    protocolAddresses: [EARN_VAULT, EARN_ROUTER, EARN_BATCH_ROUTER, POOL_MANAGER],
-    earnProtocolAddresses: [EARN_VAULT, EARN_ROUTER, EARN_BATCH_ROUTER],
-    settlementAddresses: globalSettlementSeeds(
-      [GENERIC_USDG, GENERIC_WETH],
-      RUNTIME_CONFIG.globalExtraSettlementAssets,
-    ),
-    ignoredAddresses: [MORPHO, V3_FACTORY],
-  })
+  const catalog = readJson(GLOBAL_CATALOG_PATH)
+  const universe = readGlobalUniverseFile(GLOBAL_UNIVERSE_PATH)
+  const currentProjection = universe.projection
+  const policy = buildGlobalFeedWatchPolicy(
+    {
+      ...catalog,
+      uniswap: {
+        ...(catalog?.uniswap || {}),
+        v4Pools: [...(catalog?.uniswap?.v4Pools || []), ...(currentProjection?.v4Pools || [])],
+      },
+    },
+    {
+      protocolAddresses: [EARN_VAULT, EARN_ROUTER, EARN_BATCH_ROUTER, POOL_MANAGER],
+      earnProtocolAddresses: [EARN_VAULT, EARN_ROUTER, EARN_BATCH_ROUTER],
+      settlementAddresses: globalSettlementSeeds(
+        [GENERIC_USDG, GENERIC_WETH],
+        RUNTIME_CONFIG.globalExtraSettlementAssets,
+      ),
+      ignoredAddresses: [MORPHO, V3_FACTORY],
+    },
+  )
+  return {
+    ...policy,
+    universeStatus: universe.status,
+    universeTopologyHash: currentProjection?.topologyHash || null,
+  }
 }
 
 function applyGlobalFeedWatchPolicy(feed) {
@@ -2579,6 +2603,8 @@ async function executeGlobalWatcherWake({
   const confirmed = result.status === 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED'
   const reverted = result.status === 'GLOBAL_EXECUTION_REVERTED_CONFIRMED'
   const budgetLimited = result.status === 'NO_SIGNATURE_RPC_BUDGET_EXHAUSTED'
+  const fundingBlocked = result.status === 'NO_EXECUTABLE_FUNDING'
+  const evaluationIncomplete = result.status === 'EVALUATION_INCOMPLETE_NO_SIGNATURE'
   const decisionClassification =
     result.decisionClassification || result.latestOpportunity?.decisionClassification || null
   const evidenceUnavailable = ['RPC_ERROR', 'STATE_UNAVAILABLE'].includes(decisionClassification)
@@ -2594,11 +2620,15 @@ async function executeGlobalWatcherWake({
         ? 'GLOBAL_EXECUTION_REVERTED_CONTINUE'
         : budgetLimited
           ? 'GLOBAL_RPC_BUDGET_LIMITED_NO_SIGNATURE'
-          : evidenceUnavailable
-            ? 'GLOBAL_EVIDENCE_UNAVAILABLE_NO_SIGNATURE'
-            : 'GLOBAL_NO_NET_OPPORTUNITY',
+          : fundingBlocked
+            ? 'GLOBAL_NO_EXECUTABLE_FUNDING'
+            : evaluationIncomplete
+              ? 'GLOBAL_EVALUATION_INCOMPLETE_NO_SIGNATURE'
+              : evidenceUnavailable
+                ? 'GLOBAL_EVIDENCE_UNAVAILABLE_NO_SIGNATURE'
+                : 'GLOBAL_NO_NET_OPPORTUNITY',
     reason:
-      budgetLimited || evidenceUnavailable
+      budgetLimited || evidenceUnavailable || evaluationIncomplete
         ? result.reason ||
           result.evaluation?.exact?.samples?.[0]?.reason ||
           result.evaluation?.discovery?.samples?.[0]?.reason
@@ -2607,7 +2637,7 @@ async function executeGlobalWatcherWake({
     lastExecutionBaseAsset: confirmed ? 'GLOBAL' : nextState.lastExecutionBaseAsset,
     global: {
       ...nextState.global,
-      status: budgetLimited ? 'DEGRADED_RPC_BUDGET' : evidenceUnavailable ? 'DEGRADED_EVIDENCE' : 'WATCHING',
+      status: budgetLimited || evaluationIncomplete || evidenceUnavailable ? 'DEGRADED_EVIDENCE' : 'WATCHING',
       lastResult: result.status,
       lastTransaction: result.transaction || nextState.global.lastTransaction,
       lastNormalizedNetProfitUsdg: result.normalizedNetProfitUsdg || null,
@@ -3828,6 +3858,7 @@ async function dualWatchStatus() {
           ? {
               executor: arm.global.executor,
               fundingPolicy: arm.global.fundingPolicy,
+              universePolicy: arm.global.universePolicy,
               settlementPolicy: arm.global.settlementPolicy,
               settlementSeeds: arm.global.settlementSeeds,
               maximumSettlementAssetsPerWake: arm.global.maximumSettlementAssetsPerWake,

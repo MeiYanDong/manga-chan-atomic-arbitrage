@@ -59,6 +59,8 @@ export function competitionStrategyLabel(strategyShape) {
 export function globalExecutionOutcome(value) {
   const labels = {
     GLOBAL_LIVE_NET_PROFIT_CONFIRMED: '已成交并核对净收益',
+    NO_EXECUTABLE_FUNDING: '图上存在闭环，但当前没有可原子调用的本金',
+    EVALUATION_INCOMPLETE_NO_SIGNATURE: '本轮证据不完整，未签名且不能判定无机会',
     NO_EXACT_NET_OPPORTUNITY: '精确报价后没有净利润过线',
     NO_SIGNATURE_RPC_BUDGET_EXHAUSTED: '读取额度不足，本轮未签名',
     RPC_ERROR_NO_SIGNATURE_OR_UNRESOLVED_MUTATION: '读取异常，本轮未签名',
@@ -304,6 +306,8 @@ export function humanStatus(status) {
     DEGRADED_BOARD: '看板数据降级',
     DEGRADED_RPC: 'RPC 降级',
     DEGRADED_EVIDENCE: '市场证据暂不可用',
+    NO_EXECUTABLE_FUNDING: '路线存在，执行资金不足',
+    EVALUATION_INCOMPLETE_NO_SIGNATURE: '本轮证据不完整',
     STOPPED: '已停止',
     HALTED: '已熔断',
     ARMED: '已授权',

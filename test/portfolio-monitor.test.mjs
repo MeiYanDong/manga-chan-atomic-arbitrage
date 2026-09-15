@@ -17,6 +17,7 @@ const baseExecutor = getAddress('0x002ccD95D1304C6fB88f67183DC1e7d1b90A577F')
 const robinhoodOperator = getAddress('0x77f771E83f118C32547A1291dda438a757B4b91B')
 const robinhoodUsdg = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
 const robinhoodWeth = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
+const robinhoodUniversal = getAddress('0xC167e650e8E3279a61d0650d963F65F768B031dA')
 const baseWeth = getAddress('0x4200000000000000000000000000000000000006')
 
 function keyed(entries) {
@@ -68,6 +69,7 @@ function fixtureClients({ failTokenFor = null } = {}) {
       tokens: [
         [robinhoodUsdg, getAddress('0x3f3A60A2da9E8D9811F41c6093280D7a90685aDD'), 35_344_393n],
         [robinhoodWeth, getAddress('0xeC6BB0511Eb7a348ad1879535F66320a51a3eDfc'), parseEther('0.0032')],
+        [robinhoodWeth, robinhoodUniversal, parseEther('0.0004')],
         [robinhoodUsdg, getAddress('0x725B7B29679dF1de5A89B2A48CA7CED178bfa506'), 10_045_402n],
         [robinhoodUsdg, getAddress('0x5eA86EAFB0F918557E1cE76E68F407568Dc2bCcd'), 5_631_216n],
       ],
@@ -99,7 +101,7 @@ function baseHeartbeat() {
   }
 }
 
-test('tracks five active and two parked accounts without hiding parked USDG', async () => {
+test('tracks six active and two parked accounts without hiding universal or parked capital', async () => {
   const snapshot = await collectPortfolioSnapshot({
     clients: fixtureClients(),
     now: new Date('2026-09-11T15:01:00.000Z'),
@@ -110,13 +112,14 @@ test('tracks five active and two parked accounts without hiding parked USDG', as
 
   assert.equal(snapshot.status, 'VERIFIED')
   assert.deepEqual(snapshot.summary, {
-    watchedObjects: 7,
-    activeObjects: 5,
+    watchedObjects: 8,
+    activeObjects: 6,
     parkedObjects: 2,
     parkedUsdg: '15.676618',
   })
   assert.equal(snapshot.networks.find((network) => network.id === 'ROBINHOOD').all.USDG, '51.021011')
-  assert.equal(snapshot.networks.find((network) => network.id === 'ROBINHOOD').all.WETH, '0.0032')
+  assert.equal(snapshot.networks.find((network) => network.id === 'ROBINHOOD').all.WETH, '0.0036')
+  assert.equal(snapshot.accounts.find((account) => account.id === 'robinhood-universal-executor').status, 'VERIFIED')
   assert.equal(snapshot.networks.find((network) => network.id === 'BASE').all.WETH, '0.003')
   assert.equal(snapshot.services.find((service) => service.id === 'base-live').routesChecked, 350)
   assert.equal(snapshot.services.find((service) => service.id === 'base-live').positiveGrossCandidates, 2)

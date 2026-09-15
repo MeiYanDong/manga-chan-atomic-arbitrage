@@ -87,6 +87,12 @@ function decimal(value, decimals) {
   return formatUnits(bigint(value), decimals)
 }
 
+function countOrNull(value) {
+  if (value === null || value === undefined) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
 function executionNetUsdgWei(record) {
   return bigint(record?.normalizedNetProfitUsdgWei ?? record?.netProfitUsdgWei)
 }
@@ -346,9 +352,27 @@ export function buildBusinessSnapshot({
             lastResult: runtime?.global?.lastResult || null,
             lastNormalizedNetProfitUsdg: runtime?.global?.lastNormalizedNetProfitUsdg || null,
             nextPeriodicAt: runtime?.global?.nextPeriodicAt || null,
-            settlementAssets: Number(
-              runtime?.global?.graph?.settlementAdmission?.admitted ?? arm.global.settlementSeeds?.length ?? 0,
+            settlementAssets: countOrNull(
+              globalWorkset?.fundedSettlementAssets ?? runtime?.global?.graph?.settlementAdmission?.admitted,
             ),
+            searchableSettlementAssets: countOrNull(
+              globalWorkset?.searchableSettlementAssets ?? runtime?.global?.graph?.routeCoverage?.length,
+            ),
+            fundedSettlementAssets: countOrNull(
+              globalWorkset?.fundedSettlementAssets ?? runtime?.global?.graph?.settlementAdmission?.admitted,
+            ),
+            fundingBlocked: typeof globalWorkset?.fundingBlocked === 'boolean' ? globalWorkset.fundingBlocked : null,
+            universe: runtime?.global?.graph?.universe
+              ? {
+                  status: runtime.global.graph.universe.status || 'UNKNOWN',
+                  selectedTargets: countOrNull(runtime.global.graph.universe.selectedTargets),
+                  selectedPools: countOrNull(runtime.global.graph.universe.selectedPools),
+                  admittedTargets: countOrNull(runtime.global.graph.universe.admittedTargets),
+                  admittedPools: countOrNull(runtime.global.graph.universe.admittedPools),
+                  capacityRejectedTargets: countOrNull(runtime.global.graph.universe.capacityRejectedTargets),
+                  safeHead: runtime.global.graph.universe.safeHead || null,
+                }
+              : null,
             managedFallbackLogicalCallsToday: Number(
               runtime?.global?.rpc?.managedFallbackBudget?.consumedLogicalCalls || 0,
             ),
@@ -371,6 +395,8 @@ export function buildBusinessSnapshot({
                   wakeKind: globalWorkset.wakeKind || null,
                   totalRoutes: Number(globalWorkset.totalRoutes || 0),
                   touchedRoutes: Number(globalWorkset.touchedRoutes || 0),
+                  searchableRoutes: Number(globalWorkset.searchableRoutes || 0),
+                  fundedRoutes: Number(globalWorkset.fundedRoutes || 0),
                   selectedRoutes: Number(globalWorkset.selectedRoutes || 0),
                 }
               : null,
