@@ -15,7 +15,7 @@ export const ROBINHOOD_PARTIAL_CATALOG_RETENTION_POLICY = Object.freeze({
   maximumAgeMs: 6 * 60 * 60 * 1_000,
 })
 export const ROBINHOOD_CATALOG_MULTICALL_POLICY = Object.freeze({
-  version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_PACED_RETRY_V2',
+  version: 'CANONICAL_MULTICALL3_FIXED_BLOCK_NORMALIZED_RETRY_V3',
   maximumSubcallsPerRequest: 12,
   concurrency: 1,
   maximumAttempts: 3,
@@ -135,6 +135,22 @@ function rpcFailure(error) {
   return { error: `PUBLIC_RPC_${rpcClass}`, rpcClass }
 }
 
+function normalizedTransientAggregateError(results) {
+  if (results.length === 0 || !results.every((result) => result?.status === 'failure')) return null
+  const classes = results.map((result) => classifyRpcError(result.error))
+  const transientClasses = [RpcErrorClass.NETWORK, RpcErrorClass.THROTTLED, RpcErrorClass.STATE_NOT_READY]
+  if (!classes.every((rpcClass) => transientClasses.includes(rpcClass))) return null
+  const rpcClass = classes.includes(RpcErrorClass.THROTTLED)
+    ? RpcErrorClass.THROTTLED
+    : classes.includes(RpcErrorClass.STATE_NOT_READY)
+      ? RpcErrorClass.STATE_NOT_READY
+      : RpcErrorClass.NETWORK
+  return Object.assign(new Error('canonical Multicall3 returned an all-transient failure array'), {
+    rpcClass,
+    multicallFailureShape: 'ALL_SUBCALLS_TRANSIENT',
+  })
+}
+
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
@@ -164,6 +180,7 @@ async function boundedFixedBlockMulticall(client, contracts, blockNumber, option
   let requests = 0
   let retries = 0
   let transientFailures = 0
+  let embeddedTransientBatches = 0
   for (
     let offset = 0;
     offset < contracts.length;
@@ -187,6 +204,8 @@ async function boundedFixedBlockMulticall(client, contracts, blockNumber, option
         if (!Array.isArray(chunkResults) || chunkResults.length !== chunk.length) {
           throw new Error('canonical Multicall3 result count mismatch')
         }
+        const normalizedError = normalizedTransientAggregateError(chunkResults)
+        if (normalizedError) throw normalizedError
         resolved = chunkResults
         break
       } catch (error) {
@@ -194,6 +213,7 @@ async function boundedFixedBlockMulticall(client, contracts, blockNumber, option
           classifyRpcError(error),
         )
         if (transient) transientFailures += 1
+        if (error?.multicallFailureShape === 'ALL_SUBCALLS_TRANSIENT') embeddedTransientBatches += 1
         if (!transient || attempt === options.maximumAttempts) {
           resolved = chunk.map(() => ({ status: 'failure', error }))
           break
@@ -205,7 +225,7 @@ async function boundedFixedBlockMulticall(client, contracts, blockNumber, option
     }
     results.push(...resolved)
   }
-  return { results, requests, retries, transientFailures }
+  return { results, requests, retries, transientFailures, embeddedTransientBatches }
 }
 
 async function verifiedMulticallCodeHash(client, blockNumber, options) {
@@ -618,6 +638,11 @@ export async function loadRobinhoodHubUniswapCatalog(client, assetAddresses, blo
           v2StateRead.transientFailures +
           v3FactoryRead.transientFailures +
           v3StateRead.transientFailures,
+        embeddedTransientBatches:
+          v2FactoryRead.embeddedTransientBatches +
+          v2StateRead.embeddedTransientBatches +
+          v3FactoryRead.embeddedTransientBatches +
+          v3StateRead.embeddedTransientBatches,
         subcalls: pairs.length + v2Candidates.length + v3Queries.length + v3Candidates.length,
       },
     },

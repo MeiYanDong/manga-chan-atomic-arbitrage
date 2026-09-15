@@ -179,7 +179,10 @@ pool-state reads use the canonical Multicall3 contract at one fixed block, after
 by the canonical Earn catalog read. The slow lane submits at most 12 logical subcalls per sequential official-public
 RPC request, enforces a 250 ms minimum start interval and retries only `NETWORK`, `THROTTLED` or `STATE_NOT_READY`
 aggregate failures, with three total attempts and 750/1500 ms backoff. It records request, retry, transient-failure and
-subcall counts. Schema-v4 readers reject a mismatched code hash, policy drift or impossible count. Catalog failures
+subcall counts. Because viem can represent one failed aggregate as an ordered all-failure array under `allowFailure`,
+the reader promotes that array only when every subcall class is transient and records an embedded-batch counter. Mixed
+or invariant arrays remain per-subcall evidence and do not retry. Schema-v4 readers reject a mismatched code hash,
+policy drift or impossible count. Catalog failures
 persist only typed classes, never provider URLs, request bodies or calldata. A
 malformed evidence record is not a valid cache. Both resident discovery and the live signer child are strictly
 cache-only; broad factory reads never enter their 60-second deadline. `manga-global-catalog.timer` runs the sole writer
