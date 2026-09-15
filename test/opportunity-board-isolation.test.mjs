@@ -481,6 +481,8 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const globalDeploy = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-global-deploy.service'), 'utf8')
   const criticalHealth = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-critical-health.service'), 'utf8')
   const criticalTimer = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-critical-health.timer'), 'utf8')
+  const globalCatalog = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-global-catalog.service'), 'utf8')
+  const globalCatalogTimer = fs.readFileSync(path.join(root, 'deploy', 'systemd', 'manga-global-catalog.timer'), 'utf8')
 
   for (const unit of [watcher, arm, deploy, dualWatcher, dualArm, wethDeploy, globalDeploy]) {
     assert.match(unit, /^User=manga-chan-arb$/m)
@@ -519,6 +521,7 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(dualWatcher, /^Restart=on-failure$/m)
   assert.match(dualWatcher, /^RestartPreventExitStatus=70 71 72$/m)
   assert.match(dualWatcher, /^Environment=GLOBAL_WATCH_CHILD_TIMEOUT_MS=60000$/m)
+  assert.match(dualWatcher, /^Environment=GLOBAL_SEARCH_READONLY_CATALOG=1$/m)
   assert.match(dualWatcher, /^Environment=EARN_WATCH_CHILD_TIMEOUT_MS=60000$/m)
   assert.match(dualWatcher, /^Environment=NODE_OPTIONS=--max-old-space-size=320$/m)
   assert.match(dualWatcher, /^MemoryHigh=448M$/m)
@@ -569,6 +572,26 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   assert.match(criticalTimer, /^Unit=manga-critical-health\.service$/m)
   assert.match(installer, /manga-critical-health\.service/)
   assert.match(installer, /manga-critical-health\.timer/)
+  assert.match(globalCatalog, /^Type=oneshot$/m)
+  assert.match(globalCatalog, /^User=manga-chan-arb$/m)
+  assert.match(globalCatalog, /^EnvironmentFile=-\/etc\/manga-chan-arbitrage\/catalog\.env$/m)
+  assert.match(globalCatalog, /^Environment=MANGA_CONFIG_FILE=\/etc\/manga-chan-arbitrage\/catalog\.env$/m)
+  assert.match(globalCatalog, /^Environment=MANGA_RPC_URL=https:\/\/rpc\.mainnet\.chain\.robinhood\.com$/m)
+  assert.match(
+    globalCatalog,
+    /^ExecStart=\/usr\/bin\/env GLOBAL_CATALOG_REFRESH_ALLOWED=1 node scripts\/global-arb\.mjs catalog-refresh$/m,
+  )
+  assert.match(globalCatalog, /^TimeoutStartSec=6min$/m)
+  assert.match(globalCatalog, /^ReadWritePaths=\/var\/lib\/manga-chan-arbitrage$/m)
+  assert.doesNotMatch(globalCatalog, /EnvironmentFile=\/etc\/manga-chan-arbitrage\/live\.env/)
+  assert.doesNotMatch(globalCatalog, /LoadCredential|MANGA_PRIVATE_KEY|MANGA_WS_URL/)
+  assert.match(globalCatalogTimer, /^OnUnitInactiveSec=15min$/m)
+  assert.match(globalCatalogTimer, /^Persistent=true$/m)
+  assert.match(globalCatalogTimer, /^Unit=manga-global-catalog\.service$/m)
+  assert.match(installer, /manga-global-catalog\.service/)
+  assert.match(installer, /manga-global-catalog\.timer/)
+  assert.match(installer, /\$1 == "GLOBAL_EXTRA_SETTLEMENT_ASSETS"/)
+  assert.doesNotMatch(installer, /\$1 == "MANGA_(?:RPC_URL|WS_URL|PRIVATE_KEY_FILE)"/)
 
   const dualSource = fs.readFileSync(path.join(root, 'scripts', 'dual-base-arb.mjs'), 'utf8')
   const dualArmSource = dualSource.slice(
@@ -749,6 +772,14 @@ test('generic and dual systemd services isolate the board and mutually exclude s
   const globalCatalogRefreshEnd = globalSource.indexOf('function readGlobalUniverseState', globalCatalogRefreshStart)
   const globalCatalogRefresh = globalSource.slice(globalCatalogRefreshStart, globalCatalogRefreshEnd)
   assert.doesNotMatch(globalCatalogRefresh, /universeAssets|additionalV4Pools/)
+  const globalGraphLoadStart = globalSource.indexOf('async function loadGlobalGraph')
+  const globalGraphLoadEnd = globalSource.indexOf('async function catalogRefresh', globalGraphLoadStart)
+  const globalGraphLoad = globalSource.slice(globalGraphLoadStart, globalGraphLoadEnd)
+  assert.doesNotMatch(globalGraphLoad, /refreshGlobalCatalog\(/)
+  assert.match(globalGraphLoad, /dedicated catalog maintenance must refresh it/)
+  assert.match(globalSource, /assertGlobalCatalogMaintenanceBoundary\(\)/)
+  assert.match(globalSource, /acquireLock\(GLOBAL_CATALOG_LOCK_PATH, 'global-catalog-maintenance'\)/)
+  assert.match(dualSource, /GLOBAL_SEARCH_READONLY_CATALOG: '1'/)
   const globalPreflightStart = globalSource.indexOf('async function globalPreflight')
   const globalPreflightEnd = globalSource.indexOf('async function deployPreflight', globalPreflightStart)
   assert.doesNotMatch(

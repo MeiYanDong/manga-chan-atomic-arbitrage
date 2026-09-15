@@ -175,9 +175,25 @@ Earn topology, Earn-asset-to-USDG/WETH V2/V3 reads and only the reviewed V4 boot
 merged in memory for that search round; never persist its assets or pools back into `global-catalog.json`. Otherwise an
 old rotation can consume the next rotation's bounded capacity and can amplify V2/V3 discovery into an unbounded
 long-tail RPC fanout. Every base refresh records requested-call and transport-failure counts. A malformed evidence
-record is not a valid cache; a transport-partial catalog remains readable by the signer-free worker but the sole writer
-retries it after five minutes. Until a complete read exists, a negative result stays evidence-partial and must not be
-reported as proven no-profit.
+record is not a valid cache. Both resident discovery and the live signer child are strictly cache-only; broad factory
+reads never enter their 60-second deadline. `manga-global-catalog.timer` runs the sole writer every 15 minutes as a
+credential-free one-shot against the official public RPC. It receives neither `live.env`, the managed endpoint, WSS,
+the private key nor a live arm. A transport-partial snapshot remains readable until replaced, but its negative results
+stay evidence-partial and must not be reported as proven no-profit. A missing, malformed or six-hour-stale snapshot
+degrades only Global until maintenance publishes a valid atomic replacement; it must not stop Earn or cause a search
+child to refresh inline.
+
+The catalog service has a six-minute process deadline, an exclusive `global-catalog.lock`, a 384 MiB cgroup ceiling and
+shared-host CPU de-prioritization. The release installer copies only `GLOBAL_EXTRA_SETTLEMENT_ASSETS` into the separate
+`catalog.env`; it never gives the service authenticated transport or signing settings. Enable and verify it alongside
+the live watcher:
+
+```bash
+sudo systemctl enable --now manga-global-catalog.timer
+sudo systemctl start manga-global-catalog.service
+sudo systemctl --no-pager --full status manga-global-catalog.service manga-global-catalog.timer
+sudo journalctl -u manga-global-catalog.service -n 30 --no-pager
+```
 
 The global route set includes both same-venue and cross-venue simple cycles. A route still must close in the same
 settlement asset, use two to four distinct pools, avoid repeated intermediate assets, fit the per-wake route budget and
@@ -221,11 +237,11 @@ executor while the first deployment mutation is unresolved.
 The Global event lane starts one credential-stripped resident search child before the serial signer scheduler. Its
 environment has no signing authorization, managed endpoint or live arm; it uses only the official public reader and
 keeps at most one request in flight. A complete negative result can suppress an identical queued read, but a positive
-result is only a hint and always returns through the existing latest-block signer gates. The worker never writes or
-refreshes `global-catalog.json`: a missing, malformed or six-hour-stale catalog returns that wake to the bounded legacy
-child, which remains the sole catalog writer. A transport-partial cache follows the same path after its five-minute
-writer retry interval; the read-only worker may use the best current partial graph but cannot upgrade its negative
-result to complete evidence. Worker crash, timeout or protocol failure degrades that request only.
+result is only a hint and always returns through the existing latest-block signer gates. Neither the worker nor its
+bounded live fallback child writes or refreshes `global-catalog.json`; both consume the same atomic snapshot. Missing,
+malformed or stale catalog evidence degrades that Global request while the dedicated maintenance timer repairs the
+slow lane. A partial cache remains usable but cannot upgrade its negative result to complete evidence. Worker crash,
+timeout or protocol failure degrades that request only.
 The worker accepts exact dependency wakes from the shared Sequencer Feed, the already-running canonical Earn Vault WSS
 subscription and the existing public Earn-log backstop. Earn events are projected as changed pool addresses and can
 therefore wake same-Earn or cross-protocol routes in the unified graph. This fan-out performs no extra source request and

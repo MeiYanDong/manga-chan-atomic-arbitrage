@@ -2435,6 +2435,10 @@ function runGlobalShared(arm, signal, wakeReason, scheduling = {}) {
     'global-arb.mjs',
     'execute',
     {
+      // Broad topology refresh is a separate signer-free slow lane. A live
+      // child may consume the last atomic catalog snapshot but must never let
+      // public factory fanout enter its 60-second execution deadline.
+      GLOBAL_SEARCH_READONLY_CATALOG: '1',
       GLOBAL_SHARED_AUTHORIZATION_ID: arm.authorizationId,
       GLOBAL_SHARED_WATCH_PID: String(process.pid),
       GLOBAL_WAKE_RECEIVED_AT: signal?.receivedAt || signal?.sourceReceivedAt || '',

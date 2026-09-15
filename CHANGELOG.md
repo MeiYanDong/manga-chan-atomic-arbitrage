@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Remove broad Global factory discovery from every latency-critical search and signing process. A dedicated
+  credential-free systemd one-shot now refreshes the atomic base-catalog snapshot from the official public RPC every
+  15 minutes, under its own lock, six-minute deadline and shared-host resource bounds. Live and resident search paths
+  are cache-only: an absent or six-hour-stale snapshot degrades Global evidence without blocking Earn or entering the
+  60-second signer deadline. The maintenance unit receives no private key, managed RPC, WSS or live authorization;
+  this changes no capital, Gas, profit, quote, simulation, nonce, submission or receipt gate.
 - Keep the rotating board-derived V4 universe as a current search overlay instead of persisting it into the six-hour
   Earn/Uniswap base catalog. A later rotation can no longer consume current graph capacity or make already-present
   PoolKeys look rejected. Bound V2/V3 factory reads to Earn assets and settlement hubs, attach validated transport

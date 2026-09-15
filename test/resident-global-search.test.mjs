@@ -5,6 +5,8 @@ import { PassThrough, Writable } from 'node:stream'
 import test from 'node:test'
 
 import {
+  GLOBAL_CATALOG_MAINTENANCE_POLICY,
+  assertGlobalCatalogMaintenanceBoundary,
   buildGlobalSearchWorkerEnvironment,
   classifyGlobalCatalogAccess,
   classifyGlobalSearchHandoff,
@@ -17,7 +19,7 @@ const POOL_A = '0x000000000000000000000000000000000000000a'
 const POOL_B = '0x000000000000000000000000000000000000000b'
 const POOL_C = '0x000000000000000000000000000000000000000c'
 
-test('catalog access keeps legacy refresh as the only writer', () => {
+test('catalog access keeps every search path on the last atomic maintenance snapshot', () => {
   const now = Date.parse('2026-09-15T00:00:00.000Z')
   const topology = {
     earn: { pools: [] },
@@ -37,7 +39,7 @@ test('catalog access keeps legacy refresh as the only writer', () => {
   }
   const fresh = { schemaVersion: 1, generatedAt: '2026-09-14T23:59:00.000Z', ...topology }
   const stale = { schemaVersion: 1, generatedAt: '2026-09-14T17:59:59.999Z', ...topology }
-  assert.equal(classifyGlobalCatalogAccess(fresh, { readOnly: true, now }), 'CACHE')
+  assert.equal(classifyGlobalCatalogAccess(fresh, { now }), 'CACHE')
   assert.equal(
     classifyGlobalCatalogAccess(
       {
@@ -55,7 +57,7 @@ test('catalog access keeps legacy refresh as the only writer', () => {
           },
         },
       },
-      { readOnly: true, now },
+      { now },
     ),
     'CACHE',
   )
@@ -76,14 +78,13 @@ test('catalog access keeps legacy refresh as the only writer', () => {
           },
         },
       },
-      { readOnly: false, now },
+      { now },
     ),
-    'REFRESH',
+    'CACHE',
   )
-  assert.equal(classifyGlobalCatalogAccess(stale, { readOnly: true, now }), 'UNAVAILABLE')
-  assert.equal(classifyGlobalCatalogAccess(stale, { readOnly: false, now }), 'REFRESH')
+  assert.equal(classifyGlobalCatalogAccess(stale, { now }), 'UNAVAILABLE')
   assert.equal(
-    classifyGlobalCatalogAccess({ schemaVersion: 1, generatedAt: '2026-09-14T23:59:00.000Z' }, { readOnly: true, now }),
+    classifyGlobalCatalogAccess({ schemaVersion: 1, generatedAt: '2026-09-14T23:59:00.000Z' }, { now }),
     'UNAVAILABLE',
   )
   assert.equal(
@@ -94,7 +95,7 @@ test('catalog access keeps legacy refresh as the only writer', () => {
         earn: { pools: [] },
         uniswap: { v2Pools: [], v3Pools: [], v4Pools: [] },
       },
-      { readOnly: true, now },
+      { now },
     ),
     'UNAVAILABLE',
   )
@@ -114,11 +115,28 @@ test('catalog access keeps legacy refresh as the only writer', () => {
           },
         },
       },
-      { readOnly: true, now },
+      { now },
     ),
     'UNAVAILABLE',
   )
-  assert.equal(classifyGlobalCatalogAccess(null, { readOnly: true, now }), 'UNAVAILABLE')
+  assert.equal(classifyGlobalCatalogAccess(null, { now }), 'UNAVAILABLE')
+  assert.deepEqual(GLOBAL_CATALOG_MAINTENANCE_POLICY, {
+    version: 'SIGNER_FREE_PUBLIC_CATALOG_MAINTENANCE_V1',
+    refreshIntervalMs: 15 * 60 * 1_000,
+    maximumAgeMs: 6 * 60 * 60 * 1_000,
+    writer: 'DEDICATED_SYSTEMD_ONESHOT',
+    readPath: 'ATOMIC_CACHE_ONLY',
+    rpc: 'OFFICIAL_PUBLIC_ONLY',
+  })
+})
+
+test('catalog writer requires an explicit maintenance process boundary', () => {
+  assert.throws(() => assertGlobalCatalogMaintenanceBoundary({}), /explicit maintenance command boundary/)
+  assert.throws(
+    () => assertGlobalCatalogMaintenanceBoundary({ GLOBAL_CATALOG_REFRESH_ALLOWED: 'true' }),
+    /explicit maintenance command boundary/,
+  )
+  assert.doesNotThrow(() => assertGlobalCatalogMaintenanceBoundary({ GLOBAL_CATALOG_REFRESH_ALLOWED: '1' }))
 })
 
 test('resident worker entrypoint has no mutation command and disables preflight persistence', () => {

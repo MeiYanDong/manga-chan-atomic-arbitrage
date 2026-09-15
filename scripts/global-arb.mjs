@@ -91,7 +91,7 @@ import {
 } from '../src/policy.mjs'
 import { publicFirstRpcTransport } from '../src/public-first-rpc.mjs'
 import { RpcEvidence, instrumentRpcTransport, withRpcEvidence } from '../src/rpc-evidence.mjs'
-import { classifyGlobalCatalogAccess } from '../src/resident-global-search.mjs'
+import { assertGlobalCatalogMaintenanceBoundary, classifyGlobalCatalogAccess } from '../src/resident-global-search.mjs'
 import { loadRobinhoodHubUniswapCatalog, ROBINHOOD_USDG, ROBINHOOD_WETH } from '../src/robinhood-uniswap-catalog.mjs'
 import {
   GLOBAL_UNIVERSE_POLICY,
@@ -127,6 +127,7 @@ const STATE_PATH = path.join(RUN_DIR, 'universal-state.json')
 const AUDIT_PATH = path.join(RUN_DIR, 'audit.jsonl')
 const GLOBAL_SNAPSHOT_PATH = path.join(RUN_DIR, 'global-opportunity.json')
 const GLOBAL_CATALOG_PATH = path.join(RUN_DIR, 'global-catalog.json')
+const GLOBAL_CATALOG_LOCK_PATH = path.join(RUN_DIR, 'global-catalog.lock')
 const GLOBAL_RPC_BUDGET_PATH = path.join(RUN_DIR, 'global-rpc-fallback-budget.json')
 const GLOBAL_UNIVERSE_PATH = runtime.globalUniversePath
   ? path.resolve(runtime.globalUniversePath)
@@ -504,17 +505,19 @@ function readGlobalUniverseState() {
   }
 }
 
-async function loadGlobalGraph(blockNumber) {
+async function loadGlobalGraph() {
   const cached = readJson(GLOBAL_CATALOG_PATH)
-  const catalogAccess = classifyGlobalCatalogAccess(cached, {
-    readOnly: process.env.GLOBAL_SEARCH_READONLY_CATALOG === '1',
-  })
+  const catalogAccess = classifyGlobalCatalogAccess(cached)
   if (catalogAccess === 'UNAVAILABLE') {
-    const error = new Error('resident global search catalog is missing or stale; legacy refresh required')
+    const error = new Error('global search catalog is missing or stale; dedicated catalog maintenance must refresh it')
     error.rpcClass = RpcErrorClass.STATE_NOT_READY
     throw error
   }
-  const source = catalogAccess === 'CACHE' ? cached : await refreshGlobalCatalog(blockNumber)
+  // Search and execution are latency-critical, credential-bearing paths. They
+  // consume only an atomically published catalog and never perform broad
+  // factory discovery. The dedicated signer-free maintenance service is the
+  // sole writer.
+  const source = cached
   const { earn } = source
   const universeState = readGlobalUniverseState()
   const merged = universeState.projection
@@ -545,22 +548,28 @@ async function loadGlobalGraph(blockNumber) {
 }
 
 async function catalogRefresh() {
-  const block = await discoveryClient.getBlock()
-  const { earn, uniswap, universe } = await refreshGlobalCatalog(block.number)
-  const output = {
-    status: 'GLOBAL_CATALOG_REFRESHED',
-    evidence: 'CANONICAL_EARN_FACTORY_VAULT_AND_UNISWAP_FACTORY_READS',
-    blockNumber: block.number,
-    earnPools: earn.pools.length,
-    v2Pools: uniswap.v2Pools.length,
-    v3Pools: uniswap.v3Pools.length,
-    v4Pools: uniswap.v4Pools.length,
-    coverage: uniswap.coverage,
-    readEvidence: uniswap.readEvidence,
-    universe,
+  assertGlobalCatalogMaintenanceBoundary()
+  const release = acquireLock(GLOBAL_CATALOG_LOCK_PATH, 'global-catalog-maintenance')
+  try {
+    const block = await discoveryClient.getBlock()
+    const { earn, uniswap, universe } = await refreshGlobalCatalog(block.number)
+    const output = {
+      status: 'GLOBAL_CATALOG_REFRESHED',
+      evidence: 'CANONICAL_EARN_FACTORY_VAULT_AND_UNISWAP_FACTORY_READS',
+      blockNumber: block.number,
+      earnPools: earn.pools.length,
+      v2Pools: uniswap.v2Pools.length,
+      v3Pools: uniswap.v3Pools.length,
+      v4Pools: uniswap.v4Pools.length,
+      coverage: uniswap.coverage,
+      readEvidence: uniswap.readEvidence,
+      universe,
+    }
+    console.log(stringify(output))
+    return output
+  } finally {
+    release()
   }
-  console.log(stringify(output))
-  return output
 }
 
 function executionFunctionName(fundingMode) {
@@ -912,7 +921,7 @@ function selectRouteDefinitions(graph, settlementToken, blockNumber) {
 
 async function discoverExactCandidates({ client = discoveryClient, deployment, block, lifecycle, rpcEvidence }) {
   const { earn, uniswap, graph, universe } = await withRpcEvidence(rpcEvidence, 'CATALOG_GRAPH', () =>
-    loadGlobalGraph(block.number),
+    loadGlobalGraph(),
   )
   lifecycle.setVersions({
     catalogVersion: `EARN:${earn.blockNumber || 'UNKNOWN'}|UNISWAP:${uniswap.blockNumber || 'UNKNOWN'}|UNIVERSE:${universe.topologyHash || 'BASE_ONLY'}`,
