@@ -31,6 +31,57 @@ export function globalSettlementSeeds(defaults, extraCsv = '') {
 // policy semantics explicit in all live code.
 export const globalSettlementAssets = globalSettlementSeeds
 
+/**
+ * Search roots are a topology concern, not a custody decision. Keep the
+ * configured settlement seeds visible even when the universal executor has no
+ * current inventory or flash liquidity; funded dynamic assets are added under
+ * the existing admission bound.
+ */
+export function selectSettlementSearchRoots(graph, { seeds = [], admitted = [] } = {}) {
+  if (!(graph?.assets instanceof Map)) throw new Error('settlement search roots require a unified graph')
+  const roots = new Map()
+  for (const value of seeds) {
+    const token = getAddress(value)
+    if (graph.assets.has(key(token))) roots.set(key(token), token)
+  }
+  for (const profile of admitted) {
+    const token = getAddress(profile?.token)
+    if (!graph.assets.has(key(token))) throw new Error('funded settlement asset is absent from the graph')
+    roots.set(key(token), token)
+  }
+  return [...roots.values()]
+}
+
+export function classifyGlobalSearchReadiness(input) {
+  const searchableRouteCount = Number(input?.searchableRouteCount)
+  const fundedCount = Number(input?.fundedCount)
+  const evaluationValid = Number(input?.evaluationValid)
+  if (![searchableRouteCount, fundedCount, evaluationValid].every(Number.isSafeInteger)) {
+    throw new Error('global search readiness counts are invalid')
+  }
+  const selected = input?.selected === true
+  const evaluationCoverage = String(input?.evaluationCoverage || '')
+  const fundingBlocked =
+    !selected && searchableRouteCount > 0 && fundedCount === 0 && input?.fundingEvidenceComplete === true
+  const evaluationIncomplete =
+    !selected &&
+    !fundingBlocked &&
+    evaluationValid === 0 &&
+    ['EMPTY', 'UNAVAILABLE', 'PARTIAL'].includes(evaluationCoverage)
+  return {
+    status: selected
+      ? 'EXACT_NET_POSITIVE'
+      : fundingBlocked
+        ? 'NO_EXECUTABLE_FUNDING'
+        : evaluationIncomplete
+          ? 'EVALUATION_INCOMPLETE_NO_SIGNATURE'
+          : 'NO_EXACT_NET_OPPORTUNITY',
+    evidenceCoverage: fundingBlocked || evaluationIncomplete ? 'PARTIAL' : evaluationCoverage,
+    fundingBlocked,
+    evaluationIncomplete,
+  }
+}
+
 export function assessSettlementFunding(candidate, evidence) {
   const decimals = Number(evidence?.decimals)
   if (!Number.isSafeInteger(decimals) || decimals < 0 || decimals > 36) {

@@ -165,7 +165,7 @@ function fixture() {
       schemaVersion: 1,
       generatedAt: '2026-09-08T03:00:00.000Z',
       status: 'VERIFIED',
-      summary: { watchedObjects: 7, activeObjects: 5, parkedObjects: 2, parkedUsdg: '15.676618' },
+      summary: { watchedObjects: 8, activeObjects: 6, parkedObjects: 2, parkedUsdg: '15.676618' },
       services: [],
       networks: [],
       accounts: [],
@@ -235,7 +235,7 @@ test('builds receipt-gated business results and compounds only authorized profit
     { asset: 'USDG', profit: '3', cost: '0', net: '3' },
     { asset: 'WETH', profit: '0.0001', cost: '0', net: '0.0001' },
   ])
-  assert.equal(snapshot.portfolio.summary.watchedObjects, 7)
+  assert.equal(snapshot.portfolio.summary.watchedObjects, 8)
   assert.doesNotMatch(JSON.stringify(snapshot), /active-dual-authorization/)
 })
 
@@ -297,10 +297,31 @@ test('includes only receipt-gated universal executions in the operating totals',
   input.runtime.global = {
     status: 'WATCHING',
     lastResult: 'GLOBAL_LIVE_NET_PROFIT_CONFIRMED',
-    graph: { settlementAdmission: { admitted: 0 } },
+    graph: {
+      settlementAdmission: { admitted: 1 },
+      universe: {
+        status: 'CURRENT',
+        selectedTargets: 128,
+        selectedPools: 256,
+        admittedTargets: 120,
+        admittedPools: 240,
+        capacityRejectedTargets: 8,
+        safeHead: '12345678',
+      },
+    },
     feed: { frames: 1_200, wakes: 80, filtered: 1_120 },
     coalescedFeedWakes: 9,
-    workset: { wakeKind: 'EVENT', totalRoutes: 12_091, touchedRoutes: 14, selectedRoutes: 8 },
+    workset: {
+      wakeKind: 'EVENT',
+      totalRoutes: 12_091,
+      touchedRoutes: 14,
+      searchableRoutes: 240,
+      fundedRoutes: 8,
+      selectedRoutes: 8,
+      searchableSettlementAssets: 2,
+      fundedSettlementAssets: 1,
+      fundingBlocked: false,
+    },
     timing: { sourceToDecisionMs: 1_234 },
     rpc: { managedFallbackBudget: { consumedLogicalCalls: 432 } },
     decisionClassification: 'VALID_NON_PROFITABLE',
@@ -332,7 +353,19 @@ test('includes only receipt-gated universal executions in the operating totals',
     snapshot.economics.today.confirmedExecutions,
   )
   assert.equal(snapshot.strategy.global.confirmedExecutions, 1)
-  assert.equal(snapshot.strategy.global.settlementAssets, 0)
+  assert.equal(snapshot.strategy.global.settlementAssets, 1)
+  assert.equal(snapshot.strategy.global.searchableSettlementAssets, 2)
+  assert.equal(snapshot.strategy.global.fundedSettlementAssets, 1)
+  assert.equal(snapshot.strategy.global.fundingBlocked, false)
+  assert.deepEqual(snapshot.strategy.global.universe, {
+    status: 'CURRENT',
+    selectedTargets: 128,
+    selectedPools: 256,
+    admittedTargets: 120,
+    admittedPools: 240,
+    capacityRejectedTargets: 8,
+    safeHead: '12345678',
+  })
   assert.equal(snapshot.strategy.global.managedFallbackLogicalCallsToday, 432)
   assert.equal(snapshot.strategy.global.managedFallbackDailyLogicalCallCap, 20_000)
   assert.deepEqual(snapshot.strategy.global.executionFunnel, {
@@ -349,6 +382,8 @@ test('includes only receipt-gated universal executions in the operating totals',
     wakeKind: 'EVENT',
     totalRoutes: 12_091,
     touchedRoutes: 14,
+    searchableRoutes: 240,
+    fundedRoutes: 8,
     selectedRoutes: 8,
   })
   assert.equal(snapshot.strategy.global.latestDecisionLatencyMs, 1_234)

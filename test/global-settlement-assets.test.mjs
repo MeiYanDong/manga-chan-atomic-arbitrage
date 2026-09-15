@@ -3,10 +3,12 @@ import test from 'node:test'
 
 import {
   assessSettlementFunding,
+  classifyGlobalSearchReadiness,
   enumerateV3ValuationRoutes,
   GLOBAL_SETTLEMENT_ADMISSION_POLICY,
   globalSettlementSeeds,
   rankDynamicSettlementCandidates,
+  selectSettlementSearchRoots,
   selectSettlementFundingCandidates,
 } from '../src/global-settlement-assets.mjs'
 import { buildUnifiedLiquidityGraph } from '../src/global-liquidity-graph.mjs'
@@ -159,4 +161,63 @@ test('event funding checks cover only seeds and touched assets while recovery ro
   assert.equal(recovery.candidates.length, 4)
   assert.equal(recovery.admissionScope, 'ROTATING_GRAPH_RECOVERY')
   assert.equal(recovery.deferred, 1)
+})
+
+test('search roots retain graph-present seeds independently from atomic funding', () => {
+  const graph = buildUnifiedLiquidityGraph({
+    v3Pools: [
+      {
+        address: '0x0000000000000000000000000000000000000021',
+        token0: USDG,
+        token1: WETH,
+        fee: 100,
+      },
+    ],
+  })
+  assert.deepEqual(selectSettlementSearchRoots(graph, { seeds: [USDG, WETH], admitted: [] }), [USDG, WETH])
+  assert.throws(
+    () => selectSettlementSearchRoots(graph, { seeds: [USDG, WETH], admitted: [{ token: EXTRA }] }),
+    /absent from the graph/,
+  )
+})
+
+test('readiness never turns a funding block or incomplete evidence into no-profit', () => {
+  assert.deepEqual(
+    classifyGlobalSearchReadiness({
+      selected: false,
+      searchableRouteCount: 12,
+      fundedCount: 0,
+      fundingEvidenceComplete: true,
+      evaluationValid: 0,
+      evaluationCoverage: 'COMPLETE',
+    }),
+    {
+      status: 'NO_EXECUTABLE_FUNDING',
+      evidenceCoverage: 'PARTIAL',
+      fundingBlocked: true,
+      evaluationIncomplete: false,
+    },
+  )
+  assert.equal(
+    classifyGlobalSearchReadiness({
+      selected: false,
+      searchableRouteCount: 12,
+      fundedCount: 0,
+      fundingEvidenceComplete: false,
+      evaluationValid: 0,
+      evaluationCoverage: 'UNAVAILABLE',
+    }).status,
+    'EVALUATION_INCOMPLETE_NO_SIGNATURE',
+  )
+  assert.equal(
+    classifyGlobalSearchReadiness({
+      selected: false,
+      searchableRouteCount: 12,
+      fundedCount: 1,
+      fundingEvidenceComplete: true,
+      evaluationValid: 1,
+      evaluationCoverage: 'COMPLETE',
+    }).status,
+    'NO_EXACT_NET_OPPORTUNITY',
+  )
 })

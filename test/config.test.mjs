@@ -44,6 +44,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
       'GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP=12345',
       'GLOBAL_WATCH_CHILD_TIMEOUT_MS=45000',
       'EARN_WATCH_CHILD_TIMEOUT_MS=55000',
+      'MANGA_GLOBAL_UNIVERSE_PATH=/run/example/global-universe.json',
       'GLOBAL_LIVE_ARM=0',
     ].join('\n'),
     { mode: 0o600 },
@@ -83,6 +84,7 @@ test('strategy config reads only explicit MANGA keys', (context) => {
   assert.equal(config.globalManagedFallbackDailyLogicalCallCap, 12_345)
   assert.equal(config.globalWatchChildTimeoutMs, 45_000)
   assert.equal(config.earnWatchChildTimeoutMs, 55_000)
+  assert.equal(config.globalUniversePath, '/run/example/global-universe.json')
   assert.doesNotThrow(() => assertLiveTransport(config, { requireWss: true }))
 })
 

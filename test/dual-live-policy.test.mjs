@@ -29,6 +29,7 @@ import {
 import { EARN_ROUTE_DISCOVERY_POLICY, maximumEarnPublicExactQuotes } from '../src/earnonhood-routes.mjs'
 import { GLOBAL_ATOMIC_ROUTE_POLICY, GLOBAL_GRAPH_POLICY } from '../src/global-liquidity-graph.mjs'
 import { GLOBAL_ROUTE_WORKSET_POLICY } from '../src/global-route-selection.mjs'
+import { GLOBAL_UNIVERSE_POLICY } from '../src/global-universe-projection.mjs'
 import {
   GLOBAL_MAX_SETTLEMENT_ASSETS_PER_WAKE,
   GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
@@ -105,6 +106,7 @@ function arm(overrides = {}) {
       sourceHash: `0x${'11'.repeat(32)}`,
       runtimeCodeHash: `0x${'22'.repeat(32)}`,
       fundingPolicy: 'MORPHO_ZERO_FEE_FLASH_OR_PROTECTED_EXECUTOR_INVENTORY',
+      universePolicy: GLOBAL_UNIVERSE_POLICY.version,
       settlementSeeds: ['0x0000000000000000000000000000000000000002', '0x0000000000000000000000000000000000000003'],
       settlementPolicy: GLOBAL_SETTLEMENT_ADMISSION_POLICY,
       maximumSettlementFundingChecksPerWake: GLOBAL_MAX_SETTLEMENT_FUNDING_CHECKS_PER_WAKE,
@@ -184,7 +186,7 @@ test('screen floor can trigger exact preflight without lowering the signed execu
   )
 })
 
-test('v12 authorization binds dynamic settlement admission, route relevance, RPC cost, and executor identity', () => {
+test('v13 authorization binds universe, settlement, route, RPC cost, and executor identity', () => {
   const valid = arm({ policyVersion: DUAL_AUTHORIZATION_POLICY_VERSION })
   assert.deepEqual(evaluateDualAuthorizationBudget(valid, { failedGasWei: 0n, earnGasSurplusWei: 5_000n }), {
     allowed: true,
@@ -213,6 +215,7 @@ test('v12 authorization binds dynamic settlement admission, route relevance, RPC
     { ...valid.global, settlementPolicy: 'ALLOW_ANY_TOKEN' },
     { ...valid.global, maximumSettlementFundingChecksPerWake: 65 },
     { ...valid.global, maximumSettlementAssetsPerWake: 17 },
+    { ...valid.global, universePolicy: 'UNREVIEWED' },
     { ...valid.global, graphPolicy: 'ROUTE_SPECIFIC' },
     { ...valid.global, routePolicy: 'CROSS_VENUE_ONLY' },
   ]) {
@@ -266,7 +269,7 @@ test('v12 authorization binds dynamic settlement admission, route relevance, RPC
   }
 })
 
-test('superseded v11 through v8 authorizations cannot bypass the v12 dynamic route policy', () => {
+test('superseded v12 through v8 authorizations cannot bypass the v13 universe policy', () => {
   for (const policyVersion of [
     'dual-base-loopback-escalation-v11',
     'dual-base-loopback-escalation-v10',

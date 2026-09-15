@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Connect the signer-free board's multi-source V4 discovery universe to Global through a small, versioned and
+  group-readable `global-universe.json` projection instead of copying the roughly 40 MB source catalog into the signer.
+  The projection retains a high-priority tranche, rotates bounded long-tail coverage, verifies PoolKeys, topology hash,
+  file permissions, size and freshness, and immediately extends both the unified graph and Sequencer Feed address set.
+  Search topology is now independent from funding admission, so a route with no Morpho liquidity or universal-executor
+  inventory reports `NO_EXECUTABLE_FUNDING` rather than false no-profit. Authorization v13 commits the new universe and
+  feed policies; the public business API shows searchable versus funded routes, and the funds view now includes the
+  universal executor. This change moves no capital and claims no new receipt or profit.
 - Let the protocol-agnostic Global graph wake from the existing canonical Earn Vault WSS stream and public Earn-log
   recovery backstop, in addition to Sequencer Feed. Each reviewed Earn swap contributes only its exact changed-pool
   dependencies; source provenance survives bounded coalescing and appears in lifecycle evidence. This creates no new

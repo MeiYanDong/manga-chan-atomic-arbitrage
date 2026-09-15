@@ -56,6 +56,7 @@ const CONFIG_KEYS = new Set([
   'GLOBAL_MAX_ROUTES_PER_WAKE',
   'GLOBAL_QUOTE_CONCURRENCY',
   'GLOBAL_MANAGED_FALLBACK_DAILY_LOGICAL_CALL_CAP',
+  'MANGA_GLOBAL_UNIVERSE_PATH',
   'GLOBAL_LIVE_ARM',
 ])
 
@@ -168,6 +169,7 @@ export function loadRuntimeConfig(environment = process.env) {
       1_000,
       1_000_000,
     ),
+    globalUniversePath: value('MANGA_GLOBAL_UNIVERSE_PATH'),
     rpcSource: environment.MANGA_RPC_URL ? 'environment' : rpcUrl ? 'strategy_config' : 'public_read_only_fallback',
   }
 }

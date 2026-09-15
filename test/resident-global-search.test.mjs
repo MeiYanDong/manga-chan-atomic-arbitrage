@@ -67,6 +67,7 @@ test('worker environment is public-only and strips every signing reference', () 
   const environment = buildGlobalSearchWorkerEnvironment({
     MANGA_RPC_URL: 'https://read.example.invalid',
     MANGA_RUN_DIR: '/tmp/global-search-test',
+    MANGA_GLOBAL_UNIVERSE_PATH: '/run/example/global-universe.json',
     MANGA_PRIVATE_KEY_FILE: '/run/credentials/private-key',
     CREDENTIALS_DIRECTORY: '/run/credentials/service',
     GLOBAL_SHARED_AUTHORIZATION_ID: 'authorization',
@@ -75,6 +76,7 @@ test('worker environment is public-only and strips every signing reference', () 
   })
   assert.equal(environment.MANGA_RPC_URL, undefined)
   assert.equal(environment.MANGA_RUN_DIR, '/tmp/global-search-test')
+  assert.equal(environment.MANGA_GLOBAL_UNIVERSE_PATH, '/run/example/global-universe.json')
   assert.equal(environment.MANGA_PRIVATE_KEY_FILE, undefined)
   assert.equal(environment.CREDENTIALS_DIRECTORY, undefined)
   assert.equal(environment.GLOBAL_SHARED_AUTHORIZATION_ID, undefined)

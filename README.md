@@ -32,16 +32,20 @@ inside one venue as well as cycles that cross venues. USDG and WETH are priority
 asset may become the settlement asset for a wake only after fixed-block decimals, Morpho flash liquidity or protected
 executor inventory, and graph-proven executable WETH/USDG valuation paths all agree. Event wakes check only seeds and
 event-touched assets; five-minute recovery rotates through the wider eligible graph under fixed funding and route
-budgets. The Sequencer Feed only wakes exact state checks; signed raw transactions are persisted before direct
+budgets. The signer-free board also projects its much larger multi-source V4 universe through a versioned, bounded
+handoff: the strongest candidates remain resident while a rotating tranche covers the long tail without loading the
+full source catalog into the signer. Searchable topology remains visible even when no currently atomic funding source
+exists. The Sequencer Feed only wakes exact state checks; signed raw transactions are persisted before direct
 Sequencer submission, and any managed-RPC fallback must broadcast the identical raw. Broad discovery batches through
 the official public endpoint first; a transport/rate-limit fallback has a persisted 20,000-logical-call daily ceiling.
 Feed wakes require one protocol/pool address or two distinct graph assets, evaluate at most eight related routes without
 filling unrelated work, and have separate 32-call event and 8-call recovery fallback ceilings committed by
-authorization v12. See
+authorization v13. See
 [ADR 0060](docs/decisions/0060-universal-cross-protocol-atomic-execution.md),
 [ADR 0063](docs/decisions/0063-bounded-public-first-global-rpc-fallback.md),
 [ADR 0064](docs/decisions/0064-sequencer-wake-relevance-and-per-wake-rpc-budget.md) and
 [ADR 0070](docs/decisions/0070-same-venue-cycles-and-dynamic-settlement-admission.md) plus
+[ADR 0085](docs/decisions/0085-versioned-global-universe-projection.md) and
 [the global live stories](docs/stories/global-cross-protocol-live.md). The bounded audit reader and managed Earn event
 recovery are defined by [ADR 0080](docs/decisions/0080-bounded-audit-runtime-and-managed-earn-events.md).
 

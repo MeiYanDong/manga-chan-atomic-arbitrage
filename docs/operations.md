@@ -122,7 +122,7 @@ unrelated routes.
 
 The universal executor is a fourth execution generation inside the existing dual watcher and single wallet nonce lane.
 It admits only typed Earn and Uniswap v2/v3/v4 actions. Deployment creates code but grants no continuing authority;
-current v11 arming separately binds its identity, settlement-seed and dynamic-admission policy, funding/graph/route
+current v13 arming separately binds its identity, settlement-seed and dynamic-admission policy, funding/graph/route
 policy, Sequencer Feed, quote-work bounds and the managed discovery fallback's daily logical-call ceiling. Seeds receive
 priority but are not an allowlist. A non-seed can settle only after fixed-block graph, decimals, funding and executable
 WETH/USDG valuation checks all pass.
@@ -159,9 +159,16 @@ sudo systemctl --no-pager --full status manga-global-deploy.service
 Require `UNIVERSAL_DEPLOYMENT_CONFIRMED`, a successful canonical receipt, exact runtime hash, operator and Morpho
 readback, and equal latest/pending nonce. Then run `npm run global:preflight` without a signer. A positive quote is still
 not profit and a negative result must not be turned into a Gas-spending probe. Start `manga-dual-arm.service` only after
-`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v12 watcher may
+`global:status` and `dual:runtime-verify` agree on the deployed executor and no unresolved mutation. The v13 watcher may
 then execute a route only after current exact simulation; accepted effects require receipt, `Executed` event and balance
 delta.
+
+Before arming, also require the board to have committed a current
+`/run/manga-opportunity-board-feed/global-universe.json`. It must be a regular file, no larger than 2 MiB, readable by
+the shared `manga-board` group, and not writable by group or world. Both `manga-dual-watcher.service` and
+`manga-dual-arm.service` must receive the same `MANGA_GLOBAL_UNIVERSE_PATH`; otherwise the arm-time policy commitment
+and runtime search universe can diverge. Missing, stale, malformed, over-bound, permission-unsafe or hash-invalid
+projections fail closed to the reviewed bootstrap/base catalog and never grant execution authority.
 
 The global route set includes both same-venue and cross-venue simple cycles. A route still must close in the same
 settlement asset, use two to four distinct pools, avoid repeated intermediate assets, fit the per-wake route budget and
@@ -169,6 +176,11 @@ remain all-cost positive. Event wakes fund-check only seeds and event-touched as
 rotate through up to 64 structurally eligible assets and admit at most 16. These are coverage/RPC bounds, not principal
 caps. Changing them or the admission policy invalidates the current authorization and requires a clean disarm,
 reconcile and re-arm.
+
+Read `searchableRoutes` as market topology and `fundedRoutes` as the subset the universal executor can currently quote
+and simulate with admitted principal. `NO_EXECUTABLE_FUNDING` means routes exist but no approved funding source was
+available at that block. It does not prove that there was no price discrepancy, and it does not authorize moving
+inventory from a fixed executor or another wallet. Funding changes require an explicit custody/capital decision.
 
 Broad graph discovery uses the official public RPC first and batches at most eight concurrent reads per HTTP request,
 which is the verified live `eth_call` ceiling. A transport failure, public HTTP 403/429 or

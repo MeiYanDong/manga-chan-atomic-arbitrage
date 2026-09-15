@@ -15,6 +15,7 @@ EnvironmentFile=/etc/manga-chan-arbitrage/live.env
 EnvironmentFile=-/etc/manga-chan-arbitrage/release.env
 Environment=MANGA_RUN_DIR=/var/lib/manga-chan-arbitrage
 Environment=MANGA_GENERIC_BOARD_SNAPSHOT=/run/manga-opportunity-board-feed/execution-snapshot.json
+Environment=MANGA_GLOBAL_UNIVERSE_PATH=/run/manga-opportunity-board-feed/global-universe.json
 Environment=EARN_WATCH_ENABLED=1
 Environment=EARN_WATCH_EVENT_POLL_MS=60000
 Environment=EARN_WATCH_PERIODIC_MS=300000

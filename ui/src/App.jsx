@@ -1186,6 +1186,11 @@ function CompetitionPage({ state, business }) {
         </div>
       </section>
       <Section title="我们的执行漏斗" side={<Status value={global?.status || 'UNKNOWN'} />}>
+        {global?.fundingBlocked && (
+          <Notice tone="warning">
+            当前不是“没有路线”：系统已找到可搜索闭环，但通用执行合约和闪电流动性暂时无法为它们提供原子本金。
+          </Notice>
+        )}
         <div className="funnel-line">
           {executionStages.map(([label, value], index) => (
             <div key={label}>
@@ -1201,12 +1206,16 @@ function CompetitionPage({ state, business }) {
             <dd>{globalWakeKindLabel(workset?.wakeKind)}</dd>
           </div>
           <div>
-            <dt>相关路线</dt>
-            <dd>{workset ? `${workset.touchedRoutes} / ${workset.totalRoutes}` : '待首轮新策略扫描'}</dd>
+            <dt>可搜索路线</dt>
+            <dd>{workset ? `${workset.searchableRoutes ?? workset.totalRoutes} 条` : '待首轮新策略扫描'}</dd>
           </div>
           <div>
-            <dt>本轮实际报价</dt>
-            <dd>{workset ? `${workset.selectedRoutes} 条` : '待核验'}</dd>
+            <dt>有资金可报价</dt>
+            <dd>{workset ? `${workset.fundedRoutes ?? workset.selectedRoutes} 条` : '待核验'}</dd>
+          </div>
+          <div>
+            <dt>本轮事件相关</dt>
+            <dd>{workset ? `${workset.touchedRoutes} / ${workset.totalRoutes}` : '待核验'}</dd>
           </div>
           <div>
             <dt>从事件到结论</dt>
@@ -1219,7 +1228,9 @@ function CompetitionPage({ state, business }) {
         </dl>
         <p className="coverage-note">
           最近结论：
-          {globalExecutionOutcome(global?.attribution?.latestClassification || global?.attribution?.latestOutcome)}
+          {globalExecutionOutcome(
+            global?.lastResult || global?.attribution?.latestOutcome || global?.attribution?.latestClassification,
+          )}
           。已过滤 {funnel?.filteredSignals ?? '—'} 条无关消息，合并 {funnel?.coalescedSignals ?? '—'}{' '}
           条等待中的重复唤醒。
           {global?.attribution?.coverage ? `证据：${globalEvidenceCoverage(global.attribution.coverage)}。` : ''}

@@ -155,6 +155,7 @@ import {
 } from '../src/source-adapters.mjs'
 import { SOURCE_CONTRACT_REGISTRY, SOURCE_REGISTRY_VERSION, stablePayloadHash } from '../src/source-provenance.mjs'
 import { buildSourceStrategyCatalog } from '../src/source-strategy-catalog.mjs'
+import { buildGlobalUniverseProjection } from '../src/global-universe-projection.mjs'
 
 const CHAIN_ID = ROBINHOOD_CHAIN_ID
 const PAIR_TOKENS_API = 'https://pair.fund/api/tokens'
@@ -283,6 +284,9 @@ function loadConfig() {
   const operationsSnapshotPath = path.resolve(
     process.env.MANGA_BOARD_OPERATIONS_SNAPSHOT || path.join(runDir, 'operations-snapshot.json'),
   )
+  const globalUniversePath = path.resolve(
+    process.env.MANGA_BOARD_GLOBAL_UNIVERSE_PATH || path.join(runDir, 'global-universe.json'),
+  )
   const host = process.env.MANGA_BOARD_HOST || '127.0.0.1'
   if (!['127.0.0.1', '::1'].includes(host)) throw new Error('opportunity board must bind to loopback')
   const amountGrid = parseUsdgAmountGrid(process.env.MANGA_BOARD_AMOUNT_GRID_USDG, DEFAULT_AMOUNT_GRID_USDG)
@@ -310,6 +314,7 @@ function loadConfig() {
     executionSnapshotPath,
     businessSnapshotPath,
     operationsSnapshotPath,
+    globalUniversePath,
     host,
     port: integer(process.env.MANGA_BOARD_PORT, 8_788),
     readModel,
@@ -564,6 +569,7 @@ class OpportunityBoard {
     this.hotRpcBudgetPath = path.join(config.runDir, 'hot-rpc-budget.json')
     this.chainCatalogPath = path.join(config.runDir, 'chain-catalog.json')
     this.sourceCatalogPath = path.join(config.runDir, 'source-catalog.json')
+    this.globalUniversePath = config.globalUniversePath
     this.poolMirrorPath = path.join(config.runDir, 'pool-mirror.json')
     this.dashboardRoot = path.join(ROOT, 'public', 'dashboard')
     const dashboardIndex = path.join(this.dashboardRoot, 'index.html')
@@ -773,6 +779,9 @@ class OpportunityBoard {
       eventParallelBaseCycles: 0,
       sourceCatalogWrites: 0,
       lastSourceCatalogWriteMs: null,
+      globalUniverseWrites: 0,
+      globalUniverseTopologyChanges: 0,
+      lastGlobalUniverseWriteMs: null,
       coalescedPeriodicSourceProjectionCycles: 0,
       lastPeriodicMaintenanceMs: null,
       fullSnapshotPublications: 0,
@@ -883,6 +892,7 @@ class OpportunityBoard {
     const persistedCatalog = writeStableJsonAtomic(this.sourceCatalogPath, this.latestSourceCatalog)
     this.latestSourceCatalogHash = persistedCatalog.hash
     this.latestSourceCatalogBytes = persistedCatalog.bytes
+    this.writeGlobalUniverseProjection(this.latestSourceCatalogHash, this.latestSourceCatalog.generatedAt)
     this.hotRpcBudget = new DailyHotRpcBudget({
       dailyEventCandidateCap: config.hotRpcDailyEventCandidateCap,
       dailyLogicalCallCap: config.hotRpcDailyLogicalCallCap,
@@ -1154,6 +1164,17 @@ class OpportunityBoard {
         strategyGraph: this.strategyGraph,
         scopeWarning: 'each adapter reports its own bounded coverage; no cross-adapter completeness promotion',
       },
+      globalUniverse: this.latestGlobalUniverse
+        ? {
+            status: 'CURRENT_DERIVED_PROJECTION',
+            policy: this.latestGlobalUniverse.policy.version,
+            topologyHash: this.latestGlobalUniverse.topologyHash,
+            sourceCatalogHash: this.latestGlobalUniverse.sourceCatalogHash,
+            safeHead: this.latestGlobalUniverse.safeHead,
+            projectionBytes: this.latestGlobalUniverseBytes,
+            ...this.latestGlobalUniverse.summary,
+          }
+        : { status: 'NOT_READY' },
       chainCatalog: {
         evidence: 'POOL_MANAGER_INITIALIZE_LOGS',
         configuredStartBlock: this.config.chainCatalogStartBlock.toString(),
@@ -1262,11 +1283,35 @@ class OpportunityBoard {
     this.latestSourceCatalog = catalog
     this.latestSourceCatalogHash = persisted.hash
     this.latestSourceCatalogBytes = persisted.bytes
+    this.writeGlobalUniverseProjection(persisted.hash, catalog.generatedAt)
     if (this.eventMetrics) {
       this.eventMetrics.sourceCatalogWrites += 1
       this.eventMetrics.lastSourceCatalogWriteMs = Number((performance.now() - startedAt).toFixed(2))
     }
     return catalog
+  }
+
+  writeGlobalUniverseProjection(sourceCatalogHash, generatedAt = new Date().toISOString()) {
+    const startedAt = performance.now()
+    const previousTopologyHash = this.latestGlobalUniverse?.topologyHash || null
+    const projection = buildGlobalUniverseProjection({
+      candidates: this.catalog,
+      sourceCatalogHash,
+      safeHead: this.sourceCatalogSafeHead,
+      generatedAt,
+      rotationOffset: this.cycleNumber,
+      settlementTokens: [USDG, WETH],
+    })
+    const persisted = writeStableJsonAtomic(this.globalUniversePath, projection)
+    this.latestGlobalUniverse = projection
+    this.latestGlobalUniverseHash = persisted.hash
+    this.latestGlobalUniverseBytes = persisted.bytes
+    if (this.eventMetrics) {
+      this.eventMetrics.globalUniverseWrites += 1
+      if (previousTopologyHash !== projection.topologyHash) this.eventMetrics.globalUniverseTopologyChanges += 1
+      this.eventMetrics.lastGlobalUniverseWriteMs = Number((performance.now() - startedAt).toFixed(2))
+    }
+    return projection
   }
 
   async refreshCatalog({ full, deferProjection = false }) {
@@ -3719,6 +3764,9 @@ class OpportunityBoard {
       }
       if (requestUrl.pathname === '/api/source-catalog') {
         return this.respondJsonFile(response, this.sourceCatalogPath)
+      }
+      if (requestUrl.pathname === '/api/global-universe') {
+        return this.respondJsonFile(response, this.globalUniversePath)
       }
       if (requestUrl.pathname === '/api/event-metrics') {
         return this.respondJson(response, 200, this.serviceState().eventDrivenShadow)

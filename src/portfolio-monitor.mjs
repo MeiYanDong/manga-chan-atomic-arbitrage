@@ -99,6 +99,16 @@ export const MONITORED_ACCOUNTS = Object.freeze([
     expectedOperator: ROBINHOOD_OPERATOR,
   },
   {
+    id: 'robinhood-universal-executor',
+    networkId: 'ROBINHOOD',
+    label: '跨协议执行合约',
+    kind: 'CONTRACT',
+    monitoringState: 'ACTIVE',
+    primaryAsset: 'WETH',
+    address: getAddress('0xC167e650e8E3279a61d0650d963F65F768B031dA'),
+    expectedOperator: ROBINHOOD_OPERATOR,
+  },
+  {
     id: 'robinhood-legacy-manga',
     networkId: 'ROBINHOOD',
     label: '旧 MANGA 合约',
