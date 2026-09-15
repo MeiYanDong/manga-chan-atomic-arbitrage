@@ -109,7 +109,12 @@ async function currentAgentMarketValuation(now = new Date()) {
 
 function writePublicSnapshots(snapshot, valuation) {
   const daily = buildDailyProfitSnapshot(snapshot)
-  writeJsonAtomic(SNAPSHOT_PATH, snapshot, 0o640)
+  // This object has already passed assertPublicBusinessSnapshot and is the
+  // public operating read model consumed by the browser. Keep the immutable
+  // rename boundary, but make the final file readable by the unprivileged
+  // Nginx worker so dashboard availability does not depend on the scanner's
+  // event loop.
+  writeJsonAtomic(SNAPSHOT_PATH, snapshot, 0o644)
   writeJsonAtomic(DAILY_PROFIT_PATH, daily, 0o644)
   writeJsonAtomic(AGENT_DAILY_PROFIT_PATH, buildAgentDailyProfitSnapshot(daily, valuation), 0o644)
 }

@@ -300,6 +300,7 @@ test('business reporter can read ledgers but cannot sign or write trading state'
   assert.doesNotMatch(service, /^ExecStart=.*npm/m)
   assert.doesNotMatch(service, /manga-private-key|MANGA_PRIVATE_KEY|MANGA_RPC_URL|MANGA_WS_URL/)
   assert.doesNotMatch(source, /createWalletClient|privateKeyToAccount|eth_sendRawTransaction/)
+  assert.match(source, /writeJsonAtomic\(SNAPSHOT_PATH, snapshot, 0o644\)/)
   assert.match(source, /isSecureSystemdCredential/)
   assert.match(source, /process\.env\.CREDENTIALS_DIRECTORY/)
   assert.match(source, /status: 'DELIVERED'/)
@@ -365,6 +366,10 @@ test('public dashboard proxy exposes only the read-only presentation surface', (
   assert.match(
     nginx,
     /^\s*location = \/api\/v1\/agent\/daily-profit \{$[\s\S]*?^\s*alias \/var\/lib\/manga-business-report\/agent-daily-profit\.json;$/m,
+  )
+  assert.match(
+    nginx,
+    /^\s*location = \/api\/v1\/business \{$[\s\S]*?^\s*alias \/var\/lib\/manga-business-report\/business-snapshot\.json;$/m,
   )
   assert.match(
     nginx,

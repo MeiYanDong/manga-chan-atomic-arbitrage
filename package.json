@@ -1,6 +1,6 @@
 {
   "name": "manga-chan-atomic-arbitrage",
-  "version": "0.16.13",
+  "version": "0.16.14",
   "description": "Typed cross-protocol atomic-arbitrage executors and opportunity intelligence on Robinhood Chain",
   "license": "MIT",
   "private": false,
